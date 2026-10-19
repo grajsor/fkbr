@@ -75,8 +75,11 @@ type model struct {
 	statusErr     bool
 	statusAt      time.Time
 
-	runsNode  bool
-	logPath   string
+	runsNode bool
+	logPath  string
+	// Header animation (anim.go).
+	anim      animPhase
+	animAt    time.Time
 	jobsFocus bool
 	jobCursor int
 	moves     map[string]moveInfo
@@ -131,7 +134,7 @@ type (
 type target struct{ node, root string }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.loadNodes(), m.subscribe())
+	return tea.Batch(m.loadNodes(), m.subscribe(), animTick(animEvery))
 }
 
 func (m *model) loadNodes() tea.Cmd {
@@ -307,6 +310,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus("", false)
 		m.dlg = syncConfirm(m, p)
 		return m, nil
+
+	case animMsg:
+		return m, m.animate()
 
 	case viewMsg:
 		if msg.err != nil {
@@ -936,15 +942,37 @@ func (m *model) header() string {
 			running++
 		}
 	}
-	name := " " + product.Name
+	name, home := product.Name, 1
 	left := fmt.Sprintf(" · %s", m.c.Self())
 	if m.runsNode {
 		left += " (node runs in this TUI)"
 	}
 	right := fmt.Sprintf("nodes %d/%d online · jobs %d running ", online, total, running)
-	rest := m.width - lipgloss.Width(name)
-	gap := max(1, rest-lipgloss.Width(left)-lipgloss.Width(right))
-	return m.st.headerName.Render(name) + m.st.header.Render(fit(left+strings.Repeat(" ", gap)+right, rest))
+	slot := home + len(name)
+	gap := max(1, m.width-slot-lipgloss.Width(left)-lipgloss.Width(right))
+	// The name is laid over the line at its (possibly animated) column.
+	line := []rune(fit(strings.Repeat(" ", slot)+left+strings.Repeat(" ", gap)+right, m.width))
+	isName := make([]bool, len(line))
+	x := nameX(m.anim, time.Since(m.animAt), home, len(line), len(name))
+	for i, r := range name {
+		if c := x + i; c >= 0 && c < len(line) {
+			line[c], isName[c] = r, true
+		}
+	}
+	var b strings.Builder
+	for i := 0; i < len(line); {
+		j := i
+		for j < len(line) && isName[j] == isName[i] {
+			j++
+		}
+		st := m.st.header
+		if isName[i] {
+			st = m.st.headerName
+		}
+		b.WriteString(st.Render(string(line[i:j])))
+		i = j
+	}
+	return b.String()
 }
 
 func (m *model) renderPanes(h int) string {

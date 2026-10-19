@@ -101,6 +101,9 @@ unless such a job needs it, so `@all` stops counting it (see Cleanup). Use
 a daemon for a machine that should stay a member while nobody is logged
 in.
 
+Every 30 s the name in the top left slides out and back in, so you can
+tell at a glance that the TUI is alive.
+
 The TUI writes this node's log to `/tmp/fkbr-<uid>-<node>/node.log` (F1
 shows the path; `-v` adds debug lines). It stays after you quit, so a
 failed copy can be looked into later.
