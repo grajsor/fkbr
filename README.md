@@ -34,6 +34,11 @@ Any pane can show any node. F9 moves to the jobs panel:
 
 ![db01 and backup01, with the jobs panel focused](docs/screenshots/fkbr-jobs.png)
 
+Enter on a job shows its details while it runs: progress, rate and ETA,
+and what each node is doing:
+
+![Details of a running copy of three database dumps to four nodes](docs/screenshots/fkbr-progress.png)
+
 F3 shows a file from any node, with XML and JSON highlighted:
 
 ![The viewer showing a Jenkins job config.xml from build01](docs/screenshots/fkbr-view.png)
