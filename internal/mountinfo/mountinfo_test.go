@@ -27,3 +27,19 @@ func TestMounts(t *testing.T) {
 		t.Errorf("escaped mount point: %q", m.Point)
 	}
 }
+
+// With autofs the trigger and the real mount share a mount point; the one
+// listed later is mounted on top and is the one that counts.
+func TestAutofsOvermount(t *testing.T) {
+	const autofs = `22 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
+40 22 0:40 / /data rw,relatime shared:20 - autofs systemd-1 rw,fd=33,pgrp=1,timeout=0,minproto=5,maxproto=5,direct
+98 40 0:60 / /data rw,relatime shared:50 - nfs nas:/vol/data rw,vers=3,acregmin=3,acregmax=60,acdirmin=30,acdirmax=60,hard
+`
+	m := For(Parse(strings.NewReader(autofs)), "/data/xfer/box")
+	if m == nil || m.FSType != "nfs" {
+		t.Fatalf("got %+v, want the nfs mount on top of autofs", m)
+	}
+	if !m.CachesAttributes() {
+		t.Error("default NFS attribute caching (acdirmin=30) not detected")
+	}
+}

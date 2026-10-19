@@ -67,7 +67,9 @@ func For(mounts []Mount, path string) *Mount {
 	for i := range mounts {
 		m := &mounts[i]
 		if path == m.Point || strings.HasPrefix(path, strings.TrimSuffix(m.Point, "/")+"/") || m.Point == "/" {
-			if best == nil || len(m.Point) > len(best.Point) {
+			// >=: of mounts at the same point the later one is on top
+			// (autofs lists its trigger first, then the real mount).
+			if best == nil || len(m.Point) >= len(best.Point) {
 				best = m
 			}
 		}
