@@ -5,7 +5,6 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/muesli/termenv"
 )
 
 // The name in the header slides out to the left every animEvery and back
@@ -78,31 +77,26 @@ func nameX(phase animPhase, elapsed time.Duration, home, width, n int) int {
 	return home
 }
 
-// The cursor bar alternates between two shades of the bar green once a
-// second, so the screen looks alive even when nothing moves. Each switch
-// redraws only the cursor lines. With 16 colours or none the bar stays
-// still and no timer runs.
+// A small spinner in the bottom right corner turns all the time, so the
+// screen looks alive even when nothing moves: - > ) | ( < - and back. It
+// redraws only the bottom line, 4 times a second.
 var (
-	pulseDark  = "#98c1a2"
-	pulseLight = "#c8e0cd"
-	pulseFrame = time.Second
+	spinFrames = []string{"-", ">", ")", "|", "(", "<", "-"}
+	spinEvery  = 250 * time.Millisecond
 )
 
-type pulseMsg struct{}
+type spinMsg struct{}
 
-func pulseTick() tea.Cmd {
-	return tea.Tick(pulseFrame, func(time.Time) tea.Msg { return pulseMsg{} })
+func spinTick() tea.Cmd {
+	return tea.Tick(spinEvery, func(time.Time) tea.Msg { return spinMsg{} })
 }
 
-func pulseEnabled(p termenv.Profile) bool {
-	return p == termenv.TrueColor || p == termenv.ANSI256
-}
-
-// pulseColour is the bar colour at elapsed time: dark, then light, a
-// frame each.
-func pulseColour(elapsed time.Duration) string {
-	if (elapsed/pulseFrame)%2 == 1 {
-		return pulseLight
+// spinChar is the spinner at step i: through the frames and back again.
+func spinChar(i int) string {
+	n := len(spinFrames)
+	k := i % (2 * (n - 1))
+	if k >= n {
+		k = 2*(n-1) - k
 	}
-	return pulseDark
+	return spinFrames[k]
 }

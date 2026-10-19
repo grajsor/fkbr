@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -116,40 +117,46 @@ func TestAnimationCycle(t *testing.T) {
 	}
 }
 
-func TestPulseColour(t *testing.T) {
-	// Two colours, switching every frame (once a second).
-	for i, want := range []string{pulseDark, pulseLight, pulseDark, pulseLight} {
-		at := pulseFrame*time.Duration(i) + pulseFrame/2
-		if got := pulseColour(at); got != want {
-			t.Errorf("frame %d: %s, want %s", i, got, want)
-		}
+func TestSpinnerSequence(t *testing.T) {
+	var got []string
+	for i := 0; i < 14; i++ {
+		got = append(got, spinChar(i))
 	}
-	if pulseFrame != time.Second {
-		t.Errorf("pulse frame %s, want 1 a second", pulseFrame)
-	}
-	for p, want := range map[termenv.Profile]bool{termenv.TrueColor: true, termenv.ANSI256: true, termenv.ANSI: false, termenv.Ascii: false} {
-		if got := pulseEnabled(p); got != want {
-			t.Errorf("%s: pulse %v, want %v", p.Name(), got, want)
-		}
+	want := "- > ) | ( < - < ( | ) > - >"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("spinner frames:\n got %s\nwant %s", strings.Join(got, " "), want)
 	}
 }
 
-// The pulsing cursor is drawn in the colour of the moment.
-func TestCursorPulses(t *testing.T) {
+// The spinner is the last cell of the screen; the key bar keeps its width.
+func TestSpinnerInKeyBar(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(prev)
 	h := newHarness(t)
-	h.m.pulse = true
-	h.m.pulseStart = time.Now()
-	h.m.pulseStart = time.Now().Add(-pulseFrame / 2)
-	dark := h.m.View()
-	h.m.pulseStart = time.Now().Add(-pulseFrame - pulseFrame/2)
-	light := h.m.View()
-	if dark == light {
-		t.Fatal("cursor colour does not change over a breath")
+	for _, w := range []int{120, 80, 41} {
+		h.send(tea.WindowSizeMsg{Width: w, Height: 24})
+		for f := 0; f < 12; f++ {
+			h.m.spin = f
+			bar := h.m.keyBar()
+			if lw := lipgloss.Width(bar); lw != w {
+				t.Fatalf("width %d frame %d: key bar %d wide", w, f, lw)
+			}
+			if c := unpainted(bar); c >= 0 {
+				t.Fatalf("width %d frame %d: column %d unpainted", w, f, c)
+			}
+			plain := []rune(stripANSI(bar))
+			if got := string(plain[len(plain)-1]); got != spinChar(f) {
+				t.Fatalf("width %d frame %d: last cell %q, want %q", w, f, got, spinChar(f))
+			}
+		}
 	}
-	if !strings.Contains(light, "48;2;") || unpainted(strings.Split(light, "\n")[2]) >= 0 {
-		t.Error("pulsing cursor line not fully painted")
+	if !strings.Contains(h.m.keyBar(), h.m.st.spinner.Render(spinChar(h.m.spin))) {
+		t.Error("spinner not in its own (yellow) style")
+	}
+	h.m.spin = 0
+	h.m.Update(spinMsg{})
+	if h.m.spin != 1 {
+		t.Errorf("tick did not advance the spinner: %d", h.m.spin)
 	}
 }

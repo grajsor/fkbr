@@ -47,12 +47,11 @@ type styles struct {
 	// On the panels.
 	panel, file, dir, marked, dim, warn, err lipgloss.Style
 	cursor, cursorMarked                     lipgloss.Style
-	cursorBase                               lipgloss.Style // cursor before pulsing
 	rule, title, titleActive                 lipgloss.Style
 	border, borderActive                     lipgloss.Border
 	borderFg, borderActiveFg                 lipgloss.TerminalColor
 	// Screen chrome.
-	header, headerName, keyNum, keyLabel, status, statusErr lipgloss.Style
+	header, headerName, keyNum, keyLabel, status, statusErr, spinner lipgloss.Style
 	// Dialogs.
 	dialog, dialogTitle, dialogErr, inputLabel, inputFocus, inputCursor lipgloss.Style
 }
@@ -84,6 +83,7 @@ func newStyles() *styles {
 		keyLabel:   on(cBar).Foreground(cBarText),
 		status:     on(cInk).Foreground(cMarked),
 		statusErr:  on(cInk).Foreground(cErr),
+		spinner:    on(cInk).Foreground(cMarked).Bold(true),
 
 		dialog: on(cSurface).Foreground(cSurfaceText).Padding(0, 1).
 			Border(lipgloss.DoubleBorder()).BorderForeground(cSurfaceTitle).BorderBackground(cSurface),
@@ -94,7 +94,6 @@ func newStyles() *styles {
 		inputCursor: on(cAccent).Foreground(cAccentText),
 	}
 	st.ascii = lipgloss.ColorProfile() == termenv.Ascii
-	st.cursorBase = st.cursor
 	return st
 }
 

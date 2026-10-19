@@ -77,15 +77,14 @@ type model struct {
 
 	runsNode bool
 	logPath  string
-	// Header animation and cursor pulse (anim.go).
-	anim       animPhase
-	animAt     time.Time
-	pulse      bool
-	pulseStart time.Time
-	jobsFocus  bool
-	jobCursor  int
-	moves      map[string]moveInfo
-	events     <-chan api.Event
+	// Header animation and spinner (anim.go).
+	spin      int
+	anim      animPhase
+	animAt    time.Time
+	jobsFocus bool
+	jobCursor int
+	moves     map[string]moveInfo
+	events    <-chan api.Event
 }
 
 func newModel(ctx context.Context, c api.Client) *model {
@@ -136,12 +135,7 @@ type (
 type target struct{ node, root string }
 
 func (m *model) Init() tea.Cmd {
-	cmds := []tea.Cmd{m.loadNodes(), m.subscribe(), animTick(animEvery)}
-	if pulseEnabled(lipgloss.ColorProfile()) {
-		m.pulse, m.pulseStart = true, time.Now()
-		cmds = append(cmds, pulseTick())
-	}
-	return tea.Batch(cmds...)
+	return tea.Batch(m.loadNodes(), m.subscribe(), animTick(animEvery), spinTick())
 }
 
 func (m *model) loadNodes() tea.Cmd {
@@ -321,8 +315,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case animMsg:
 		return m, m.animate()
 
-	case pulseMsg:
-		return m, pulseTick()
+	case spinMsg:
+		m.spin = (m.spin + 1) % (2 * (len(spinFrames) - 1))
+		return m, spinTick()
 
 	case viewMsg:
 		if msg.err != nil {
@@ -907,9 +902,6 @@ func jobLine(j *api.Job, width int) string {
 
 // View lays out header, panes (or a dialog), jobs, status and key bar.
 func (m *model) View() string {
-	if m.pulse {
-		m.st.cursor = m.st.cursorBase.Background(lipgloss.Color(pulseColour(time.Since(m.pulseStart))))
-	}
 	if m.width < 40 || m.height < 12 {
 		return "terminal too small for " + product.Name + " (need 40x12)"
 	}
@@ -1053,14 +1045,21 @@ func (m *model) keyBar() string {
 		{"1", "Help"}, {"2", "Nodes"}, {"3", "View"}, {"4", "Sync"}, {"5", "Copy"},
 		{"6", "Move"}, {"7", "Mkdir"}, {"8", "Delete"}, {"9", "Jobs"}, {"10", "Quit"},
 	}
+	// The last column is the spinner's; the last key gives way if needed.
+	room := m.width - 1
 	cell := max(4, m.width/len(keys))
 	var b strings.Builder
-	for _, k := range keys {
+	for i, k := range keys {
+		w := cell - len(k.n)
+		if i == len(keys)-1 && cell*len(keys) > room {
+			w -= cell*len(keys) - room
+		}
 		b.WriteString(m.st.keyNum.Render(k.n))
-		b.WriteString(m.st.keyLabel.Render(fit(k.label, cell-len(k.n))))
+		b.WriteString(m.st.keyLabel.Render(fit(k.label, w)))
 	}
-	if rest := m.width - cell*len(keys); rest > 0 {
+	if rest := room - cell*len(keys); rest > 0 {
 		b.WriteString(m.st.keyNum.Render(strings.Repeat(" ", rest)))
 	}
+	b.WriteString(m.st.spinner.Render(spinChar(m.spin)))
 	return b.String()
 }
