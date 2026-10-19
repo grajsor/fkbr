@@ -28,18 +28,37 @@ func TestMountOptions(t *testing.T) {
 	if m := mountinfo.For(ms, "/home/x"); m == nil || m.Point != "/" {
 		t.Fatalf("fallback to /: %+v", m)
 	}
+	levels := func(c *checker) (warn, info string) {
+		var w, i []string
+		for _, r := range c.res {
+			switch r.Level {
+			case Warn:
+				w = append(w, r.Msg)
+			case Info:
+				i = append(i, r.Msg)
+			}
+		}
+		return strings.Join(w, "|"), strings.Join(i, "|")
+	}
+	// Caching that fkbr compensates for is information; soft stays a warning.
 	c := &checker{}
 	c.mountOptions(mountinfo.For(ms, "/mnt/transfer/fkbr"))
-	var warns []string
-	for _, r := range c.res {
-		if r.Level == Warn {
-			warns = append(warns, r.Msg)
+	warn, info := levels(c)
+	if !strings.Contains(warn, "soft") {
+		t.Errorf("no warning about soft: %v", warn)
+	}
+	for _, want := range []string{"acdirmin=30", "lookupcache"} {
+		if strings.Contains(warn, want) || !strings.Contains(info, want) {
+			t.Errorf("%s should be info while compensated: warn %q info %q", want, warn, info)
 		}
 	}
-	all := strings.Join(warns, "|")
+	// With the refresh turned off they are warnings again.
+	c = &checker{cfg: &config.Config{NFSRefresh: "never"}}
+	c.mountOptions(mountinfo.For(ms, "/mnt/transfer/fkbr"))
+	warn, _ = levels(c)
 	for _, want := range []string{"soft", "acdirmin=30", "lookupcache"} {
-		if !strings.Contains(all, want) {
-			t.Errorf("missing warning about %s: %v", want, warns)
+		if !strings.Contains(warn, want) {
+			t.Errorf("nfs_refresh never: missing warning about %s: %v", want, warn)
 		}
 	}
 	c = &checker{}

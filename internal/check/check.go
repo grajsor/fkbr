@@ -170,19 +170,40 @@ func (c *checker) mountOptions(m *mountinfo.Mount) {
 	}
 	c.add(OK, "mount", "%s is %s (vers=%s)", m.Point, m.FSType, m.Opts["vers"])
 	if _, soft := m.Opts["soft"]; soft {
-		c.add(Warn, "mount", "mounted soft: I/O can fail silently on server hiccups; use hard")
+		c.add(Warn, "mount", "mounted soft: NFS calls fail with I/O errors while the server is unreachable, and other programs on this mount can lose writes; "+
+			product.Name+" retries transfers for a few minutes, but hard is safer")
+	}
+	// Attribute caching that the refresh compensates for only slows
+	// things down, so it is information, not a warning.
+	compensated := c.refreshes(m)
+	level := Warn
+	if compensated {
+		level = Info
 	}
 	if v, ok := m.Opts["acdirmin"]; ok {
 		if n, err := strconv.Atoi(v); err == nil && n > 3 {
-			c.add(Warn, "mount", "acdirmin=%d: new requests may take up to %ds to be noticed; mount with actimeo=1", n, n)
+			c.add(level, "mount", "acdirmin=%d: other hosts' changes can stay unseen for %ds; actimeo=1 would avoid that", n, n)
 		}
 	}
 	if v := m.Opts["lookupcache"]; v != "pos" && v != "positive" && v != "none" {
-		c.add(Warn, "mount", "lookupcache not set to positive: replies may be seen late; add lookupcache=positive")
+		c.add(level, "mount", "lookupcache not set to positive: \"not found\" answers are cached; lookupcache=positive would avoid that")
 	}
-	if m.CachesAttributes() {
-		c.add(Info, "mount", product.Name+" compensates by refreshing directories before reading them (nfs_refresh: auto); the mount options above would still be faster")
+	if compensated {
+		c.add(Info, "mount", product.Name+" compensates by refreshing directories before reading them and by waiting for files by listing; the mount options above would only make it a little faster")
 	}
+}
+
+// refreshes reports whether nodes compensate for this mount's caching.
+func (c *checker) refreshes(m *mountinfo.Mount) bool {
+	if c.cfg != nil {
+		switch c.cfg.NFSRefresh {
+		case "never":
+			return false
+		case "always":
+			return true
+		}
+	}
+	return m.CachesAttributes()
 }
 
 func (c *checker) registry(ctx context.Context) {
