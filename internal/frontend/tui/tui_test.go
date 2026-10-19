@@ -12,6 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"fkbr/internal/api"
 )
@@ -594,5 +595,27 @@ func TestJobProgressAndETA(t *testing.T) {
 	d = jobDetails(job(false, 250<<20))
 	if !strings.Contains(d, "progress:  250M done · counting the total (50 files so far)") || strings.Contains(d, "ETA") {
 		t.Errorf("progress while counting:\n%s", d)
+	}
+}
+
+// Long path lists give way, so a running job's progress stays visible.
+func TestJobLineKeepsProgress(t *testing.T) {
+	j := &api.Job{ID: "18dff52d10a5bd3789a5584c", State: api.JobRunning, Created: time.Now().Add(-10 * time.Second),
+		Request: api.TransferRequest{SrcNode: "db01", Paths: []string{
+			"dumps/orders-2026-10-17.sql.zst", "dumps/orders-2026-10-18.sql.zst", "dumps/orders-2026-10-19.sql.zst"},
+			DstNodes: []string{"backup01", "build01"}, DstRoot: "files", DstDir: "incoming"},
+		Participants: []api.JobStatus{
+			{Node: "db01", Role: api.RoleSource, State: api.JobRunning, TotalBytes: 1000, Counted: true},
+			{Node: "backup01", Role: api.RoleTarget, State: api.JobRunning, Bytes: 250},
+			{Node: "build01", Role: api.RoleTarget, State: api.JobRunning, Bytes: 300},
+		}}
+	for _, w := range []int{116, 80} {
+		l := jobLine(j, w)
+		if runewidth.StringWidth(l) != w {
+			t.Errorf("width %d: line is %d wide", w, runewidth.StringWidth(l))
+		}
+		if !strings.Contains(l, "25%") || !strings.Contains(l, "ETA") || !strings.Contains(l, "→ backup01,build01") {
+			t.Errorf("width %d: progress or destination cut off: %q", w, l)
+		}
 	}
 }
