@@ -34,6 +34,10 @@ Any pane can show any node. F9 moves to the jobs panel:
 
 ![db01 and backup01, with the jobs panel focused](docs/screenshots/fkbr-jobs.png)
 
+F3 shows a file from any node, with XML and JSON highlighted:
+
+![The viewer showing a Jenkins job config.xml from build01](docs/screenshots/fkbr-view.png)
+
 ## Quick start
 
 New here? Read `docs/FAQ.md`. It takes a minute.
