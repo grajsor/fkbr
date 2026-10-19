@@ -339,6 +339,9 @@ func (m *model) applyEvent(ev api.Event) tea.Cmd {
 		j := *ev.Job
 		m.jobs[j.ID] = j
 		m.sortJobs()
+		if d, ok := m.dlg.(*textDialog); ok && d.jobID == j.ID {
+			d.setText(jobDetails(&j)) // details stay live while open
+		}
 		if !j.State.Terminal() || (seen && prev.State == j.State) {
 			return nil
 		}
@@ -771,7 +774,9 @@ func (m *model) jobsKey(msg tea.KeyMsg) tea.Cmd {
 		m.jobCursor = min(len(m.jobOrder)-1, m.jobCursor+1)
 	case "enter":
 		j := m.jobs[id]
-		m.dlg = newTextDialog("Job "+id, jobDetails(&j))
+		d := newTextDialog("Job "+id, jobDetails(&j))
+		d.jobID = id
+		m.dlg = d
 	case "c":
 		return func() tea.Msg {
 			if err := m.c.Cancel(m.ctx, id); err != nil {

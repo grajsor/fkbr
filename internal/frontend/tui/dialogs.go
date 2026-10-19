@@ -214,6 +214,16 @@ type textDialog struct {
 	vp    viewport.Model
 	text  string
 	ready bool
+	// jobID is set for job details, which follow the job's events.
+	jobID string
+}
+
+// setText replaces the text, keeping the scroll position.
+func (d *textDialog) setText(text string) {
+	d.text = text
+	if d.ready {
+		d.vp.SetContent(wrapText(text, d.vp.Width))
+	}
 }
 
 func newTextDialog(title, text string) *textDialog {

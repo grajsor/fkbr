@@ -473,3 +473,33 @@ func TestQuitAsksWhenRunningNodeWithActiveJobs(t *testing.T) {
 		t.Fatal("dialog stayed open")
 	}
 }
+
+func TestJobDetailsLiveUpdate(t *testing.T) {
+	h := newHarness(t)
+	job := &api.Job{ID: "j1", State: api.JobRunning, Request: api.TransferRequest{SrcNode: "master", SrcRoot: "data", Paths: []string{"x"}, DstNodes: []string{"s1"}, DstRoot: "data", DstDir: "."}}
+	h.send(eventMsg{api.Event{Type: api.EventJob, JobID: "j1", Job: job}})
+	h.key("f9", "enter")
+	d, ok := h.m.dlg.(*textDialog)
+	if !ok || !strings.Contains(d.text, "state:     running") {
+		t.Fatalf("job details: %T", h.m.dlg)
+	}
+	done := *job
+	done.State = api.JobDone
+	h.send(eventMsg{api.Event{Type: api.EventJob, JobID: "j1", Job: &done}})
+	if !strings.Contains(d.text, "state:     done") {
+		t.Fatalf("details not updated while open:\n%s", d.text)
+	}
+	if !strings.Contains(h.m.View(), "done") {
+		t.Error("view still shows the old state")
+	}
+	// Events for other jobs leave it alone.
+	other := *job
+	other.ID = "j2"
+	h.send(eventMsg{api.Event{Type: api.EventJob, JobID: "j2", Job: &other}})
+	if !strings.Contains(d.text, "Job j1") && !strings.Contains(d.title, "j1") {
+		t.Error("details switched to another job")
+	}
+	if !strings.Contains(d.text, "state:     done") {
+		t.Error("another job's event replaced the details")
+	}
+}
