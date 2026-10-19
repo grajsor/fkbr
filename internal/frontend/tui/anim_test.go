@@ -117,14 +117,15 @@ func TestAnimationCycle(t *testing.T) {
 }
 
 func TestPulseColour(t *testing.T) {
-	if got := pulseColour(0); got != pulseDark {
-		t.Errorf("start of a breath: %s, want %s", got, pulseDark)
+	// Two colours, switching every frame (2 a second).
+	for i, want := range []string{pulseDark, pulseLight, pulseDark, pulseLight} {
+		at := pulseFrame*time.Duration(i) + pulseFrame/2
+		if got := pulseColour(at); got != want {
+			t.Errorf("frame %d: %s, want %s", i, got, want)
+		}
 	}
-	if got := pulseColour(pulsePeriod / 2); got != pulseLight {
-		t.Errorf("middle of a breath: %s, want %s", got, pulseLight)
-	}
-	if a, b := pulseColour(pulsePeriod/4), pulseColour(pulsePeriod+pulsePeriod/4); a != b {
-		t.Errorf("not periodic: %s vs %s", a, b)
+	if pulseFrame != 500*time.Millisecond {
+		t.Errorf("pulse frame %s, want 2 a second", pulseFrame)
 	}
 	for p, want := range map[termenv.Profile]bool{termenv.TrueColor: true, termenv.ANSI256: true, termenv.ANSI: false, termenv.Ascii: false} {
 		if got := pulseEnabled(p); got != want {
@@ -141,8 +142,9 @@ func TestCursorPulses(t *testing.T) {
 	h := newHarness(t)
 	h.m.pulse = true
 	h.m.pulseStart = time.Now()
+	h.m.pulseStart = time.Now().Add(-pulseFrame / 2)
 	dark := h.m.View()
-	h.m.pulseStart = time.Now().Add(-pulsePeriod / 2)
+	h.m.pulseStart = time.Now().Add(-pulseFrame - pulseFrame/2)
 	light := h.m.View()
 	if dark == light {
 		t.Fatal("cursor colour does not change over a breath")
