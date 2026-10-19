@@ -27,6 +27,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"fkbr/internal/api"
@@ -61,6 +62,7 @@ type Mailbox struct {
 	refreshMu   sync.Mutex
 	refreshedAt map[string]time.Time
 	refreshSeq  atomic.Uint64
+	openedUp    sync.Once
 }
 
 // refreshEvery throttles directory refreshes per directory.
@@ -80,9 +82,17 @@ func (m *Mailbox) fresh(dir string) {
 	m.refreshedAt[dir] = now
 	m.refreshMu.Unlock()
 	p := filepath.Join(dir, fmt.Sprintf(".r-%s-%d", m.self, m.refreshSeq.Add(1)))
-	if f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600); err == nil {
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err == nil {
 		f.Close()
 		os.Remove(p)
+		return
+	}
+	// dir may exist on the server while this client still caches it as
+	// missing (looked up before another node created it). Refresh the
+	// parent so that cached "does not exist" is dropped.
+	if parent := filepath.Dir(dir); errors.Is(err, fs.ErrNotExist) && parent != dir && strings.HasPrefix(parent, m.root) {
+		m.fresh(parent)
 	}
 }
 
@@ -97,10 +107,15 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 	if !config.ValidID(self) {
 		return nil, fmt.Errorf("nfsmailbox: invalid node id %q", self)
 	}
-	if fi, err := os.Stat(root); err != nil {
+	fi, err := os.Stat(root)
+	if err != nil {
 		return nil, fmt.Errorf("nfsmailbox: share root: %w", err)
 	} else if !fi.IsDir() {
 		return nil, fmt.Errorf("nfsmailbox: share root %s is not a directory", root)
+	}
+	// Nodes running as other users create top-level entries here too.
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == uint32(os.Geteuid()) && fi.Mode().Perm() != shareDirMode {
+		os.Chmod(root, shareDirMode)
 	}
 	if opts.Poll <= 0 {
 		opts.Poll = 200 * time.Millisecond
@@ -115,7 +130,7 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 		filepath.Join("reply", self),
 		filepath.Join("nodes", self),
 	} {
-		if err := os.MkdirAll(filepath.Join(root, d), 0o770); err != nil {
+		if err := mkdir(filepath.Join(root, d)); err != nil {
 			return nil, fmt.Errorf("nfsmailbox: %w", err)
 		}
 	}
@@ -156,7 +171,7 @@ func (m *Mailbox) path(parts ...string) string {
 }
 
 func (m *Mailbox) write(dest string, data []byte) error {
-	return atomicfile.Write(m.path("tmp"), dest, data, 0o660)
+	return atomicfile.Write(m.path("tmp"), dest, data, shareFileMode)
 }
 
 func (m *Mailbox) writeJSON(dest string, v any) error {
@@ -279,11 +294,11 @@ func (m *Mailbox) Send(_ context.Context, msg *transport.Message) error {
 	// The reply directory must exist before the request is visible, so the
 	// executor can tell "requester gone" from "not created yet".
 	if !msg.Notify {
-		if err := os.MkdirAll(m.path("reply", m.self, msg.ID), 0o770); err != nil {
+		if err := mkdir(m.path("reply", m.self, msg.ID)); err != nil {
 			return err
 		}
 	}
-	if err := os.MkdirAll(m.path(m.inbox(msg.To, "new")), 0o770); err != nil {
+	if err := mkdir(m.path(m.inbox(msg.To, "new"))); err != nil {
 		return err
 	}
 	if err := m.writeJSON(m.path(m.inbox(msg.To, "new"), msg.ID+".json"), msg); err != nil {
@@ -418,6 +433,7 @@ func (m *Mailbox) Finish(_ context.Context, msg *transport.Message, failed bool)
 const StaleTmp = time.Hour
 
 func (m *Mailbox) Prune(_ context.Context, maxAge time.Duration) error {
+	m.openedUp.Do(m.openUp) // once per process: new entries get the right modes
 	cutoff := time.Now().Add(-maxAge)
 	var errs []error
 	if des, err := os.ReadDir(m.path("tmp")); err == nil {

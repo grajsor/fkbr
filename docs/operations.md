@@ -18,6 +18,17 @@ Tested on CentOS 7, Rocky 8, 9 and 10, and Debian 12.
 Nothing is written to `/etc`, `/var` or your home directory, and fkbr never
 reads configuration from them.
 
+**Permissions on the share.** Hosts usually run fkbr as different users,
+and every node creates and deletes entries in the others' directories. So
+fkbr makes its directories on the share `rwxrwxrwx` and its files
+`rw-r--r--`, whatever your umask. Anyone who can reach the share directory
+can therefore read and change what fkbr keeps there, so put it where only
+your hosts and users can get to it (the NFS export, or a parent directory
+with tighter permissions). Shares made by versions before this used
+`rwxrwx---`; each node opens up what it created when it starts, and
+`fkbr SHARE check` lists directories that are still closed and who owns
+them.
+
 The runtime dir is deliberately not `/run/user/<uid>`: logind deletes that
 when your last session logs out, while a node may keep running in `tmux`
 or under `nohup`. In `/tmp`, the node touches its lock and socket every 10
@@ -189,9 +200,12 @@ keys.
 | F9 | jobs panel: Enter for details, `c` cancel, `u` catch up |
 | F10 | quit |
 
-The colours fill the screen in green, like Norton Commander's blue. On
-terminals with fewer colours they fall back to 256 or 16 colours.
-`NO_COLOR=1` turns them off; the cursor then shows in reverse video.
+The colours fill the screen in dark green, like Norton Commander's blue.
+They need 256 colours or more; xterm-like terminals that report only 16
+(`TERM=xterm`) are treated as 256-colour, since nearly all of them are.
+With only 16 colours the panels turn black with green text. `-colors
+true|256|16|none` overrides the detection, and `NO_COLOR=1` turns colours
+off (the cursor then shows in reverse video).
 
 Move deletes the source only after the copy finished with no errors, no
 skipped entries and no detached targets. Otherwise the source is kept and

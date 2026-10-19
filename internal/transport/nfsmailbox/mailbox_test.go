@@ -227,6 +227,36 @@ func TestRefreshLeavesNoTrace(t *testing.T) {
 	})
 }
 
+// A directory another node has not created yet may be cached as missing in
+// its parent. Refreshing it must then refresh the parent, or the client
+// keeps "does not exist" for as long as the mount caches attributes.
+func TestRefreshMissingDirRefreshesParent(t *testing.T) {
+	share := t.TempDir()
+	m, err := Open(share, "a", Options{Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent := m.path("data", "src")
+	if err := os.MkdirAll(parent, 0o770); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(parent, old, old); err != nil {
+		t.Fatal(err)
+	}
+	m.fresh(filepath.Join(parent, "job", "acks")) // neither job nor acks exists
+	fi, err := os.Stat(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !fi.ModTime().After(old.Add(time.Minute)) {
+		t.Errorf("parent of a missing directory not refreshed (mtime %v)", fi.ModTime())
+	}
+	if _, err := os.Stat(filepath.Join(parent, "job")); !os.IsNotExist(err) {
+		t.Errorf("refresh created the missing directory: %v", err)
+	}
+}
+
 func TestPruneLegacyAndUnstartedJobs(t *testing.T) {
 	share := t.TempDir()
 	a := open(t, share, "a")

@@ -45,7 +45,7 @@ func (m *Mailbox) CreateJob(_ context.Context, job *api.Job) error {
 		return err
 	}
 	dir := m.path("jobs", job.ID)
-	if err := os.MkdirAll(filepath.Join(dir, "status"), 0o770); err != nil {
+	if err := mkdir(filepath.Join(dir, "status")); err != nil {
 		return err
 	}
 	for _, d := range job.Detached {
@@ -66,7 +66,7 @@ func (m *Mailbox) Detach(_ context.Context, id string, d api.Detached) error {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, d.Node)
 	}
 	dir := m.path("jobs", id, "detached")
-	if err := os.MkdirAll(dir, 0o770); err != nil {
+	if err := mkdir(dir); err != nil {
 		return err
 	}
 	return m.writeJSON(filepath.Join(dir, d.Node+".json"), &d)
@@ -184,7 +184,7 @@ func (m *Mailbox) CreateChunk(_ context.Context, id string, seq int) (transport.
 		return nil, err
 	}
 	dir := m.path("data", m.self, id)
-	if err := os.MkdirAll(filepath.Join(dir, "acks"), 0o770); err != nil {
+	if err := mkdir(filepath.Join(dir, "acks")); err != nil {
 		return nil, err
 	}
 	f, err := os.CreateTemp(m.path("tmp"), "."+id+"-"+chunkName(seq, ".chunk")+".*")
@@ -198,6 +198,9 @@ func (w *chunkWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
 
 func (w *chunkWriter) Commit(meta []byte) error {
 	defer w.Abort()
+	if err := w.f.Chmod(shareFileMode); err != nil { // CreateTemp made it 0600
+		return err
+	}
 	if err := w.f.Sync(); err != nil {
 		return err
 	}
@@ -248,7 +251,7 @@ func (m *Mailbox) SetAcked(_ context.Context, src, id, node string, n int) error
 		return fmt.Errorf("nfsmailbox: ack for %q written by %q", node, m.self)
 	}
 	dir := m.path("data", src, id, "acks")
-	if err := os.MkdirAll(dir, 0o770); err != nil {
+	if err := mkdir(dir); err != nil {
 		return err
 	}
 	return m.write(filepath.Join(dir, node), []byte(strconv.Itoa(n)+"\n"))

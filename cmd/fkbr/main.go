@@ -90,6 +90,7 @@ func run() error {
 	nfsRefresh := flag.String("nfs-refresh", "", "compensate for NFS attribute caching: auto (default), always, never")
 	forceLocal := flag.Bool("local", false, "do not attach to a running node; run the engine in this process")
 	verbose := flag.Bool("v", false, "debug logging")
+	colors := flag.String("colors", "auto", "TUI colours: auto, true, 256, 16 or none")
 	flag.Usage = usage
 	flag.Parse()
 	args := flag.Args()
@@ -200,7 +201,7 @@ func run() error {
 	case "check":
 		return runCheck(ctx, cfg)
 	case "tui":
-		return runTUI(ctx, cfg, *forceLocal)
+		return runTUI(ctx, cfg, *forceLocal, *colors)
 	}
 	c, err := connect(ctx, cfg, *forceLocal, log)
 	if err != nil {
@@ -303,11 +304,11 @@ func daemon(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 // runTUI attaches to a running node, or else runs this node itself for as
 // long as the TUI is open.
-func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool) error {
+func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors string) error {
 	if !forceLocal {
 		if c, err := remote.Dial(ctx, cfg.Socket); err == nil {
 			defer c.Close()
-			return tui.Run(ctx, c, tui.Options{})
+			return tui.Run(ctx, c, tui.Options{Colors: colors})
 		}
 	}
 	quiet := slog.New(slog.DiscardHandler) // log lines would draw over the UI
@@ -317,7 +318,7 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool) error {
 	}
 	// A node that only lives while the TUI is open leaves the share on quit.
 	n.c.LeaveOnStop()
-	terr := tui.Run(ctx, n.c, tui.Options{RunsNode: true})
+	terr := tui.Run(ctx, n.c, tui.Options{RunsNode: true, Colors: colors})
 	if err := n.stop(); err != nil && terr == nil {
 		terr = err
 	}

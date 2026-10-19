@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -117,11 +118,13 @@ func (c *checker) share(mounts []mountinfo.Mount) {
 	}
 	// Atomic publish: write, rename over an existing name, read back.
 	tmp := filepath.Join(root, "tmp")
-	os.MkdirAll(tmp, 0o770)
+	if err := os.Mkdir(tmp, 0o777); err == nil {
+		os.Chmod(tmp, 0o777) // as fkbr creates it, whatever the umask
+	}
 	dest := filepath.Join(tmp, ".check-"+c.cfg.NodeID)
 	defer os.Remove(dest)
 	for i, content := range []string{"first", "second"} {
-		if err := atomicfile.Write(tmp, dest, []byte(content), 0o660); err != nil {
+		if err := atomicfile.Write(tmp, dest, []byte(content), 0o644); err != nil {
 			c.add(Fail, "share", "cannot write to %s: %v", tmp, err)
 			return
 		}
@@ -131,6 +134,7 @@ func (c *checker) share(mounts []mountinfo.Mount) {
 		}
 	}
 	c.add(OK, "share", "writable; atomic rename-over works")
+	c.shareModes(root)
 
 	if b, err := os.ReadFile(filepath.Join(root, "protocol-version")); err == nil {
 		if v := strings.TrimSpace(string(b)); v != strconv.Itoa(api.ProtocolVersion) {
@@ -248,4 +252,45 @@ func (c *checker) socket() {
 	}
 	conn.Close()
 	c.add(OK, "socket", "daemon API reachable at %s", c.cfg.Socket)
+}
+
+// shareModes warns about share directories that nodes running as other
+// users cannot write to (made by versions before the share was opened up).
+func (c *checker) shareModes(root string) {
+	var closed []string
+	owners := map[uint32]bool{}
+	dirs := []string{root}
+	for depth := 0; depth < 2; depth++ {
+		var next []string
+		for _, d := range dirs {
+			des, _ := os.ReadDir(d)
+			for _, de := range des {
+				if !de.IsDir() {
+					continue
+				}
+				p := filepath.Join(d, de.Name())
+				next = append(next, p)
+				if fi, err := de.Info(); err == nil && fi.Mode().Perm()&0o007 != 0o007 {
+					rel, _ := filepath.Rel(root, p)
+					closed = append(closed, rel)
+					if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+						owners[st.Uid] = true
+					}
+				}
+			}
+		}
+		dirs = next
+	}
+	if len(closed) == 0 {
+		c.add(OK, "share", "directories are open to the users of other hosts")
+		return
+	}
+	uids := make([]string, 0, len(owners))
+	for u := range owners {
+		uids = append(uids, strconv.Itoa(int(u)))
+	}
+	sort.Strings(uids)
+	c.add(Warn, "share", "%d directories other users cannot write to (e.g. %s), owned by uid %s; nodes on other hosts may time out. "+
+		"Each node opens up its own when it starts this version; or chmod -R a+rwX them as their owner",
+		len(closed), closed[0], strings.Join(uids, ","))
 }

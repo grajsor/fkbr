@@ -87,8 +87,14 @@ func TestUnpaintedDetector(t *testing.T) {
 // that every line fills the terminal exactly and every cell has a
 // background from the theme.
 func TestThemePaintsEveryCell(t *testing.T) {
+	for _, p := range []termenv.Profile{termenv.TrueColor, termenv.ANSI256, termenv.ANSI} {
+		t.Run(p.Name(), func(t *testing.T) { paintsEveryCell(t, p) })
+	}
+}
+
+func paintsEveryCell(t *testing.T, p termenv.Profile) {
 	prev := lipgloss.ColorProfile()
-	lipgloss.SetColorProfile(termenv.TrueColor)
+	lipgloss.SetColorProfile(p)
 	defer lipgloss.SetColorProfile(prev)
 
 	h := newHarness(t)
@@ -151,5 +157,34 @@ func TestThemeWithoutColour(t *testing.T) {
 	}
 	if strings.Contains(h.m.View(), "\x1b[3") || strings.Contains(h.m.View(), "\x1b[4") {
 		t.Error("colours emitted without a colour profile")
+	}
+}
+
+func TestSetColors(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	defer lipgloss.SetColorProfile(prev)
+	for _, tc := range []struct {
+		term, mode string
+		from, want termenv.Profile
+	}{
+		{"xterm", "auto", termenv.ANSI, termenv.ANSI256}, // claims 16, can do 256
+		{"linux", "auto", termenv.ANSI, termenv.ANSI},    // the console really has 16
+		{"xterm", "auto", termenv.Ascii, termenv.Ascii},  // NO_COLOR stays off
+		{"xterm", "auto", termenv.TrueColor, termenv.TrueColor},
+		{"xterm", "16", termenv.TrueColor, termenv.ANSI},
+		{"dumb", "true", termenv.Ascii, termenv.TrueColor},
+		{"xterm", "none", termenv.TrueColor, termenv.Ascii},
+	} {
+		t.Setenv("TERM", tc.term)
+		lipgloss.SetColorProfile(tc.from)
+		if err := setColors(tc.mode); err != nil {
+			t.Fatal(err)
+		}
+		if got := lipgloss.ColorProfile(); got != tc.want {
+			t.Errorf("TERM=%s %s from %s: %s, want %s", tc.term, tc.mode, tc.from.Name(), got.Name(), tc.want.Name())
+		}
+	}
+	if setColors("bright") == nil {
+		t.Error("bad -colors value accepted")
 	}
 }

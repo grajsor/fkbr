@@ -76,3 +76,24 @@ func TestRunLocal(t *testing.T) {
 		}
 	}
 }
+
+func TestShareModes(t *testing.T) {
+	root := t.TempDir()
+	os.Chmod(root, 0o777)
+	for _, d := range []string{"inbox/a", "jobs"} {
+		os.MkdirAll(filepath.Join(root, d), 0o777)
+		os.Chmod(filepath.Join(root, d), 0o777)
+	}
+	os.Chmod(filepath.Join(root, "inbox"), 0o777)
+	c := &checker{}
+	c.shareModes(root)
+	if len(c.res) != 1 || c.res[0].Level != OK {
+		t.Fatalf("open share: %+v", c.res)
+	}
+	os.Chmod(filepath.Join(root, "inbox", "a"), 0o770)
+	c = &checker{}
+	c.shareModes(root)
+	if len(c.res) != 1 || c.res[0].Level != Warn || !strings.Contains(c.res[0].Msg, "inbox/a") {
+		t.Fatalf("closed dir not reported: %+v", c.res)
+	}
+}

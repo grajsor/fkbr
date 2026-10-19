@@ -31,6 +31,12 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
 
 ## Rules
 
+0. **Open modes.** Directories are created `0777` (no sticky bit) and files
+   `0644`, set explicitly so the umask cannot narrow them: nodes run as
+   different users and create, rename and delete entries in each other's
+   directories. Files are never written in place, so nobody needs write
+   access to a file. A node chmods entries it owns that have other modes
+   once per process (shares from earlier versions used `0770`/`0660`).
 1. **Atomic publication.** A file is written to `tmp/`, fsynced, closed and
    then renamed to its final name. Readers ignore everything else. Since
    `tmp/` is on the same export, the rename is atomic. Close-to-open

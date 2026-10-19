@@ -25,10 +25,15 @@ type Options struct {
 	// RunsNode: this process is the node's worker (no separate daemon), so
 	// quitting pauses this node's part of running jobs.
 	RunsNode bool
+	// Colors: auto (default), true, 256, 16 or none.
+	Colors string
 }
 
 // Run starts the TUI and blocks until the user quits.
 func Run(ctx context.Context, c api.Client, opts Options) error {
+	if err := setColors(opts.Colors); err != nil {
+		return err
+	}
 	m := newModel(ctx, c)
 	m.runsNode = opts.RunsNode
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
@@ -882,7 +887,7 @@ func (m *model) View() string {
 		content := lipgloss.NewStyle().MaxWidth(m.width - 4).MaxHeight(area - 2).
 			Render(padLines(m.dlg.view(m.st, m.width, area), m.st.inputLabel))
 		out = append(out, lipgloss.Place(m.width, area, lipgloss.Center, lipgloss.Center, m.st.dialog.Render(content),
-			lipgloss.WithWhitespaceBackground(cGreen)))
+			lipgloss.WithWhitespaceBackground(cPanel)))
 	} else {
 		out = append(out, m.renderPanes(ph))
 	}

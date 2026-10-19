@@ -44,7 +44,7 @@ func (m *Mailbox) CreateBlob(_ context.Context, name string) (transport.ChunkWri
 	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(filepath.Dir(dest), 0o770); err != nil {
+	if err := mkdir(filepath.Dir(dest)); err != nil {
 		return nil, err
 	}
 	f, err := os.CreateTemp(m.path("tmp"), ".blob-*")
@@ -64,7 +64,7 @@ func (w *blobWriter) Commit([]byte) error {
 	if err := w.f.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(w.f.Name(), 0o660); err != nil {
+	if err := os.Chmod(w.f.Name(), shareFileMode); err != nil {
 		return err
 	}
 	if err := os.Rename(w.f.Name(), w.dest); err != nil {

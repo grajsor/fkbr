@@ -52,6 +52,9 @@ Start one with `-node othername`.
 **Share read-only?**
 Start with `-ro`.
 
+**Different users on each machine?**
+That works. fkbr opens its folders on the share to everyone, so keep the share where only your machines can reach it. If a node says "no answer within 30s" after an update from an older version, run `./fkbr /mnt/nfs/somedir check` on each machine.
+
 **Does it clean up after itself?**
 Yes, but only while it runs. Think of fkbr as a mail carrier who tidies the mailbox while on duty. Letters are thrown away once delivered. Small notes about finished jobs stay for an hour, then the carrier throws those away too. If no carrier is on duty, nothing gets tidied until one shows up. There is no cron job or service doing it for you.
 
