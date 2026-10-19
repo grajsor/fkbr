@@ -1,6 +1,6 @@
 # Benchmarks
 
-## Five nodes over real NFS (2026-10-19)
+## Five nodes over real NFS (2026-10-19, build f300cc2)
 
 **Setup**
 - **Share:** Synology NAS over NFSv3 on 1 GbE. Raw speed per client with
@@ -10,8 +10,9 @@
   (4 cores, 4 GiB, Debian 12, 1 GbE, `acdirmin=60,nconnect=4`).
 - **Runs:** source rhel9. "1 target" is rhel8; "4 targets" is `@all`
   (rhel7, rhel8, rhel10 and the Pi). Each case ran three times; the tables
-  show the median. Times are from `fkbr cp` starting until every target
-  has installed everything.
+  show the median, and the three runs never differed by more than 3.5 s.
+  Times are from `fkbr cp` starting until every target has installed
+  everything.
 
 **Workloads**
 
@@ -26,31 +27,31 @@
 
 | Workload | 1 target | 1 target, `-z` | 4 targets | 4 targets, `-z` |
 |---|---|---|---|---|
-| VM images | 20.1 s (51 MiB/s) | 20.1 s | 42.1 s | 42.1 s |
-| Web logs | 19.1 s (54 MiB/s) | **10.6 s** (97 MiB/s) | 41.6 s | **18.6 s** |
-| Software tree | 18.1 s | **13.6 s** | 28.6 s | **18.6 s** |
-| Mail store | 11.1 s | **8.6 s** | 14.1 s | **10.6 s** |
-| Web logs, Pi as source | 18.6 s | **9.0 s** | | |
+| VM images | 19.6 s (52 MiB/s) | 20.1 s | 42.1 s | 42.1 s |
+| Web logs | 19.6 s (52 MiB/s) | **10.1 s** (101 MiB/s) | 42.1 s | **20.1 s** |
+| Software tree | 17.6 s | **13.1 s** | 28.1 s | **19.1 s** |
+| Mail store | 11.1 s | **9.1 s** | 13.1 s | **12.1 s** |
+| Web logs, Pi as source | 19.1 s | **11.6 s** | | |
 
 **CPU time** (seconds of daemon CPU per copy, 1 target)
 
 | Workload | Source | Source, `-z` | Target | Target, `-z` |
 |---|---|---|---|---|
-| VM images (x86 source) | 3.6 | 4.5 | 3.5 | 3.7 |
-| Web logs (x86 source) | 3.6 | 6.7 | 3.4 | 2.4 |
-| Web logs (Pi source) | 1.8 | 8.2 | 4.1 | 2.5 |
+| VM images (x86 source) | 3.8 | 4.5 | 3.5 | 3.7 |
+| Web logs (x86 source) | 3.7 | 6.5 | 3.4 | 2.3 |
+| Web logs (Pi source) | 1.8 | 8.9 | 4.4 | 2.7 |
 
 **Sync** of the mail store to all four targets (`sync -z`):
 
 | Step | Time |
 |---|---|
-| plan, first sync (20,201 entries per target) | 0.4–1.2 s |
-| apply, first sync | 11–19 s |
-| plan after 200 edits, 100 deletions, 100 new files | 0.8–1.8 s |
-| apply (452 entries, 0.8 MiB per target) | 1.1–1.2 s |
-| plan with `-mirror` (adds the 100 deletions) | 0.9–1.5 s |
-| apply with `-mirror` | 1.9–2.0 s |
-| re-plan when already in sync | 0.7–0.9 s |
+| plan, first sync (20,201 entries per target) | 1.2 s |
+| apply, first sync | 10.1 s |
+| plan after 200 edits, 100 deletions, 100 new files | 0.8 s |
+| apply (452 entries, 0.8 MiB per target) | 1.1 s |
+| plan with `-mirror` (adds the 100 deletions) | 0.7 s |
+| apply with `-mirror` | 1.9 s |
+| re-plan when already in sync | 0.8 s |
 
 **Peak memory** (VmHWM over the whole run): 39 MiB for the source, 16–26
 MiB for the targets.
@@ -58,29 +59,33 @@ MiB for the targets.
 **What this shows**
 - **Bulk data is limited by the NAS link.** Every byte is written to the
   share once and read back by each target over the same 1 GbE link, so one
-  target gets about half of it (51 MiB/s).
+  target gets about half of it (52 MiB/s).
 - **Fan-out is cheap.** Four targets take about twice as long as one, for
   four times the deliveries: the source stages each chunk once and the
   targets read in parallel.
 - **Use `-z` unless the data is already compressed.** It halves the time
-  for logs to one target, and more than halves it to four. On random data
-  it changed nothing, and it costs about 1 CPU second per GiB more at the
-  source. Targets spend less CPU with `-z`, because they read fewer bytes.
-- **Small files cost per file, not per byte.** About 1,800–2,300 files/s,
+  for logs, to one target and to four, and cuts the software tree by a
+  quarter to a third. On random data it changed nothing, and it costs
+  about 1 CPU second per GiB more at the source. Targets spend less CPU
+  with `-z`, because they read fewer bytes.
+- **Small files cost per file, not per byte.** About 1,800–2,200 files/s,
   and four targets are barely slower than one, since each installs in
   parallel.
-- **The Pi is as fast a source as the x86 VMs.** Compression costs it about
-  8 CPU seconds per GiB of logs, on one of its four cores.
+- **Sync plans are quick:** under 1.5 s to compare 20,000 files on five
+  nodes, and an incremental apply moves only what changed.
+- **The Pi keeps up as a source.** Compression costs it about 9 CPU
+  seconds per GiB of logs, on one of its four cores.
 
-This benchmark also found a bug: a target that looked up a job's staging
-directory before the source created it cached "does not exist" for as long
-as its mount caches attributes. On the Pi (`acdirmin=60`), that stalled
-two in five fan-out runs for up to 60 s. Since the fix, ten runs in a row
-showed no stall. A rarer one showed up in the sync runs: a node sometimes
-missed a reply that was already on the share, for minutes, and the same
-caused occasional "no answer within 30s" in production. Nodes now wait
-for files by listing the directory instead of looking up the name (see
-`docs/protocol.md`, rule 2).
+**Bugs this benchmark found**, both fixed in the build measured here:
+- A target that looked up a job's staging directory before the source
+  created it cached "does not exist" for as long as its mount caches
+  attributes. On the Pi (`acdirmin=60`), that stalled two in five fan-out
+  runs for up to 60 s.
+- Rarer: a node sometimes missed a file another node had already put on
+  the share, such as a reply, for minutes. In production this showed as
+  an occasional "no answer within 30s". Nodes now wait for files by
+  listing the directory instead of looking up the name (see
+  `docs/protocol.md`, rule 2).
 
 ## One machine (from milestone 6)
 
