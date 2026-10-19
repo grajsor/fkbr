@@ -41,6 +41,7 @@ type sender struct {
 	lastNodes time.Time
 
 	log     *slog.Logger
+	totals  totals
 	start   time.Time
 	stored  int64 // bytes staged on the share by this run
 	waiting *waitLog
@@ -56,6 +57,7 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 		detached: map[string]bool{}, acks: map[string]int{}, progress: map[string]time.Time{},
 		log: e.log.With("job", id), start: time.Now(),
 	}
+	s.status.before = s.totals.apply
 	now := time.Now()
 	for _, d := range job.Detached {
 		s.detached[d.Node] = true
@@ -133,6 +135,13 @@ func (s *sender) run(ctx context.Context) error {
 	}
 
 	total := s.job.TotalChunks
+	if total > 0 { // produced by an earlier run
+		s.totals.finish(s.status.st.Files, s.status.st.Bytes, true)
+	} else {
+		cctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		go s.count(cctx)
+	}
 	ride := &rideOut{log: s.log}
 	for produced := total > 0; !produced; {
 		n, err := s.produce(ctx)
@@ -163,6 +172,7 @@ func (s *sender) run(ctx context.Context) error {
 			}
 		}
 		ride.ok()
+		s.totals.finish(s.status.st.Files, s.status.st.Bytes, true)
 		total, produced = n, true
 	}
 	s.status.st.Chunks = total

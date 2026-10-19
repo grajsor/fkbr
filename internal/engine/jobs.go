@@ -355,6 +355,8 @@ type statusWriter struct {
 	job  string
 	st   api.JobStatus
 	last time.Time
+	// before, if set, updates st just before each publication.
+	before func(*api.JobStatus)
 }
 
 func (e *Engine) newStatus(job string, role api.Role) *statusWriter {
@@ -367,10 +369,11 @@ func (w *statusWriter) problem(format string, args ...any) {
 	w.note(format, args...)
 }
 
-// note records a message that is not an error.
+// note records a message that is not an error, stamped with the time
+// ("15:04:05 message") so readers can put notes from all nodes in order.
 func (w *statusWriter) note(format string, args ...any) {
 	if len(w.st.Problems) < 200 {
-		w.st.Problems = append(w.st.Problems, fmt.Sprintf(format, args...))
+		w.st.Problems = append(w.st.Problems, time.Now().Format("15:04:05")+" "+fmt.Sprintf(format, args...))
 	}
 }
 
@@ -381,6 +384,9 @@ func (w *statusWriter) put(ctx context.Context, force bool) {
 	}
 	w.last = time.Now()
 	w.st.Updated = w.last.UTC()
+	if w.before != nil {
+		w.before(&w.st)
+	}
 	if err := w.e.st.PutStatus(context.WithoutCancel(ctx), w.job, &w.st); err != nil {
 		w.e.log.Warn("status update failed", "job", w.job, "err", err)
 	}

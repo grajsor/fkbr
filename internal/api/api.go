@@ -287,6 +287,11 @@ type JobStatus struct {
 	// Problems holds up to a few hundred per-entry messages (skips, errors).
 	Problems []string  `json:"problems,omitempty"`
 	Updated  time.Time `json:"updated"`
+	// TotalFiles and TotalBytes are what the source will send, counted
+	// alongside sending; final once Counted.
+	TotalFiles int64 `json:"total_files,omitempty"`
+	TotalBytes int64 `json:"total_bytes,omitempty"`
+	Counted    bool  `json:"counted,omitempty"`
 }
 
 // Job is a submitted transfer and the statuses its participants published.

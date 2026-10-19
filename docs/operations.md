@@ -214,7 +214,7 @@ keys.
 | F4 | sync: make the other pane's directory match this one (plan shown first) |
 | F5 / F6 | copy / move the selection. The destination defaults to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`) |
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
-| F9 | jobs panel: Enter for details, `c` cancel, `u` catch up |
+| F9 | jobs panel with progress and ETA: Enter for details (each node's state, time-stamped notes), `c` cancel, `u` catch up |
 | F10 | quit |
 
 The colours fill the screen in dark green, like Norton Commander's blue.

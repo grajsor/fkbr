@@ -108,3 +108,26 @@ func TestWaitLog(t *testing.T) {
 		t.Errorf("end of a logged wait not logged:\n%s", buf.String())
 	}
 }
+
+// The source counts what it will send alongside sending, so readers can
+// show progress and an ETA; the totals match what was sent.
+func TestSourceCountsTotals(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	s1, _ := node(t, share, "s1")
+	makeTree(t, mroot, 20, 300<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, master, id, 20*time.Second)
+	src := ownStatus(j, "master", api.RoleSource)
+	if src == nil || !src.Counted {
+		t.Fatalf("source status not counted: %+v", src)
+	}
+	if src.TotalFiles != src.Files || src.TotalBytes != src.Bytes || src.TotalBytes == 0 {
+		t.Errorf("totals %d files %d bytes, sent %d files %d bytes", src.TotalFiles, src.TotalBytes, src.Files, src.Bytes)
+	}
+}

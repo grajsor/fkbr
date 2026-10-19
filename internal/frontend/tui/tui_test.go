@@ -535,3 +535,64 @@ func TestQQuits(t *testing.T) {
 		t.Fatal("q did not close the help")
 	}
 }
+
+func TestJobDetailsLayout(t *testing.T) {
+	created := time.Date(2026, 10, 19, 16, 27, 57, 0, time.Local)
+	j := &api.Job{ID: "j1", State: api.JobDone, Created: created,
+		Request: api.TransferRequest{SrcNode: "jenkins1", SrcRoot: "files", Paths: []string{"plugins"}, DstNodes: []string{"ci5", "ci4"}, DstRoot: "files", DstDir: "userContent"},
+		Participants: []api.JobStatus{ // as listed from the share: targets first
+			{Node: "ci5", Role: api.RoleTarget, State: api.JobDone, Files: 6721, Bytes: 2 << 30, Chunks: 19,
+				Problems: []string{"16:29:10 ownership not preserved on 6721 entries (needs root or CAP_CHOWN)"}, Updated: created.Add(72 * time.Second)},
+			{Node: "jenkins1", Role: api.RoleSource, State: api.JobDone, Files: 6721, Bytes: 2 << 30, Chunks: 19, Updated: created.Add(70 * time.Second)},
+			{Node: "ci4", Role: api.RoleTarget, State: api.JobRunning, Phase: "receiving", Problems: []string{"old note without a time"}},
+		}}
+	d := jobDetails(j)
+	table := d[strings.Index(d, "NODE"):]
+	src, t4, t5 := strings.Index(table, "jenkins1  source"), strings.Index(table, "ci4 "), strings.Index(table, "ci5 ")
+	if src < 0 || t4 < 0 || t5 < 0 || !(src < t4 && t4 < t5) {
+		t.Fatalf("participants not ordered source, then targets by name:\n%s", d)
+	}
+	notes := strings.Index(d, "Notes")
+	if notes < 0 || notes < strings.Index(d, "NODE")+t5 {
+		t.Fatalf("notes not below the table:\n%s", d)
+	}
+	if !strings.Contains(d[notes:], "16:29:10  ci5: ownership not preserved") || !strings.Contains(d[notes:], "ci4: old note without a time") {
+		t.Errorf("notes lack node or time:\n%s", d)
+	}
+	if strings.Index(d[notes:], "ci4: old note") > strings.Index(d[notes:], "16:29:10") {
+		t.Errorf("untimed (older) notes should come first:\n%s", d)
+	}
+	if !strings.Contains(d, "receiving") {
+		t.Errorf("running node's phase missing:\n%s", d)
+	}
+	if !strings.Contains(d, "state:     done, took 1m12s") {
+		t.Errorf("duration missing:\n%s", d)
+	}
+}
+
+func TestJobProgressAndETA(t *testing.T) {
+	created := time.Now().Add(-10 * time.Second)
+	job := func(counted bool, targetBytes int64) *api.Job {
+		return &api.Job{ID: "j1", State: api.JobRunning, Created: created,
+			Request: api.TransferRequest{SrcNode: "src", DstNodes: []string{"a", "b"}},
+			Participants: []api.JobStatus{
+				{Node: "src", Role: api.RoleSource, State: api.JobRunning, Bytes: 600 << 20, Files: 30,
+					TotalBytes: 1000 << 20, TotalFiles: 50, Counted: counted},
+				{Node: "a", Role: api.RoleTarget, State: api.JobRunning, Bytes: 500 << 20},
+				{Node: "b", Role: api.RoleTarget, State: api.JobRunning, Bytes: targetBytes},
+			}}
+	}
+	// The slowest target decides: b has 250 MiB of 1000 MiB after 10 s.
+	d := jobDetails(job(true, 250<<20))
+	if !strings.Contains(d, "progress:  250M of 1.0G (25%)") || !strings.Contains(d, "ETA 30s") {
+		t.Errorf("progress line:\n%s", d)
+	}
+	if l := jobLine(job(true, 250<<20), 200); !strings.Contains(l, "25%") || !strings.Contains(l, "ETA 30s") {
+		t.Errorf("jobs panel line: %q", l)
+	}
+	// Before the count is done there is no ETA, but it says so.
+	d = jobDetails(job(false, 250<<20))
+	if !strings.Contains(d, "progress:  250M done · counting the total (50 files so far)") || strings.Contains(d, "ETA") {
+		t.Errorf("progress while counting:\n%s", d)
+	}
+}

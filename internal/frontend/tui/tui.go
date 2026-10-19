@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -831,31 +832,120 @@ func short(id string) string {
 func jobDetails(j *api.Job) string {
 	var b strings.Builder
 	r := j.Request
+	state := string(j.State)
+	var last time.Time
+	var srcBytes int64
+	for _, p := range j.Participants {
+		if p.Updated.After(last) {
+			last = p.Updated
+		}
+		if p.Role == api.RoleSource {
+			srcBytes = p.Bytes
+		}
+	}
+	switch {
+	case j.State.Terminal() && !last.IsZero() && !j.Created.IsZero():
+		took := last.Sub(j.Created).Round(time.Second)
+		state += fmt.Sprintf(", took %s", took)
+		if took > 0 && srcBytes > 0 {
+			state += fmt.Sprintf(" (%s at %s/s)", humanSize(srcBytes), humanSize(int64(float64(srcBytes)/took.Seconds())))
+		}
+	case !j.State.Terminal() && !j.Created.IsZero():
+		state += fmt.Sprintf(" for %s", time.Since(j.Created).Round(time.Second))
+	}
 	fmt.Fprintf(&b, "state:     %s\ncreated:   %s by %s\nfrom:      %s:%s  %s\nto:        %s:%s/%s\nif exists: %s   zstd: %v\n",
-		j.State, j.Created.Local().Format("2006-01-02 15:04:05"), j.Initiator,
+		state, j.Created.Local().Format("2006-01-02 15:04:05"), j.Initiator,
 		r.SrcNode, r.SrcRoot, strings.Join(r.Paths, " "),
 		strings.Join(r.DstNodes, ","), r.DstRoot, r.DstDir, r.Conflict, r.Compress)
 	if j.CatchUpOf != "" {
 		fmt.Fprintf(&b, "catch-up of %s\n", j.CatchUpOf)
 	}
-	b.WriteString("\n")
-	for _, p := range j.Participants {
-		fmt.Fprintf(&b, "%-10s %-6s %-9s %d files, %s, %d chunks, %d skipped, %d errors\n",
-			p.Node, p.Role, p.State, p.Files, humanSize(p.Bytes), p.Chunks, p.Skipped, p.Errors)
-		if p.Phase != "" {
-			fmt.Fprintf(&b, "             %s\n", p.Phase)
+	if !j.State.Terminal() {
+		done, total, files, counted, rate, eta := progressOf(j)
+		switch {
+		case counted && total > 0:
+			fmt.Fprintf(&b, "progress:  %s of %s (%d%%)", humanSize(min(done, total)), humanSize(total), min(100, done*100/total))
+			if rate > 0 {
+				fmt.Fprintf(&b, " · %s/s · ETA %s", humanSize(int64(rate)), eta)
+			}
+			b.WriteString("\n")
+		default:
+			fmt.Fprintf(&b, "progress:  %s done · counting the total (%d files so far)\n", humanSize(done), files)
 		}
+	}
+
+	// The source first, then the targets by name.
+	ps := slices.Clone(j.Participants)
+	slices.SortFunc(ps, func(a, c api.JobStatus) int {
+		if (a.Role == api.RoleSource) != (c.Role == api.RoleSource) {
+			if a.Role == api.RoleSource {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.Node, c.Node)
+	})
+	b.WriteString("\n")
+	tw := tabwriter.NewWriter(&b, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "NODE\tROLE\tSTATE\tFILES\tBYTES\tCHUNKS\tSKIPPED\tERRORS\tNOW")
+	var timed, untimed []string
+	for _, p := range ps {
+		now := ""
+		if !p.State.Terminal() {
+			now = p.Phase
+		}
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%d\t%d\t%d\t%s\n",
+			p.Node, p.Role, p.State, p.Files, humanSize(p.Bytes), p.Chunks, p.Skipped, p.Errors, now)
 		if p.Error != "" {
-			fmt.Fprintf(&b, "             error: %s\n", p.Error)
+			untimed = append(untimed, p.Node+": error: "+p.Error)
 		}
 		for _, pr := range p.Problems {
-			fmt.Fprintf(&b, "             %s\n", pr)
+			// Nodes stamp notes with the time ("15:04:05 note"); older
+			// builds did not.
+			if len(pr) > 9 && pr[2] == ':' && pr[5] == ':' && pr[8] == ' ' {
+				timed = append(timed, pr[:8]+"  "+p.Node+": "+pr[9:])
+			} else {
+				untimed = append(untimed, p.Node+": "+pr)
+			}
+		}
+	}
+	tw.Flush()
+	sort.Strings(timed)
+	if notes := append(untimed, timed...); len(notes) > 0 {
+		b.WriteString("\nNotes\n")
+		for _, n := range notes {
+			b.WriteString("  " + n + "\n")
 		}
 	}
 	for _, d := range j.Detached {
 		fmt.Fprintf(&b, "\ndetached %s after %d chunks: %s  (u = catch up)", d.Node, d.Chunks, d.Reason)
 	}
 	return b.String()
+}
+
+// progressOf returns a running job's progress: bytes done by its slowest
+// active target, the source's totals so far and whether they are final,
+// and the average rate and ETA (zero while unknown).
+func progressOf(j *api.Job) (done, total, files int64, counted bool, rate float64, eta time.Duration) {
+	done = -1
+	for _, p := range j.Participants {
+		switch {
+		case p.Role == api.RoleSource:
+			total, files, counted = p.TotalBytes, p.TotalFiles, p.Counted
+		case !j.IsDetached(p.Node) && (done < 0 || p.Bytes < done):
+			done = p.Bytes
+		}
+	}
+	if done < 0 {
+		done = 0
+	}
+	if el := time.Since(j.Created).Seconds(); el > 0 && done > 0 {
+		rate = float64(done) / el
+		if counted && total > done {
+			eta = time.Duration(float64(total-done) / rate * float64(time.Second)).Round(time.Second)
+		}
+	}
+	return
 }
 
 // jobLine summarises a job in one line for the jobs panel.
@@ -881,6 +971,12 @@ func jobLine(j *api.Job, width int) string {
 	case j.State.Terminal():
 		if src != nil {
 			progress = fmt.Sprintf("%d files %s", src.Files, humanSize(src.Bytes))
+		}
+	case src != nil && src.Counted && src.TotalBytes > 0:
+		done, total, _, _, rate, eta := progressOf(j)
+		progress = fmt.Sprintf("%d%%", min(100, done*100/total))
+		if rate > 0 {
+			progress += fmt.Sprintf(" · ETA %s", eta)
 		}
 	case src != nil && j.TotalChunks > 0 && minChunks >= 0:
 		progress = fmt.Sprintf("%d/%d chunks", minChunks, j.TotalChunks)

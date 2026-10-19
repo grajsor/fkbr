@@ -98,12 +98,10 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	st.Skipped = res.Skipped
 	st.Errors += res.Errors
 	for _, p := range res.Problems {
-		if len(st.Problems) < 200 {
-			st.Problems = append(st.Problems, p)
-		}
+		status.note("%s", p)
 	}
 	if res.OwnerNotPreserved > 0 {
-		st.Problems = append(st.Problems, fmt.Sprintf("ownership not preserved on %d entries (needs root or CAP_CHOWN)", res.OwnerNotPreserved))
+		status.note("ownership not preserved on %d entries (needs root or CAP_CHOWN)", res.OwnerNotPreserved)
 	}
 	return status.finish(ctx, api.JobDone, nil)
 }
