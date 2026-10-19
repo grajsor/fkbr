@@ -117,15 +117,15 @@ func TestAnimationCycle(t *testing.T) {
 }
 
 func TestPulseColour(t *testing.T) {
-	// Two colours, switching every frame (2 a second).
+	// Two colours, switching every frame (once a second).
 	for i, want := range []string{pulseDark, pulseLight, pulseDark, pulseLight} {
 		at := pulseFrame*time.Duration(i) + pulseFrame/2
 		if got := pulseColour(at); got != want {
 			t.Errorf("frame %d: %s, want %s", i, got, want)
 		}
 	}
-	if pulseFrame != 500*time.Millisecond {
-		t.Errorf("pulse frame %s, want 2 a second", pulseFrame)
+	if pulseFrame != time.Second {
+		t.Errorf("pulse frame %s, want 1 a second", pulseFrame)
 	}
 	for p, want := range map[termenv.Profile]bool{termenv.TrueColor: true, termenv.ANSI256: true, termenv.ANSI: false, termenv.Ascii: false} {
 		if got := pulseEnabled(p); got != want {

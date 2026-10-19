@@ -78,14 +78,14 @@ func nameX(phase animPhase, elapsed time.Duration, home, width, n int) int {
 	return home
 }
 
-// The cursor bar alternates between two shades of the bar green twice a
+// The cursor bar alternates between two shades of the bar green once a
 // second, so the screen looks alive even when nothing moves. Each switch
 // redraws only the cursor lines. With 16 colours or none the bar stays
 // still and no timer runs.
 var (
 	pulseDark  = "#98c1a2"
 	pulseLight = "#c8e0cd"
-	pulseFrame = 500 * time.Millisecond
+	pulseFrame = time.Second
 )
 
 type pulseMsg struct{}
