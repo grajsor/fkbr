@@ -162,7 +162,7 @@ func TestThemeWithoutColour(t *testing.T) {
 	if !strings.Contains(lines[1], "\x1b[7m master:/ ") {
 		t.Errorf("active title not highlighted: %q", lines[1])
 	}
-	if !strings.Contains(lines[2], "\x1b[7m/..") {
+	if !strings.Contains(lines[2], "\x1b[7m../") {
 		t.Errorf("cursor row not highlighted: %q", lines[2])
 	}
 	if strings.Contains(h.m.View(), "\x1b[3") || strings.Contains(h.m.View(), "\x1b[4") {

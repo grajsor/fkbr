@@ -271,7 +271,7 @@ func (p *pane) formatRow(r row, width int, scroll bool, marquee time.Duration) s
 	if p.level != levelDir || r.up {
 		name := r.name
 		if r.up {
-			name = "/.."
+			name = "../"
 		}
 		if r.info == "" {
 			if scroll {
@@ -291,9 +291,9 @@ func (p *pane) formatRow(r row, width int, scroll bool, marquee time.Duration) s
 	nameW := width - dateW - sizeW - 2
 	name := r.name
 	if r.isDir {
-		name = "/" + name
+		name += "/"
 	} else if r.entry.Type == api.TypeSymlink {
-		name = "@" + name
+		name += "@"
 	}
 	if nameW < 8 { // too narrow for columns
 		if scroll {

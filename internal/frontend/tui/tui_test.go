@@ -619,3 +619,21 @@ func TestJobLineKeepsProgress(t *testing.T) {
 		}
 	}
 }
+
+// Folders read as name/, the way up as ../ and symlinks as name@ (ls -F).
+func TestRowNameMarkers(t *testing.T) {
+	p := &pane{level: levelDir}
+	for _, c := range []struct {
+		r    row
+		want string
+	}{
+		{row{up: true}, "../"},
+		{row{name: "proj", isDir: true, entry: api.Entry{Type: api.TypeDir}}, "proj/"},
+		{row{name: "current", entry: api.Entry{Type: api.TypeSymlink}}, "current@"},
+		{row{name: "a.txt", entry: api.Entry{Type: api.TypeFile}}, "a.txt "},
+	} {
+		if got := p.formatRow(c.r, 60, false, 0); !strings.HasPrefix(got, c.want) {
+			t.Errorf("%+v: row %q, want it to start with %q", c.r, got, c.want)
+		}
+	}
+}
