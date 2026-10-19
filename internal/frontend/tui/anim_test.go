@@ -67,6 +67,22 @@ func TestHeaderAnimationFrames(t *testing.T) {
 			}
 		}
 	}
+	// The name moves only inside its own " fkbr " frame; the rest of the
+	// header never changes.
+	h.m.anim = animIdle
+	idle := stripANSI(h.m.header())
+	frame := len(" fkbr ")
+	for _, ph := range []struct {
+		phase animPhase
+		dur   time.Duration
+	}{{animOut, animOutDur}, {animGap, animGapDur}, {animIn, animInDur}} {
+		for i := 0; i <= 10; i++ {
+			h.m.anim, h.m.animAt = ph.phase, time.Now().Add(-ph.dur*time.Duration(i)/10)
+			if got := stripANSI(h.m.header()); got[frame:] != idle[frame:] {
+				t.Fatalf("phase %d step %d changed the header outside the frame:\n%q\n%q", ph.phase, i, got, idle)
+			}
+		}
+	}
 	h.m.anim = animGap
 	if strings.Contains(h.m.header(), "fkbr") {
 		t.Error("name shown during the gap")

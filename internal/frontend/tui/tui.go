@@ -950,12 +950,14 @@ func (m *model) header() string {
 	right := fmt.Sprintf("nodes %d/%d online · jobs %d running ", online, total, running)
 	slot := home + len(name)
 	gap := max(1, m.width-slot-lipgloss.Width(left)-lipgloss.Width(right))
-	// The name is laid over the line at its (possibly animated) column.
+	// The name is laid over the line at its (possibly animated) column,
+	// clipped to its own frame: the cells of " fkbr ".
 	line := []rune(fit(strings.Repeat(" ", slot)+left+strings.Repeat(" ", gap)+right, m.width))
 	isName := make([]bool, len(line))
-	x := nameX(m.anim, time.Since(m.animAt), home, len(line), len(name))
+	frame := min(slot+1, len(line))
+	x := nameX(m.anim, time.Since(m.animAt), home, frame, len(name))
 	for i, r := range name {
-		if c := x + i; c >= 0 && c < len(line) {
+		if c := x + i; c >= 0 && c < frame {
 			line[c], isName[c] = r, true
 		}
 	}

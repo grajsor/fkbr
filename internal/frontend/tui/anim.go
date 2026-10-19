@@ -8,7 +8,8 @@ import (
 )
 
 // The name in the header slides out to the left every animEvery and back
-// in from the right two seconds later, so a glance shows the TUI is alive.
+// in from the right two seconds later, within its own " fkbr " frame, so a
+// glance shows the TUI is alive.
 // It needs no goroutine of its own: one timer message between runs, and
 // about 30 header redraws a second during the two seconds of motion.
 
@@ -58,8 +59,9 @@ func (m *model) animate() tea.Cmd {
 	return animTick(animFrame)
 }
 
-// nameX is the column of a name of n cells at elapsed time into phase, on
-// a line of width cells where it normally sits at home.
+// nameX is the column of a name of n cells at elapsed time into phase, in
+// a frame of width cells where it normally sits at home; columns outside
+// the frame are clipped by the caller.
 func nameX(phase animPhase, elapsed time.Duration, home, width, n int) int {
 	switch phase {
 	case animOut:
