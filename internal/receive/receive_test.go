@@ -1,0 +1,207 @@
+package receive
+
+import (
+	"bytes"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"fkbr/internal/api"
+	"fkbr/internal/bundle"
+	"fkbr/internal/config"
+	"fkbr/internal/localfs"
+)
+
+type memSink struct {
+	chunks [][]byte
+	metas  []bundle.ChunkMeta
+	cur    *bytes.Buffer
+}
+
+type nopCloser struct{ *bytes.Buffer }
+
+func (nopCloser) Close() error { return nil }
+
+func (s *memSink) Create(int) (io.WriteCloser, error) {
+	s.cur = &bytes.Buffer{}
+	return nopCloser{s.cur}, nil
+}
+func (s *memSink) Commit(m bundle.ChunkMeta) error {
+	s.chunks, s.metas = append(s.chunks, s.cur.Bytes()), append(s.metas, m)
+	return nil
+}
+
+// bundleTree bundles everything under src (a localfs root) with paths
+// prefixed by the base name of rel, as the engine's sender does.
+func bundleTree(t *testing.T, src *localfs.Local, rel string, chunk int64) *memSink {
+	t.Helper()
+	s := &memSink{}
+	w := bundle.NewWriter(s, chunk, true)
+	err := src.Walk("src", rel, func(p string, e api.Entry, err error) error {
+		if err != nil {
+			return err
+		}
+		name := filepath.Join(filepath.Base(rel), strings.TrimPrefix(strings.TrimPrefix(p, rel), "/"))
+		return w.Add(bundle.Item{Name: name, Entry: e, Open: func() (bundle.File, error) { return src.Open("src", p) }})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func apply(t *testing.T, r *Receiver, s *memSink, from int) {
+	t.Helper()
+	for i := from; i < len(s.chunks); i++ {
+		if err := bundle.Read(bytes.NewReader(s.chunks[i]), s.metas[i].Compressed, r.Apply); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func setup(t *testing.T) (srcDir, dstDir string, src *localfs.Local, dst *os.Root) {
+	t.Helper()
+	base := t.TempDir()
+	srcDir, dstDir = filepath.Join(base, "src"), filepath.Join(base, "dst")
+	mk := func(p string, data string, mode os.FileMode) {
+		full := filepath.Join(srcDir, p)
+		os.MkdirAll(filepath.Dir(full), 0o755)
+		if err := os.WriteFile(full, []byte(data), mode); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("tree/a.txt", "alpha", 0o640)
+	mk("tree/sub/big.bin", strings.Repeat("x", 300<<10), 0o600)
+	mk("tree/sub/run.sh", "#!/bin/sh\n", 0o4755)
+	os.Symlink("../a.txt", filepath.Join(srcDir, "tree/sub/link"))
+	os.Chmod(filepath.Join(srcDir, "tree/sub"), 0o750)
+	old := time.Unix(1600000000, 5)
+	os.Chtimes(filepath.Join(srcDir, "tree/a.txt"), old, old)
+	os.Chtimes(filepath.Join(srcDir, "tree/sub"), old, old)
+	os.Mkdir(dstDir, 0o755)
+	var err error
+	if src, err = localfs.Open([]config.Root{{ID: "src", Path: srcDir}}); err != nil {
+		t.Fatal(err)
+	}
+	if dst, err = os.OpenRoot(dstDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { src.Close(); dst.Close() })
+	return
+}
+
+func TestRoundTripMetadata(t *testing.T) {
+	srcDir, dstDir, src, dst := setup(t)
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, err := New(dst, "job1", "in/here", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Files != 3 || res.Symlinks != 1 || res.Dirs != 2 || res.Errors != 0 {
+		t.Fatalf("result: %+v", res)
+	}
+	got := filepath.Join(dstDir, "in/here/tree")
+	b, _ := os.ReadFile(filepath.Join(got, "sub/big.bin"))
+	if len(b) != 300<<10 {
+		t.Fatalf("big.bin: %d bytes", len(b))
+	}
+	fi, _ := os.Stat(filepath.Join(got, "a.txt"))
+	sfi, _ := os.Stat(filepath.Join(srcDir, "tree/a.txt"))
+	if fi.Mode().Perm() != 0o640 || !fi.ModTime().Equal(sfi.ModTime()) {
+		t.Errorf("a.txt: mode %v mtime %v want %v", fi.Mode(), fi.ModTime(), sfi.ModTime())
+	}
+	fi, _ = os.Stat(filepath.Join(got, "sub"))
+	if fi.Mode().Perm() != 0o750 || fi.ModTime().Unix() != 1600000000 {
+		t.Errorf("sub dir: mode %v mtime %v", fi.Mode(), fi.ModTime())
+	}
+	fi, _ = os.Stat(filepath.Join(got, "sub/run.sh"))
+	if fi.Mode()&fs.ModeSetuid != 0 || fi.Mode().Perm() != 0o755 {
+		t.Errorf("setuid must be stripped by default: %v", fi.Mode())
+	}
+	if l, _ := os.Readlink(filepath.Join(got, "sub/link")); l != "../a.txt" {
+		t.Errorf("link -> %q", l)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, StagingDir)); !os.IsNotExist(err) {
+		t.Errorf("staging not cleaned up: %v", err)
+	}
+}
+
+func TestConflictPolicies(t *testing.T) {
+	_, dstDir, src, dst := setup(t)
+	target := filepath.Join(dstDir, "tree/a.txt")
+	os.MkdirAll(filepath.Dir(target), 0o755)
+	cases := []struct {
+		policy  api.ConflictPolicy
+		destAge time.Time
+		want    string
+	}{
+		{api.ConflictSkip, time.Unix(1, 0), "existing"},
+		{api.ConflictOverwriteOlder, time.Unix(1, 0), "alpha"},             // dest older -> replaced
+		{api.ConflictOverwriteOlder, time.Unix(2000000000, 0), "existing"}, // dest newer -> kept
+		{api.ConflictOverwrite, time.Unix(2000000000, 0), "alpha"},
+	}
+	for i, c := range cases {
+		os.WriteFile(target, []byte("existing"), 0o644)
+		os.Chtimes(target, c.destAge, c.destAge)
+		s := bundleTree(t, src, "tree", 1<<20)
+		r, err := New(dst, "job"+string(rune('a'+i)), ".", Options{Conflict: c.policy})
+		if err != nil {
+			t.Fatal(err)
+		}
+		apply(t, r, s, 0)
+		if _, err := r.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(target); string(b) != c.want {
+			t.Errorf("%s (dest mtime %d): got %q want %q", c.policy, c.destAge.Unix(), b, c.want)
+		}
+	}
+}
+
+func TestResumeAndBad(t *testing.T) {
+	_, dstDir, src, dst := setup(t)
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, _ := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	apply(t, r, s, 0)
+	// Crash before commit: a new receiver re-applies the last chunks.
+	r2, err := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r2.MarkBad([]string{"tree/sub/big.bin"}); err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r2, s, len(s.chunks)-2)
+	res, err := r2.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "tree/sub/big.bin")); !os.IsNotExist(err) {
+		t.Error("bad file must not be installed")
+	}
+	if res.Files != 2 {
+		t.Errorf("files = %d", res.Files)
+	}
+}
+
+func TestRejectsStagingAsDest(t *testing.T) {
+	_, _, _, dst := setup(t)
+	if _, err := New(dst, "j", StagingDir+"/x", Options{Conflict: api.ConflictSkip}); err == nil {
+		t.Fatal("expected error")
+	}
+	if _, err := New(dst, "j", "../up", Options{Conflict: api.ConflictSkip}); err == nil {
+		t.Fatal("expected error")
+	}
+}

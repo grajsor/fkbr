@@ -1,0 +1,171 @@
+package engine
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
+	"testing"
+	"time"
+
+	"fkbr/internal/api"
+	"fkbr/internal/config"
+	"fkbr/internal/localfs"
+	"fkbr/internal/transport/nfsmailbox"
+)
+
+// nodeCfg makes a config with its own local root and state dir on a shared
+// "NFS" temp dir.
+func nodeCfg(t *testing.T, share, id string) *config.Config {
+	t.Helper()
+	base := t.TempDir()
+	rootDir := filepath.Join(base, "data")
+	if err := os.Mkdir(rootDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return &config.Config{
+		NodeID:            id,
+		NFSRoot:           share,
+		StateDir:          filepath.Join(base, "state"),
+		Roots:             []config.Root{{ID: "data", Path: rootDir, AllowWrite: true}},
+		Poll:              config.Poll{Active: 5 * time.Millisecond, Idle: 5 * time.Millisecond, IdleAfter: time.Second},
+		HeartbeatInterval: 20 * time.Millisecond,
+		OfflineAfter:      time.Second,
+		RequestTimeout:    2 * time.Second,
+		KeepDone:          time.Hour,
+		ForgetAfter:       -1,
+		Transfer: config.Transfer{
+			ChunkSize:    64 << 10,
+			StagingQuota: 1 << 20,
+			JobQuota:     256 << 10,
+			MaxJobs:      2,
+			DetachAfter:  time.Minute,
+		},
+		Sync: config.Sync{MaxDeletes: 1000},
+	}
+}
+
+// build creates an engine for cfg; several engines may share one cfg to
+// simulate restarts.
+func build(t *testing.T, cfg *config.Config) *Engine {
+	t.Helper()
+	fsys, err := localfs.Open(cfg.Roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Refresh on: exercises the NFS-compensation paths everywhere (on a
+	// local filesystem they change nothing observable).
+	mb, err := nfsmailbox.Open(cfg.NFSRoot, cfg.NodeID, nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter, Refresh: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := New(cfg, fsys, mb, mb, Options{Version: "test"})
+	t.Cleanup(func() { e.Close() })
+	return e
+}
+
+func node(t *testing.T, share, id string) (*Engine, string) {
+	t.Helper()
+	cfg := nodeCfg(t, share, id)
+	return build(t, cfg), cfg.Roots[0].Path
+}
+
+func runWorker(t *testing.T, e *Engine) (stop func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- e.Run(ctx) }()
+	var once sync.Once
+	stop = func() {
+		once.Do(func() {
+			cancel()
+			if err := <-done; err != nil {
+				t.Errorf("worker %s: %v", e.Self(), err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	// Wait until the node is registered and heartbeating.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ns, _ := e.Nodes(context.Background())
+		for _, n := range ns {
+			if n.ID == e.Self() && n.Online {
+				return stop
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("worker %s never came online", e.Self())
+	return nil
+}
+
+func TestRemoteListAcrossNodes(t *testing.T) {
+	share := t.TempDir()
+	master, _ := node(t, share, "master")
+	slave, slaveRoot := node(t, share, "slave1")
+	const n = 4500 // spans several reply parts
+	for i := range n {
+		if err := os.WriteFile(filepath.Join(slaveRoot, fmt.Sprintf("f%05d", i)), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runWorker(t, slave)
+
+	ctx := context.Background()
+	res, err := master.List(ctx, api.ListRequest{Node: "slave1", Root: "data", Limit: 5000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Total != n || len(res.Entries) != n || res.Node != "slave1" {
+		t.Fatalf("total=%d entries=%d node=%s", res.Total, len(res.Entries), res.Node)
+	}
+	if res.Entries[0].Name != "f00000" || res.Entries[n-1].Name != fmt.Sprintf("f%05d", n-1) {
+		t.Fatalf("order: first=%s last=%s", res.Entries[0].Name, res.Entries[n-1].Name)
+	}
+
+	page, err := master.List(ctx, api.ListRequest{Node: "slave1", Root: "data", Offset: 4490, Limit: 100})
+	if err != nil || len(page.Entries) != 10 || page.Offset != 4490 {
+		t.Fatalf("paging: %+v, %v", page, err)
+	}
+
+	// Errors on the executing node come back to the requester.
+	if _, err := master.List(ctx, api.ListRequest{Node: "slave1", Root: "nope"}); err == nil {
+		t.Fatal("expected error for unknown remote root")
+	}
+	if _, err := master.List(ctx, api.ListRequest{Node: "slave1", Root: "data", Path: "../x"}); err == nil {
+		t.Fatal("expected error for escaping path")
+	}
+}
+
+func TestListOfflineAndUnknown(t *testing.T) {
+	share := t.TempDir()
+	master, _ := node(t, share, "master")
+	slave, _ := node(t, share, "slave1")
+	runWorker(t, slave)
+	ctx := context.Background()
+	if _, err := master.List(ctx, api.ListRequest{Node: "ghost", Root: "data"}); !errors.Is(err, api.ErrUnknownNode) {
+		t.Fatalf("want ErrUnknownNode, got %v", err)
+	}
+	old := time.Now().Add(-time.Hour)
+	// Registered but stale heartbeat: fail fast instead of waiting for timeout.
+	node(t, share, "slave2")
+	os.MkdirAll(filepath.Join(share, "nodes", "slave2"), 0o755)
+	os.WriteFile(filepath.Join(share, "nodes", "slave2", "info.json"), []byte(`{"id":"slave2"}`), 0o644)
+	os.WriteFile(filepath.Join(share, "nodes", "slave2", "heartbeat"), nil, 0o644)
+	os.Chtimes(filepath.Join(share, "nodes", "slave2", "heartbeat"), old, old)
+	if _, err := master.List(ctx, api.ListRequest{Node: "slave2", Root: "data"}); !errors.Is(err, api.ErrNodeOffline) {
+		t.Fatalf("want ErrNodeOffline, got %v", err)
+	}
+}
+
+func TestSingleWorkerPerNode(t *testing.T) {
+	share := t.TempDir()
+	a, _ := node(t, share, "a")
+	runWorker(t, a)
+	if err := a.Run(context.Background()); err == nil {
+		t.Fatal("second worker for the same node must be refused")
+	}
+}

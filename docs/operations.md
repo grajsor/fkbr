@@ -1,0 +1,227 @@
+# Operating fkbr
+
+fkbr installs nothing. There is no package, install script, service or
+system user. You copy one static binary to each host and run it:
+`fkbr-linux-amd64` on x86-64, `fkbr-linux-arm64` on ARM. The same file
+runs on any Linux with kernel 3.10 or newer, since it needs no glibc.
+Tested on CentOS 7, Rocky 8, 9 and 10, and Debian 12.
+
+## What fkbr leaves on a host
+
+| Where | What | Lifetime |
+|---|---|---|
+| wherever you copied it | the binary (any name) and optionally `fkbr.yaml` beside it | yours |
+| `/tmp/fkbr-<uid>-<node>/` | worker lock and API socket | removed on clean exit |
+| `<root>/.fkbr-tmp/` in a destination root | staging for a transfer in progress | removed when the transfer ends |
+| the share directory you pass | node registry; finished job records, sync plans and failed requests | records pruned after `keep_done` (1h), see below |
+
+Nothing is written to `/etc`, `/var` or your home directory, and fkbr never
+reads configuration from them.
+
+The runtime dir is deliberately not `/run/user/<uid>`: logind deletes that
+when your last session logs out, while a node may keep running in `tmux`
+or under `nohup`. In `/tmp`, the node touches its lock and socket every 10
+minutes, so `systemd-tmpfiles` (which ages out `/tmp` after 10 days on
+many distributions) leaves them alone. If they are removed anyway, it recreates them
+within 30 s. If another process has meanwhile taken the lock, the worker
+stops rather than run twice.
+
+### Cleanup of the share
+
+There is no cron job or service. Cleaning up is done by fkbr itself, and
+only while it runs:
+
+- Requests are deleted as soon as they have been handled. Staged data is
+  deleted as soon as every target has it.
+- A running node (TUI or daemon) removes finished job records, sync plans
+  and snapshots, and failed requests once they are older than `keep_done`
+  (default 1h; `-keep` or `keep_done:` changes it). It does this when it
+  starts and then every half `keep_done`.
+- If no node runs, nothing is removed until one starts again. Use
+  `fkbr SHARE prune` to clean up right away; `prune -keep 0` removes
+  everything finished. Running jobs are never touched.
+- Quitting a TUI that ran the node itself removes the machine from the
+  share, unless an unfinished job still needs it or a daemon had
+  registered the machine before (say, the daemon crashed and you started
+  the TUI meanwhile). A daemon stays registered when stopped, so `@all`
+  jobs record that it missed them and `catchup` can re-send later.
+- Machines offline for more than `forget_after` (default 7 days;
+  `forget_after: -1` turns it off) are removed by a running node. `forget`
+  removes one right away.
+
+## Starting a node
+
+You need a directory on the shared NFS mount that every host can write
+to, for example `mkdir /mnt/nfs/xfer`. Then, on each host, start fkbr in
+the directory you want to share:
+
+```
+cd /srv/data
+fkbr /mnt/nfs/xfer
+```
+
+- **Name:** the node is named after the short hostname. Use `-node NAME`
+  when two hosts share a hostname, or to run several nodes on one host.
+  fkbr refuses to start if another host is online under the same name.
+- **Root:** the node shares the current directory and everything below it,
+  writable. `-ro` makes it read-only. `-root id=/path[:ro]` (repeatable)
+  shares explicit directories instead. fkbr refuses to share `/` by
+  default, or a directory inside the share.
+- **Peers:** paths look like `hostb:/sub/dir`. With several roots on a
+  node, name the root: `hostb:logs/app.log`.
+- **Groups:** `@all` targets every other node. `-roles a,b` adds tags for
+  your own groups (`@a`) and for `accept_writes_from`. Neither is needed
+  otherwise; every node is equal.
+- **Flags:** they can come before or after the share
+  (`fkbr /mnt/nfs/xfer -ro`). The share can also come from `-share` or
+  `$FKBR_SHARE`.
+- **Runtime dir:** `-state DIR` overrides where the lock and socket go.
+
+**The TUI is the node.** While a TUI runs, it does all of this node's work:
+- heartbeats
+- answers browse requests from peers
+- executes its side of transfers
+- serves the local socket, so CLI commands from another shell work
+
+If you quit while this node takes part in running jobs, the TUI asks
+first. Those jobs pause and resume from the share when fkbr runs here
+again; nothing is lost. Quitting also takes the machine off the share,
+unless such a job needs it, so `@all` stops counting it (see Cleanup). Use
+a daemon for a machine that should stay a member while nobody is logged
+in.
+
+**Headless:** `fkbr /mnt/nfs/xfer daemon` does the same without a UI, in
+the foreground. To keep it running after you log out, use `nohup` or a
+`tmux` or `screen` session; no service is needed. A TUI started while a
+daemon runs attaches to that daemon instead of starting a second worker.
+
+**Config file (optional).** The same settings can live in a YAML file:
+`-config FILE`, `$FKBR_CONFIG`, or `fkbr.yaml` next to the binary. See
+`examples/config.yaml` for every option, including tuning. Arguments and
+flags override the file.
+
+Check a host before relying on it:
+
+```
+cd /srv/data && fkbr /mnt/nfs/xfer check
+```
+
+This validates:
+- the shared directory
+- that the runtime dir is on local disk
+- the share's filesystem type and NFS mount options
+- atomic rename on the share
+- the protocol version
+- clock skew against the NFS server
+- node-name collisions with other hosts
+- privileges
+- whether a running node is reachable
+
+### NFS mount options
+
+The Linux NFS client caches directory attributes for 30 s by default
+(`acdirmin`), which delays how quickly nodes notice each other's requests.
+Mount the share on every host with short caching:
+
+```
+nfs-server:/export/transfer  /mnt/transfer  nfs  rw,hard,actimeo=1,lookupcache=positive  0 0
+```
+
+`check` warns about `soft` mounts, long `acdirmin` and a missing
+`lookupcache=positive`.
+
+## Commands
+
+All of these attach to the running node (TUI or daemon) through its socket.
+With no node running they work in-process, which can browse and submit but
+not execute jobs: jobs run where a node's worker runs. `-local` forces
+in-process mode.
+
+| Command | |
+|---|---|
+| `nodes` | registered nodes, online state, roots, chown level, write policy |
+| `forget NODE...` | remove offline nodes from the share (they re-register if started again) |
+| `ls [node:]/path` | list a directory on any node |
+| `cp [node:]/path... node\|n1,n2\|@all:/dir` | copy; `-conflict`, `-z`, `-detach` |
+| `sync [-mirror] [-n] SRC DST` | make DST match SRC (see below) |
+| `jobs`, `job [-f] ID`, `cancel ID`, `catchup ID` | follow and control jobs |
+| `events` | live change stream as JSON lines |
+| `check` | validate the host (see above) |
+
+The API is HTTP+JSON on the socket (see `internal/api/remote/server.go`),
+for example `curl --unix-socket /tmp/fkbr-$(id -u)-$(hostname -s)/fkbr.sock http://fkbr/v1/jobs`.
+
+## Privileges
+
+fkbr runs as whatever user starts it. What it can preserve on received
+data depends on that user:
+
+| Running as | Effect on received data |
+|---|---|
+| ordinary user | content, modes and mtimes; everything owned by that user; setuid/setgid kept only with `allow_setid` |
+| root | also UID/GID of files and directories, and setuid/setgid with `allow_setid` |
+
+Without root, the binary itself can carry Linux file capabilities
+(`setcap cap_chown,cap_fowner,cap_dac_override+ep ./fkbr`). That marks the
+file, so it is visible to anyone who inspects it. With only CAP_CHOWN,
+files keep their owners but directories stay with the running user: once a
+directory belongs to its original owner, a non-root process could no longer
+write into it.
+
+`nodes` shows each node's level in the CHOWN column (`no`, `files`, `full`).
+Job summaries report entries whose ownership or setuid bits could not be
+applied.
+
+## TUI
+
+Each pane starts at the node list. Enter opens a node's shared directory,
+Backspace goes back up and F2 jumps to the node list, so either pane can
+show any node. Nodes with several roots show a roots level in between. F1 lists all
+keys.
+
+| Key | Action |
+|---|---|
+| Insert / Space, `+` `-` `*` | select; select all, none, invert |
+| F3 | view a file (first 64 KiB; binary files as hex) |
+| F4 | sync: make the other pane's directory match this one (plan shown first) |
+| F5 / F6 | copy / move the selection. The destination defaults to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`) |
+| F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
+| F9 | jobs panel: Enter for details, `c` cancel, `u` catch up |
+| F10 | quit |
+
+The colours fill the screen in green, like Norton Commander's blue. On
+terminals with fewer colours they fall back to 256 or 16 colours.
+`NO_COLOR=1` turns them off; the cursor then shows in reverse video.
+
+Move deletes the source only after the copy finished with no errors, no
+skipped entries and no detached targets. Otherwise the source is kept and
+the status line says why. Panes showing a job's destination refresh when
+the job finishes.
+
+## Sync
+
+`fkbr sync [-mirror] [-checksum] [-n] SRC DST` scans both sides, prints the
+plan and applies it. Only differences are transferred.
+
+- `-n` stops after the plan and prints its ID; `fkbr sync -plan ID` applies
+  that plan later.
+- `-mirror` also deletes extra entries on the targets. If any target would
+  lose more than `sync.max_deletes` entries (default 1000), the apply is
+  refused unless you pass `-force`. `-max-deletes N` changes the limit for
+  one run.
+- DST may name several nodes, `@all` or `@role`. Each entry is sent once for all
+  the targets that need it.
+- In the TUI, F4 always shows the plan for confirmation first.
+
+Measured performance is in `benchmarks.md`.
+
+## Day-to-day
+
+- Ctrl-C on `cp` or `sync` only detaches the terminal; the job keeps
+  running in the nodes.
+- `cancel ID` stops a job everywhere and cleans up staging.
+- `catchup ID` re-sends a partial fan-out job to targets that were
+  detached.
+- Restarting a node is safe: its jobs resume from the state on the share.
+- To remove fkbr, stop it and delete the binary and its directory on the
+  share.

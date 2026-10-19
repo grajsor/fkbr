@@ -1,0 +1,509 @@
+package engine
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"fkbr/internal/api"
+	"fkbr/internal/id"
+	"fkbr/internal/inventory"
+	"fkbr/internal/localfs"
+	"fkbr/internal/receive"
+	"fkbr/internal/transport"
+)
+
+const (
+	// scanIdleFactor: a remote scan fails if no progress arrives for this
+	// many request timeouts (progress is sent every scanProgressInterval).
+	scanIdleFactor       = 4
+	scanProgressInterval = 2 * time.Second
+	removeBatch          = 1000
+)
+
+type scanRequest struct {
+	PlanID   string `json:"plan_id"`
+	Root     string `json:"root"`
+	Path     string `json:"path"`
+	Checksum bool   `json:"checksum"`
+}
+
+func snapshotBlob(planID, node string) string { return "scans/" + planID + "/" + node + ".snap" }
+func planBlob(planID string) string           { return "plans/" + planID + "/plan.json" }
+
+// scanLocal snapshots root/path into the share.
+func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(inventory.ScanStats)) (*inventory.ScanStats, error) {
+	w, err := e.st.CreateBlob(ctx, snapshotBlob(req.PlanID, e.Self()))
+	if err != nil {
+		return nil, err
+	}
+	defer w.Abort()
+	h := inventory.Header{Node: e.Self(), Root: req.Root, Path: req.Path}
+	st, err := inventory.Scan(e.fs, req.Root, req.Path, h, inventory.ScanOptions{
+		Checksum: req.Checksum, Exclude: receive.StagingDir,
+		Progress: progress, Interval: scanProgressInterval,
+	}, w)
+	if err != nil {
+		return nil, err
+	}
+	return st, w.Commit(nil)
+}
+
+// serveScan runs a peer's scan request, reporting progress as reply parts.
+func (e *Engine) serveScan(ctx context.Context, m *transport.Message) error {
+	var req scanRequest
+	if err := json.Unmarshal(m.Body, &req); err != nil {
+		return err
+	}
+	seq := 0
+	reply := func(st inventory.ScanStats, final bool) error {
+		b, _ := json.Marshal(st)
+		r := &transport.Reply{Seq: seq, Final: final, Body: b}
+		seq++
+		return e.tr.Reply(ctx, m, r)
+	}
+	st, err := e.scanLocal(ctx, req, func(st inventory.ScanStats) { reply(st, false) })
+	if err != nil {
+		return err
+	}
+	return reply(*st, true)
+}
+
+// scan snapshots a directory on any node, broadcasting progress events.
+func (e *Engine) scan(ctx context.Context, node string, req scanRequest) (*inventory.ScanStats, error) {
+	report := func(st inventory.ScanStats, done bool) {
+		e.broadcast(api.Event{Type: api.EventScan, Time: time.Now().UTC(), Scan: &api.ScanProgress{
+			PlanID: req.PlanID, Node: node, Entries: st.Entries, Bytes: st.Bytes, Done: done}})
+	}
+	if node == e.Self() {
+		st, err := e.scanLocal(ctx, req, func(st inventory.ScanStats) { report(st, false) })
+		if err == nil {
+			report(*st, true)
+		}
+		return st, err
+	}
+	msg, err := e.newMessage(node, transport.TypeScan, req)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	idle := e.cfg.RequestTimeout * scanIdleFactor
+	var stalled atomic.Bool
+	timer := time.AfterFunc(idle, func() { stalled.Store(true); cancel() })
+	defer timer.Stop()
+	if err := e.tr.Send(ctx, msg); err != nil {
+		return nil, err
+	}
+	var final inventory.ScanStats
+	err = e.tr.AwaitReplies(ctx, msg.ID, func(r *transport.Reply) error {
+		timer.Reset(idle)
+		var st inventory.ScanStats
+		if err := json.Unmarshal(r.Body, &st); err != nil {
+			return err
+		}
+		report(st, r.Final)
+		final = st
+		return nil
+	})
+	if stalled.Load() {
+		return nil, fmt.Errorf("scan on %s: no progress for %s (is its worker running?)", node, idle)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &final, nil
+}
+
+// PlanSync scans source and targets and compares them.
+func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPlan, error) {
+	if req.SrcNode == "" {
+		req.SrcNode = e.Self()
+	}
+	if req.Mode == "" {
+		req.Mode = api.SyncIncremental
+	}
+	if req.Mode != api.SyncIncremental && req.Mode != api.SyncMirror {
+		return nil, fmt.Errorf("invalid sync mode %q", req.Mode)
+	}
+	var err error
+	if req.SrcPath, err = localfs.CleanRel(req.SrcPath); err != nil {
+		return nil, err
+	}
+	if req.DstPath, err = localfs.CleanRel(req.DstPath); err != nil {
+		return nil, err
+	}
+	nodes, err := e.tr.Nodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]api.Node{}
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	src, err := onlineNode(byID, req.SrcNode)
+	if err != nil {
+		return nil, err
+	}
+	if _, ok := findRoot(src, req.SrcRoot); !ok {
+		return nil, fmt.Errorf("%w: %s:%s", api.ErrUnknownRoot, req.SrcNode, req.SrcRoot)
+	}
+	targets, offline, err := expandTargets(byID, req.DstNodes, req.SrcNode)
+	if err != nil {
+		return nil, err
+	}
+	if err := e.checkTargets(byID, targets, req.DstRoot); err != nil {
+		return nil, err
+	}
+	for _, t := range targets {
+		if t == req.SrcNode && req.DstRoot == req.SrcRoot && overlaps(req.SrcPath, req.DstPath) {
+			return nil, fmt.Errorf("%w: source and destination overlap on %s:%s", api.ErrBadPath, t, req.SrcRoot)
+		}
+	}
+	maxDel := req.MaxDeletes
+	if maxDel == 0 {
+		maxDel = e.cfg.Sync.MaxDeletes
+	}
+
+	plan := &api.SyncPlan{
+		ID: id.New(), Created: time.Now().UTC(), Initiator: e.Self(), Request: req,
+		MaxDeletes: maxDel, Skipped: offline,
+	}
+	// Scan everything in parallel.
+	nodesToScan := append([]string{req.SrcNode}, targets...)
+	stats := make([]*inventory.ScanStats, len(nodesToScan))
+	errs := make([]error, len(nodesToScan))
+	var wg sync.WaitGroup
+	for i, n := range nodesToScan {
+		root, path := req.DstRoot, req.DstPath
+		if i == 0 {
+			root, path = req.SrcRoot, req.SrcPath
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			stats[i], errs[i] = e.scan(ctx, n, scanRequest{PlanID: plan.ID, Root: root, Path: path, Checksum: req.Checksum})
+		}()
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return nil, fmt.Errorf("scan on %s: %w", nodesToScan[i], err)
+		}
+	}
+	if stats[0].Missing {
+		return nil, fmt.Errorf("%w: source %s:%s/%s does not exist", api.ErrBadPath, req.SrcNode, req.SrcRoot, req.SrcPath)
+	}
+
+	open := func(node string) (*inventory.Reader, io.Closer, error) {
+		rc, err := e.st.OpenBlob(ctx, snapshotBlob(plan.ID, node))
+		if err != nil {
+			return nil, nil, err
+		}
+		r, err := inventory.NewReader(bufio.NewReaderSize(rc, 256<<10))
+		if err != nil {
+			rc.Close()
+			return nil, nil, err
+		}
+		return r, rc, nil
+	}
+	srcRd, c, err := open(req.SrcNode)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	defer srcRd.Close()
+	var its []inventory.Target
+	for _, t := range targets {
+		r, c, err := open(t)
+		if err != nil {
+			return nil, err
+		}
+		defer c.Close()
+		defer r.Close()
+		n := byID[t]
+		its = append(its, inventory.Target{Node: t, Snap: r, Chown: n.ChownCapable, ChownDirs: n.ChownCapable && n.DACOverride})
+	}
+	sink := &planSink{e: e, ctx: ctx, plan: plan, targets: targets, groups: map[uint64]*listWriter{}, deletes: map[int]*listWriter{}}
+	ps, err := inventory.Plan(srcRd, its, inventory.PlanOptions{Mirror: req.Mode == api.SyncMirror, Checksum: req.Checksum}, sink)
+	if err != nil {
+		sink.abort()
+		return nil, err
+	}
+	if err := sink.commit(); err != nil {
+		return nil, err
+	}
+	plan.SrcEntries, plan.SrcBytes, plan.Problems = ps.SrcEntries, ps.SrcBytes, ps.Problems
+	for i, t := range targets {
+		ts := ps.Targets[i]
+		plan.Targets = append(plan.Targets, api.SyncTarget{
+			Node: t, Copy: ts.Copy, CopyBytes: ts.CopyBytes, Replace: ts.Replace,
+			Delete: ts.Delete, Unchanged: ts.Unchanged,
+			OverLimit: maxDel >= 0 && ts.Delete+ts.Replace > int64(maxDel),
+		})
+	}
+	return plan, e.savePlan(ctx, plan)
+}
+
+// checkTargets validates destination root and write policy for targets.
+func (e *Engine) checkTargets(byID map[string]api.Node, targets []string, root string) error {
+	initiator := e.info
+	if n, ok := byID[e.Self()]; ok {
+		initiator = n.NodeInfo
+	}
+	for _, d := range targets {
+		n := byID[d]
+		r, ok := findRoot(n, root)
+		if !ok {
+			return fmt.Errorf("%w: %s:%s", api.ErrUnknownRoot, d, root)
+		}
+		if !r.Writable {
+			return fmt.Errorf("%w: %s:%s", api.ErrReadOnly, d, root)
+		}
+		if !n.AcceptsWritesFrom(&initiator) {
+			return fmt.Errorf("%w: %s only accepts writes from %v", api.ErrNotAllowed, d, n.AcceptWritesFrom)
+		}
+	}
+	return nil
+}
+
+func overlaps(a, b string) bool {
+	return a == b || a == "." || b == "." || strings.HasPrefix(a, b+"/") || strings.HasPrefix(b, a+"/")
+}
+
+func (e *Engine) savePlan(ctx context.Context, plan *api.SyncPlan) error {
+	w, err := e.st.CreateBlob(ctx, planBlob(plan.ID))
+	if err != nil {
+		return err
+	}
+	defer w.Abort()
+	if err := json.NewEncoder(w).Encode(plan); err != nil {
+		return err
+	}
+	return w.Commit(nil)
+}
+
+func (e *Engine) SyncPlan(ctx context.Context, planID string) (*api.SyncPlan, error) {
+	rc, err := e.st.OpenBlob(ctx, planBlob(planID))
+	if err != nil {
+		return nil, fmt.Errorf("%w: sync plan %s", api.ErrUnknownJob, planID)
+	}
+	defer rc.Close()
+	var p api.SyncPlan
+	return &p, json.NewDecoder(rc).Decode(&p)
+}
+
+// ApplySync deletes first (mirror removals and type changes), then submits
+// one transfer per group of targets needing the same entries.
+func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api.SyncPlan, error) {
+	plan, err := e.SyncPlan(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	if plan.Applied {
+		return nil, fmt.Errorf("sync plan %s was already applied", planID)
+	}
+	if !force {
+		for _, t := range plan.Targets {
+			if t.OverLimit {
+				return nil, fmt.Errorf("%w: plan removes %d entries on %s, more than the limit of %d; apply with force to proceed",
+					api.ErrNotAllowed, t.Delete+t.Replace, t.Node, plan.MaxDeletes)
+			}
+		}
+	}
+	req := plan.Request
+	plan.Applied = true // even partially: a plan is never applied twice
+	for _, t := range plan.Targets {
+		if t.Delete+t.Replace == 0 {
+			continue
+		}
+		errs := e.applyDeletes(ctx, plan.ID, t.Node, req.DstRoot)
+		plan.DeleteErrors = append(plan.DeleteErrors, errs...)
+	}
+	for _, g := range plan.Groups {
+		jid, err := e.Submit(ctx, api.TransferRequest{
+			SrcNode: req.SrcNode, SrcRoot: req.SrcRoot,
+			PathsBlob: g.Blob, PathsCount: g.Entries, BaseDir: req.SrcPath, NoRecurse: true,
+			DstNodes: g.Targets, DstRoot: req.DstRoot, DstDir: req.DstPath,
+			Conflict: api.ConflictOverwrite, Compress: req.Compress, SyncPlan: plan.ID,
+		})
+		if err != nil {
+			plan.Problems = append(plan.Problems, fmt.Sprintf("transfer to %s: %v", strings.Join(g.Targets, ","), err))
+			continue
+		}
+		plan.Jobs = append(plan.Jobs, jid)
+	}
+	return plan, e.savePlan(ctx, plan)
+}
+
+func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string) []string {
+	var errs []string
+	fail := func(err error) []string { return append(errs, fmt.Sprintf("%s: %v", node, err)) }
+	rc, err := e.st.OpenBlob(ctx, "plans/"+planID+"/delete-"+node)
+	if err != nil {
+		return fail(err)
+	}
+	defer rc.Close()
+	var batch []string
+	flush := func() {
+		if len(batch) == 0 {
+			return
+		}
+		res, err := e.Remove(ctx, api.RemoveRequest{Node: node, Root: root, Paths: batch})
+		if err != nil {
+			errs = fail(err)
+		} else {
+			for _, m := range res.Errors {
+				if len(errs) < 100 {
+					errs = append(errs, node+": "+m)
+				}
+			}
+		}
+		batch = batch[:0]
+	}
+	err = readPathList(rc, func(p string) error {
+		batch = append(batch, p)
+		if len(batch) == removeBatch {
+			flush()
+		}
+		return nil
+	})
+	flush()
+	if err != nil {
+		errs = fail(err)
+	}
+	return errs
+}
+
+// Path lists hold one JSON-quoted path per line, so any file name survives.
+
+func readPathList(r io.Reader, fn func(string) error) error {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	for sc.Scan() {
+		p, err := strconv.Unquote(sc.Text())
+		if err != nil {
+			return fmt.Errorf("path list: %w", err)
+		}
+		if err := fn(p); err != nil {
+			return err
+		}
+	}
+	return sc.Err()
+}
+
+type listWriter struct {
+	w       transport.ChunkWriter
+	buf     *bufio.Writer
+	blob    string
+	mask    uint64
+	entries int64
+	bytes   int64
+}
+
+func (l *listWriter) add(p string) error {
+	l.entries++
+	_, err := l.buf.WriteString(strconv.Quote(p) + "\n")
+	return err
+}
+
+// planSink writes the plan's path lists to the share as they are found.
+type planSink struct {
+	e       *Engine
+	ctx     context.Context
+	plan    *api.SyncPlan
+	targets []string
+	groups  map[uint64]*listWriter
+	deletes map[int]*listWriter
+}
+
+func (s *planSink) open(name string) (*listWriter, error) {
+	blob := "plans/" + s.plan.ID + "/" + name
+	w, err := s.e.st.CreateBlob(s.ctx, blob)
+	if err != nil {
+		return nil, err
+	}
+	return &listWriter{w: w, buf: bufio.NewWriterSize(w, 64<<10), blob: blob}, nil
+}
+
+func (s *planSink) Copy(mask uint64, ent *inventory.Entry) error {
+	g := s.groups[mask]
+	if g == nil {
+		var err error
+		if g, err = s.open(fmt.Sprintf("copy-%x", mask)); err != nil {
+			return err
+		}
+		g.mask = mask
+		s.groups[mask] = g
+	}
+	g.bytes += ent.S
+	return g.add(inventory.Join(s.plan.Request.SrcPath, ent.P))
+}
+
+func (s *planSink) Delete(i int, p string) error {
+	d := s.deletes[i]
+	if d == nil {
+		var err error
+		if d, err = s.open("delete-" + s.targets[i]); err != nil {
+			return err
+		}
+		s.deletes[i] = d
+	}
+	return d.add(inventory.Join(s.plan.Request.DstPath, p))
+}
+
+func (s *planSink) commit() error {
+	var errs []error
+	for _, l := range s.all() {
+		if err := l.buf.Flush(); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		errs = append(errs, l.w.Commit(nil))
+	}
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	masks := make([]uint64, 0, len(s.groups))
+	for m := range s.groups {
+		masks = append(masks, m)
+	}
+	slices.Sort(masks)
+	for _, m := range masks {
+		g := s.groups[m]
+		var ts []string
+		for i, t := range s.targets {
+			if m&(1<<uint(i)) != 0 {
+				ts = append(ts, t)
+			}
+		}
+		s.plan.Groups = append(s.plan.Groups, api.SyncGroup{Targets: ts, Entries: g.entries, Bytes: g.bytes, Blob: g.blob})
+	}
+	return nil
+}
+
+func (s *planSink) abort() {
+	for _, l := range s.all() {
+		l.w.Abort()
+	}
+}
+
+func (s *planSink) all() []*listWriter {
+	var out []*listWriter
+	for _, g := range s.groups {
+		out = append(out, g)
+	}
+	for _, d := range s.deletes {
+		out = append(out, d)
+	}
+	return out
+}

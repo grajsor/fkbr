@@ -1,0 +1,64 @@
+# Optional fkbr node configuration: everything here can also be given as
+# flags (-node, -share, -root, -roles, -state). fkbr reads it from -config,
+# $FKBR_CONFIG, or fkbr.yaml next to the binary; flags override it.
+
+# Local API socket for CLI/TUI (default <state_dir>/fkbr.sock, max 100
+# bytes) and its permissions (0660 lets the node user's group use it).
+# socket_mode: 0600
+
+# Unique per node; becomes a directory name on the share.
+node_id: hosta
+
+# The shared NFS directory. Must be the same export on every node.
+nfs_root: /mnt/transfer/fkbr
+
+# Local runtime dir (never NFS) for the worker lock and socket; removed on
+# clean exit. Default: /tmp/fkbr-<uid>-<node> (kept fresh while running, so
+# /tmp cleaners leave it alone; not /run/user, which logout deletes).
+# state_dir: /tmp/fkbr-1000-hosta
+
+# Role tags, published to the registry. "@role" targets every node with the
+# role (fkbr cp data/x @slave:data), and accept_writes_from can name roles.
+roles: [master]
+
+# Who may initiate writes into this node: node IDs and/or @roles. Empty or
+# absent: anyone. A node may always pull into itself. On a slave e.g.:
+# accept_writes_from: ["@master"]
+
+# Local directories this node exposes. Default (no roots here, no -root):
+# the directory fkbr is started in, as root "files". Peers address files
+# as node:/path, or node:root-id/path when a node has several roots.
+roots:
+  - id: appdata
+    path: /opt/application/data
+    allow_write: true
+  - id: logs
+    path: /var/log/application
+    allow_write: false
+
+# Defaults shown.
+# poll:
+#   active: 200ms      # inbox/reply polling while busy
+#   idle: 1s           # ... after idle_after without traffic
+#   idle_after: 30s
+# heartbeat_interval: 5s
+# offline_after: 30s   # heartbeat age (NFS server clock) => node offline
+# request_timeout: 30s
+# keep_done: 1h        # how long finished jobs, sync plans and failed
+#                      # requests stay on the share (pruned by running nodes)
+# forget_after: 168h   # nodes offline this long are removed from the
+#                      # registry by running nodes (-1: never)
+
+# Sync (defaults shown).
+# sync:
+#   max_deletes: 1000      # per target; more needs an explicit force
+
+# Transfers (defaults shown). Staging is chunked and bounded because the
+# share's free space may be smaller than what you copy.
+# transfer:
+#   chunk_size: 128MiB     # approximate size of one staged chunk
+#   job_quota: 1GiB        # max bytes this node stages for one job
+#   staging_quota: 4GiB    # max bytes this node stages for all jobs
+#   max_jobs: 2            # concurrent sending jobs, and receiving jobs
+#   allow_setid: false     # keep setuid/setgid bits on received files
+#   detach_after: 10m      # fan-out: drop a target stalled this long

@@ -1,0 +1,433 @@
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strings"
+	"time"
+
+	"fkbr/internal/api"
+	"fkbr/internal/id"
+	"fkbr/internal/localfs"
+	"fkbr/internal/transport"
+)
+
+// Submit validates a transfer against the node registry, records the job on
+// the share and asks the source node's worker to start producing chunks.
+func (e *Engine) Submit(ctx context.Context, req api.TransferRequest) (string, error) {
+	return e.submit(ctx, req, "")
+}
+
+func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf string) (string, error) {
+	if req.SrcNode == "" {
+		req.SrcNode = e.Self()
+	}
+	if req.Conflict == "" {
+		req.Conflict = api.DefaultConflictPolicy
+	}
+	if !req.Conflict.Valid() {
+		return "", fmt.Errorf("invalid conflict policy %q", req.Conflict)
+	}
+	if len(req.Paths) == 0 && req.PathsBlob == "" {
+		return "", errors.New("no source paths")
+	}
+	if req.BaseDir != "" {
+		b, err := localfs.CleanRel(req.BaseDir)
+		if err != nil {
+			return "", err
+		}
+		req.BaseDir = b
+	}
+	for i, p := range req.Paths {
+		c, err := localfs.CleanRel(p)
+		if err != nil {
+			return "", err
+		}
+		req.Paths[i] = c
+	}
+	dst, err := localfs.CleanRel(req.DstDir)
+	if err != nil {
+		return "", err
+	}
+	req.DstDir = dst
+
+	nodes, err := e.tr.Nodes(ctx)
+	if err != nil {
+		return "", err
+	}
+	byID := map[string]api.Node{}
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+	src, err := onlineNode(byID, req.SrcNode)
+	if err != nil {
+		return "", err
+	}
+	if _, ok := findRoot(src, req.SrcRoot); !ok {
+		return "", fmt.Errorf("%w: %s:%s", api.ErrUnknownRoot, req.SrcNode, req.SrcRoot)
+	}
+	targets, offline, err := expandTargets(byID, req.DstNodes, req.SrcNode)
+	if err != nil {
+		return "", err
+	}
+	initiator := e.info
+	if n, ok := byID[e.Self()]; ok {
+		initiator = n.NodeInfo
+	}
+	for _, d := range append(append([]string(nil), targets...), offline...) {
+		n := byID[d]
+		r, ok := findRoot(n, req.DstRoot)
+		if !ok {
+			return "", fmt.Errorf("%w: %s:%s", api.ErrUnknownRoot, d, req.DstRoot)
+		}
+		if !r.Writable {
+			return "", fmt.Errorf("%w: %s:%s", api.ErrReadOnly, d, req.DstRoot)
+		}
+		if !n.AcceptsWritesFrom(&initiator) {
+			return "", fmt.Errorf("%w: %s only accepts writes from %v", api.ErrNotAllowed, d, n.AcceptWritesFrom)
+		}
+	}
+	req.DstNodes = append(targets, offline...)
+	slices.Sort(req.DstNodes)
+
+	now := time.Now().UTC()
+	job := &api.Job{ID: id.New(), Initiator: e.Self(), Created: now, Request: req, CatchUpOf: catchUpOf}
+	for _, d := range offline {
+		job.Detached = append(job.Detached, api.Detached{Node: d, Reason: "offline at submit", At: now})
+	}
+	if err := e.st.CreateJob(ctx, job); err != nil {
+		return "", err
+	}
+	msg, err := e.newMessage(req.SrcNode, transport.TypeSend, transport.JobRef{ID: job.ID})
+	if err != nil {
+		return "", err
+	}
+	msg.Notify = true
+	if err := e.tr.Send(ctx, msg); err != nil {
+		return "", err
+	}
+	return job.ID, nil
+}
+
+// expandTargets resolves destination entries. A node ID must be online.
+// "@all" means every other registered node, and "@role" every registered
+// node with that role, in both cases except the source;
+// members that are offline are returned separately so the job can record
+// them as detached. At least one target must be online.
+func expandTargets(byID map[string]api.Node, dsts []string, src string) (online, offline []string, err error) {
+	seen := map[string]bool{}
+	add := func(n api.Node) {
+		if seen[n.ID] {
+			return
+		}
+		seen[n.ID] = true
+		if n.Online {
+			online = append(online, n.ID)
+		} else {
+			offline = append(offline, n.ID)
+		}
+	}
+	for _, d := range dsts {
+		role, isGroup := strings.CutPrefix(d, "@")
+		if !isGroup {
+			n, err := onlineNode(byID, d)
+			if err != nil {
+				return nil, nil, err
+			}
+			add(n)
+			continue
+		}
+		var members []api.Node
+		for _, n := range byID {
+			if n.ID != src && (role == api.GroupAll || n.HasRole(role)) {
+				members = append(members, n)
+			}
+		}
+		if len(members) == 0 && role == api.GroupAll {
+			return nil, nil, fmt.Errorf("%w: no other nodes are registered on this share", api.ErrUnknownNode)
+		}
+		if len(members) == 0 {
+			return nil, nil, fmt.Errorf("%w: no nodes with role %q", api.ErrUnknownNode, role)
+		}
+		slices.SortFunc(members, func(a, b api.Node) int { return strings.Compare(a.ID, b.ID) })
+		for _, n := range members {
+			add(n)
+		}
+	}
+	if len(online) == 0 {
+		if len(offline) > 0 {
+			return nil, nil, fmt.Errorf("%w: all targets are offline (%s)", api.ErrNodeOffline, strings.Join(offline, ", "))
+		}
+		return nil, nil, errors.New("no destination node")
+	}
+	return online, offline, nil
+}
+
+// CatchUp re-sends a job to its detached targets that are online now.
+func (e *Engine) CatchUp(ctx context.Context, id string) (string, error) {
+	j, err := e.st.GetJob(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if len(j.Detached) == 0 {
+		return "", fmt.Errorf("job %s has no detached targets", id)
+	}
+	nodes, err := e.tr.Nodes(ctx)
+	if err != nil {
+		return "", err
+	}
+	online := map[string]bool{}
+	for _, n := range nodes {
+		online[n.ID] = n.Online
+	}
+	req := j.Request
+	req.DstNodes = nil
+	var down []string
+	for _, d := range j.Detached {
+		if online[d.Node] {
+			req.DstNodes = append(req.DstNodes, d.Node)
+		} else {
+			down = append(down, d.Node)
+		}
+	}
+	if len(req.DstNodes) == 0 {
+		return "", fmt.Errorf("%w: detached targets still offline: %s", api.ErrNodeOffline, strings.Join(down, ", "))
+	}
+	return e.submit(ctx, req, id)
+}
+
+func onlineNode(byID map[string]api.Node, id string) (api.Node, error) {
+	n, ok := byID[id]
+	if !ok {
+		return n, fmt.Errorf("%w: %q", api.ErrUnknownNode, id)
+	}
+	if !n.Online {
+		return n, fmt.Errorf("%w: %s (is its worker running?)", api.ErrNodeOffline, id)
+	}
+	return n, nil
+}
+
+func findRoot(n api.Node, id string) (api.Root, bool) {
+	for _, r := range n.Roots {
+		if r.ID == id {
+			return r, true
+		}
+	}
+	return api.Root{}, false
+}
+
+func (e *Engine) Job(ctx context.Context, id string) (*api.Job, error) {
+	j, err := e.st.GetJob(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	normalize(j)
+	return j, nil
+}
+
+func (e *Engine) Jobs(ctx context.Context) ([]api.Job, error) {
+	js, err := e.st.ListJobs(ctx)
+	for i := range js {
+		normalize(&js[i])
+	}
+	return js, err
+}
+
+func (e *Engine) Cancel(ctx context.Context, id string) error {
+	return e.st.RequestCancel(ctx, id)
+}
+
+// normalize derives the job state and shows detached targets as such even
+// if their last status is stale (e.g. the node died mid-transfer).
+func normalize(j *api.Job) {
+	j.State = deriveState(j)
+	for i := range j.Participants {
+		p := &j.Participants[i]
+		if p.Role == api.RoleTarget && j.IsDetached(p.Node) && !p.State.Terminal() {
+			p.State, p.Phase = api.JobDetached, ""
+		}
+	}
+}
+
+// deriveState combines participant statuses into the job's overall state.
+// Detached targets do not count, except that their presence turns a
+// completed job into a partial one. A failed target is only final once
+// the source has stopped: while it runs it may still detach the target and
+// carry on with the others.
+func deriveState(j *api.Job) api.JobState {
+	want := 1 + len(j.Request.DstNodes) - len(j.Detached)
+	done, counted, terminal := 0, 0, 0
+	srcState := api.JobState("")
+	targetFailed := false
+	for _, p := range j.Participants {
+		if p.Role == api.RoleTarget && j.IsDetached(p.Node) {
+			continue
+		}
+		counted++
+		if p.Role == api.RoleSource {
+			srcState = p.State
+		} else if p.State == api.JobFailed {
+			targetFailed = true
+		}
+		if p.State == api.JobDone {
+			done++
+		}
+		if p.State.Terminal() {
+			terminal++
+		}
+	}
+	switch {
+	case srcState == api.JobFailed, targetFailed && srcState.Terminal():
+		return api.JobFailed
+	case done == want && len(j.Detached) > 0:
+		return api.JobPartial
+	case done == want:
+		return api.JobDone
+	case j.Cancelled && terminal == counted:
+		return api.JobCancelled
+	case counted == 0:
+		return api.JobQueued
+	}
+	return api.JobRunning
+}
+
+// startJob runs a send or receive request in the background. The request
+// stays claimed (inbox cur/) until the job ends, so a crashed worker picks
+// it up again on restart and resumes from the state on the share.
+func (e *Engine) startJob(ctx context.Context, m *transport.Message) {
+	var ref transport.JobRef
+	if err := json.Unmarshal(m.Body, &ref); err != nil || ref.ID == "" {
+		e.log.Warn("bad job request", "req", m.ID, "err", err)
+		e.tr.Finish(ctx, m, true)
+		return
+	}
+	key := m.Type + "/" + ref.ID
+	e.jobsMu.Lock()
+	dup := e.running[key]
+	e.running[key] = true
+	e.jobsMu.Unlock()
+	if dup {
+		e.tr.Finish(ctx, m, false)
+		return
+	}
+	sem, run := e.sendSem, e.runSend
+	if m.Type == transport.TypeReceive {
+		sem, run = e.recvSem, e.runReceive
+	}
+	e.jobsWG.Add(1)
+	go func() {
+		defer e.jobsWG.Done()
+		defer func() {
+			e.jobsMu.Lock()
+			delete(e.running, key)
+			e.jobsMu.Unlock()
+		}()
+		select {
+		case sem <- struct{}{}:
+			defer func() { <-sem }()
+		case <-ctx.Done():
+			return
+		}
+		log := e.log.With("job", ref.ID, "role", m.Type)
+		log.Info("job started")
+		err := run(ctx, ref.ID)
+		if ctx.Err() != nil {
+			log.Info("job interrupted; will resume on restart")
+			return
+		}
+		if err != nil {
+			log.Warn("job failed", "err", err)
+		} else {
+			log.Info("job finished")
+		}
+		if ferr := e.tr.Finish(context.WithoutCancel(ctx), m, err != nil); ferr != nil {
+			log.Warn("finish failed", "err", ferr)
+		}
+	}()
+}
+
+// statusWriter publishes a participant's status, throttled.
+type statusWriter struct {
+	e    *Engine
+	job  string
+	st   api.JobStatus
+	last time.Time
+}
+
+func (e *Engine) newStatus(job string, role api.Role) *statusWriter {
+	return &statusWriter{e: e, job: job, st: api.JobStatus{Node: e.Self(), Role: role, State: api.JobRunning}}
+}
+
+// problem records an error affecting one entry.
+func (w *statusWriter) problem(format string, args ...any) {
+	w.st.Errors++
+	w.note(format, args...)
+}
+
+// note records a message that is not an error.
+func (w *statusWriter) note(format string, args ...any) {
+	if len(w.st.Problems) < 200 {
+		w.st.Problems = append(w.st.Problems, fmt.Sprintf(format, args...))
+	}
+}
+
+// put publishes the status; unless force, at most every 500ms.
+func (w *statusWriter) put(ctx context.Context, force bool) {
+	if !force && time.Since(w.last) < 500*time.Millisecond {
+		return
+	}
+	w.last = time.Now()
+	w.st.Updated = w.last.UTC()
+	if err := w.e.st.PutStatus(context.WithoutCancel(ctx), w.job, &w.st); err != nil {
+		w.e.log.Warn("status update failed", "job", w.job, "err", err)
+	}
+}
+
+func (w *statusWriter) finish(ctx context.Context, state api.JobState, err error) error {
+	w.st.State = state
+	w.st.Phase = ""
+	if err != nil {
+		w.st.Error = err.Error()
+	}
+	w.put(ctx, true)
+	return err
+}
+
+// ownStatus returns this node's previously published status for a job.
+func ownStatus(j *api.Job, self string, role api.Role) *api.JobStatus {
+	for i := range j.Participants {
+		if p := &j.Participants[i]; p.Node == self && p.Role == role {
+			return p
+		}
+	}
+	return nil
+}
+
+func roleState(j *api.Job, role api.Role, node string) api.JobState {
+	for _, p := range j.Participants {
+		if p.Role == role && (node == "" || p.Node == node) {
+			return p.State
+		}
+	}
+	return ""
+}
+
+var (
+	errCancelled = errors.New("cancelled")
+	errDetached  = errors.New("detached by the source")
+)
+
+// sleep waits one poll interval or until ctx ends.
+func (e *Engine) sleep(ctx context.Context) error {
+	t := time.NewTimer(e.cfg.Poll.Active)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
+}
