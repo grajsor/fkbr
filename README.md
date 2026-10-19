@@ -100,6 +100,7 @@ make test         # unit, integration and failure-injection tests
 make test-race    # needs a 48-bit VMA kernel (not a Raspberry Pi 5)
 make vet
 scripts/bench.sh  # 1 master + N slaves on one machine
+scripts/screenshots/take.sh  # retake docs/screenshots (needs pyte, pillow)
 ```
 
 The layers:

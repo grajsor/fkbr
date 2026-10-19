@@ -290,6 +290,8 @@ Selection
   Insert / Space           toggle and move down
   +  -  *                  select all, none, invert
 
+Names end in / for a directory and @ for a symlink.
+
 Files
   F3   view file (first 64 KiB; XML and JSON highlighted)
   F4   sync: make the other pane's directory match this one

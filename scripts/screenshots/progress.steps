@@ -1,0 +1,19 @@
+wait 2
+# left: db01's dumps, all three marked
+keys f2 home down down down enter
+wait 1
+keys down down enter
+wait 1
+keys down insert insert insert
+# right: backup01's incoming, so the copy goes somewhere sensible
+keys tab f2 home down enter
+wait 1
+keys down down enter
+wait 1
+keys tab
+# copy to every node, then open the running job's details
+keys f5 ctrla enter
+wait 6
+keys f9 enter
+wait 5
+shot fkbr-progress

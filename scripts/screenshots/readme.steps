@@ -1,0 +1,43 @@
+wait 2
+# main: web01 on the left with two marked files, backup01's copy of the site on the right
+keys down down down enter
+wait 1
+keys tab enter
+wait 1
+keys down down enter
+wait 1
+keys down enter
+wait 1
+keys down enter
+wait 1
+keys tab down down down down down insert insert
+wait 0.5
+shot fkbr-main
+keys f5
+wait 0.5
+shot fkbr-copy
+keys esc
+wait 0.5
+# db01's dumps and backup01's archive; jobs panel focused
+keys f2 home down down down enter
+wait 1
+keys down down enter
+wait 1
+keys down down
+keys tab f2 home down enter
+wait 1
+keys down enter
+wait 1
+keys down down enter
+wait 1
+keys tab
+keys f9
+shot fkbr-jobs
+# the viewer: build01's Jenkins job config, highlighted
+keys esc f2 home down down enter
+wait 1
+keys down down down enter
+wait 1
+keys down down down f3
+wait 1
+shot fkbr-view
