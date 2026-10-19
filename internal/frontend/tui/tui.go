@@ -27,6 +27,8 @@ type Options struct {
 	RunsNode bool
 	// Colors: auto (default), true, 256, 16 or none.
 	Colors string
+	// LogPath is where this node logs, shown in the help.
+	LogPath string
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -36,6 +38,7 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 	}
 	m := newModel(ctx, c)
 	m.runsNode = opts.RunsNode
+	m.logPath = opts.LogPath
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
 	if err == tea.ErrProgramKilled && ctx.Err() != nil {
 		return nil
@@ -73,6 +76,7 @@ type model struct {
 	statusAt      time.Time
 
 	runsNode  bool
+	logPath   string
 	jobsFocus bool
 	jobCursor int
 	moves     map[string]moveInfo
@@ -496,7 +500,11 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+r":
 		return m.refreshPane(m.active)
 	case "f1", "?":
-		m.dlg = newTextDialog("Help", helpText)
+		text := helpText
+		if m.logPath != "" {
+			text += "\n\nThis node's log: " + m.logPath
+		}
+		m.dlg = newTextDialog("Help", text)
 	case "f2":
 		p.level, p.node, p.root, p.path, p.err = levelNodes, "", "", ".", ""
 		p.clearSelection()

@@ -505,3 +505,13 @@ func TestJobDetailsLiveUpdate(t *testing.T) {
 		t.Error("another job's event replaced the details")
 	}
 }
+
+func TestHelpShowsLogPath(t *testing.T) {
+	h := newHarness(t)
+	h.m.logPath = "/tmp/fkbr-1000-master/node.log"
+	h.send(tea.KeyMsg{Type: tea.KeyF1})
+	d, ok := h.m.dlg.(*textDialog)
+	if !ok || !strings.Contains(d.text, "This node's log: /tmp/fkbr-1000-master/node.log") {
+		t.Fatalf("help without the log path: %T", h.m.dlg)
+	}
+}

@@ -11,7 +11,7 @@ Tested on CentOS 7, Rocky 8, 9 and 10, and Debian 12.
 | Where | What | Lifetime |
 |---|---|---|
 | wherever you copied it | the binary (any name) and optionally `fkbr.yaml` beside it | yours |
-| `/tmp/fkbr-<uid>-<node>/` | worker lock and API socket | removed on clean exit |
+| `/tmp/fkbr-<uid>-<node>/` | worker lock and API socket; `node.log` when the TUI runs the node | lock and socket removed on clean exit; the log stays (at most 2 × 1 MiB) |
 | `<root>/.fkbr-tmp/` in a destination root | staging for a transfer in progress | removed when the transfer ends |
 | the share directory you pass | node registry; finished job records, sync plans and failed requests | records pruned after `keep_done` (1h), see below |
 
@@ -101,8 +101,12 @@ unless such a job needs it, so `@all` stops counting it (see Cleanup). Use
 a daemon for a machine that should stay a member while nobody is logged
 in.
 
+The TUI writes this node's log to `/tmp/fkbr-<uid>-<node>/node.log` (F1
+shows the path; `-v` adds debug lines). It stays after you quit, so a
+failed copy can be looked into later.
+
 **Headless:** `fkbr /mnt/nfs/xfer daemon` does the same without a UI, in
-the foreground. To keep it running after you log out, use `nohup` or a
+the foreground, and logs to stderr. To keep it running after you log out, use `nohup` or a
 `tmux` or `screen` session; no service is needed. A TUI started while a
 daemon runs attaches to that daemon instead of starting a second worker.
 

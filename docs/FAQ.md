@@ -34,6 +34,9 @@ Add `-z` to `cp` or `sync` (Ctrl+Z in the dialogs). It uses zstd. It helps with 
 **Who's online?**
 `./fkbr /mnt/nfs/somedir nodes`
 
+**Something failed in the TUI?**
+Look in `/tmp/fkbr-<your uid>-<machine>/node.log`. F1 shows the exact path.
+
 **Is my setup OK?**
 `./fkbr /mnt/nfs/somedir check`
 

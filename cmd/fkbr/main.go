@@ -201,7 +201,7 @@ func run() error {
 	case "check":
 		return runCheck(ctx, cfg)
 	case "tui":
-		return runTUI(ctx, cfg, *forceLocal, *colors)
+		return runTUI(ctx, cfg, *forceLocal, *colors, level)
 	}
 	c, err := connect(ctx, cfg, *forceLocal, log)
 	if err != nil {
@@ -304,21 +304,31 @@ func daemon(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 // runTUI attaches to a running node, or else runs this node itself for as
 // long as the TUI is open.
-func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors string) error {
+func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors string, level slog.Level) error {
 	if !forceLocal {
 		if c, err := remote.Dial(ctx, cfg.Socket); err == nil {
 			defer c.Close()
 			return tui.Run(ctx, c, tui.Options{Colors: colors})
 		}
 	}
-	quiet := slog.New(slog.DiscardHandler) // log lines would draw over the UI
-	n, err := startNode(ctx, cfg, quiet)
+	// Log lines would draw over the UI, so the node logs to a file beside
+	// its lock and socket; it stays after exit for looking at problems.
+	log, logPath := slog.New(slog.DiscardHandler), ""
+	if err := os.MkdirAll(cfg.StateDir, 0o700); err == nil {
+		p := filepath.Join(cfg.StateDir, "node.log")
+		if lf, err := openLogFile(p, 1<<20); err == nil {
+			defer lf.Close()
+			log, logPath = slog.New(slog.NewTextHandler(lf, &slog.HandlerOptions{Level: level})), p
+		}
+	}
+	n, err := startNode(ctx, cfg, log)
 	if err != nil {
 		return err
 	}
+	log.Info("TUI runs this node", "node", cfg.NodeID, "version", version)
 	// A node that only lives while the TUI is open leaves the share on quit.
 	n.c.LeaveOnStop()
-	terr := tui.Run(ctx, n.c, tui.Options{RunsNode: true, Colors: colors})
+	terr := tui.Run(ctx, n.c, tui.Options{RunsNode: true, Colors: colors, LogPath: logPath})
 	if err := n.stop(); err != nil && terr == nil {
 		terr = err
 	}
