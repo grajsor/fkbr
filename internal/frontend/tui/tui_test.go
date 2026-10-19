@@ -174,6 +174,8 @@ func (h *harness) key(keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyEnter}
 		case "backspace":
 			msg = tea.KeyMsg{Type: tea.KeyBackspace}
+		case "ctrl+h": // what terminals that send ^H for Backspace deliver
+			msg = tea.KeyMsg{Type: tea.KeyCtrlH}
 		case "tab":
 			msg = tea.KeyMsg{Type: tea.KeyTab}
 		case "down":
@@ -240,7 +242,7 @@ func TestNavigation(t *testing.T) {
 	if p.title() != "master:/proj" {
 		t.Errorf("title %q", p.title())
 	}
-	h.key("backspace") // back to root, cursor on proj
+	h.key("ctrl+h") // back to root, cursor on proj (Backspace sent as ^H)
 	if p.path != "." || h.cursorName(0) != "proj" {
 		t.Fatalf("back: path %q cursor %q", p.path, h.cursorName(0))
 	}

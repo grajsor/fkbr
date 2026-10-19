@@ -193,7 +193,7 @@ keys.
 | Key | Action |
 |---|---|
 | Insert / Space, `+` `-` `*` | select; select all, none, invert |
-| F3 | view a file (first 64 KiB; binary files as hex) |
+| F3 | view a file (first 64 KiB; XML and JSON highlighted, binary files as hex) |
 | F4 | sync: make the other pane's directory match this one (plan shown first) |
 | F5 / F6 | copy / move the selection. The destination defaults to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`) |
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |

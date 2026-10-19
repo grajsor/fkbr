@@ -309,7 +309,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("view: "+msg.err.Error(), true)
 			return m, nil
 		}
-		m.dlg = newTextDialog(msg.title, renderFile(msg.res))
+		d := newTextDialog(msg.title, renderFile(msg.res))
+		if bytes.IndexByte(msg.res.Data, 0) < 0 { // not shown as hex
+			d.lang = language(msg.title, d.text)
+		}
+		m.dlg = d
 		return m, nil
 	}
 	return m, nil
@@ -461,7 +465,7 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 		return m.maybeLoadMore(m.active)
 	case "enter":
 		return m.enter(m.active)
-	case "backspace":
+	case "backspace", "ctrl+h": // many terminals send ^H for Backspace
 		return m.up(m.active)
 	case "insert", " ":
 		if r := p.current(); r != nil && !r.up && p.level == levelDir {

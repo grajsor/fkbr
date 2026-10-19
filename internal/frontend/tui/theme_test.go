@@ -138,6 +138,16 @@ func paintsEveryCell(t *testing.T, p termenv.Profile) {
 		h.m.status, h.m.statusErr = "something failed", true
 		check("error status")
 		h.m.status = ""
+		for _, f := range []struct{ name, text string }{
+			{"a.xml", "<a x=\"1\">\n  <!-- c -->\n  <b>t</b>\n</a>"},
+			{"a.json", "{\n  \"k\": [1, true, \"s\"]\n}"},
+		} {
+			d := newTextDialog("s1:data/"+f.name, f.text)
+			d.lang = language(f.name, f.text)
+			h.m.dlg = d
+			check("viewer " + f.name)
+			h.m.dlg = nil
+		}
 	}
 }
 

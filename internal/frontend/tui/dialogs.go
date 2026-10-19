@@ -216,14 +216,24 @@ type textDialog struct {
 	ready bool
 	// jobID is set for job details, which follow the job's events.
 	jobID string
+	// lang ("xml", "json" or "") selects syntax highlighting.
+	lang string
+	st   *styles
 }
 
 // setText replaces the text, keeping the scroll position.
 func (d *textDialog) setText(text string) {
 	d.text = text
 	if d.ready {
-		d.vp.SetContent(wrapText(text, d.vp.Width))
+		d.vp.SetContent(d.content(d.vp.Width))
 	}
+}
+
+func (d *textDialog) content(w int) string {
+	if d.lang != "" && d.st != nil {
+		return highlight(d.st, d.lang, d.text, w)
+	}
+	return wrapText(d.text, w)
 }
 
 func newTextDialog(title, text string) *textDialog {
@@ -242,9 +252,10 @@ func (d *textDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 
 func (d *textDialog) view(st *styles, width, height int) string {
 	w, h := max(20, width-6), max(3, height-6)
+	d.st = st
 	if !d.ready || d.vp.Width != w || d.vp.Height != h {
 		d.vp = viewport.New(w, h)
-		d.vp.SetContent(wrapText(d.text, w))
+		d.vp.SetContent(d.content(w))
 		d.ready = true
 	}
 	pct := int(d.vp.ScrollPercent() * 100)
@@ -280,7 +291,7 @@ Selection
   +  -  *                  select all, none, invert
 
 Files
-  F3   view file (first 64 KiB)
+  F3   view file (first 64 KiB; XML and JSON highlighted)
   F4   sync: make the other pane's directory match this one
        (dry-run plan first; incremental or mirror; works for n1,n2 / @role)
   F5   copy selection to the other pane, or to n1,n2 or every node
