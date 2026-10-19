@@ -22,6 +22,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,6 +59,9 @@ type Mailbox struct {
 	self      string
 	opts      Options
 	recovered bool
+	// claimed holds requests moved to cur/ but not yet handed out, with
+	// how often reading them failed. Only Fetch (one goroutine) uses it.
+	claimed map[string]int
 
 	refreshMu   sync.Mutex
 	refreshedAt map[string]time.Time
@@ -123,7 +127,7 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 	if opts.OfflineAfter <= 0 {
 		opts.OfflineAfter = 30 * time.Second
 	}
-	m := &Mailbox{root: root, self: self, opts: opts, refreshedAt: map[string]time.Time{}}
+	m := &Mailbox{root: root, self: self, opts: opts, refreshedAt: map[string]time.Time{}, claimed: map[string]int{}}
 	for _, d := range []string{
 		"tmp", "nodes", "inbox", "reply",
 		m.inbox(self, "new"), m.inbox(self, "cur"), m.inbox(self, "failed"),
@@ -344,21 +348,32 @@ func (m *Mailbox) AwaitReplies(ctx context.Context, reqID string, fn func(*trans
 
 func seqName(seq int) string { return fmt.Sprintf("%08d.json", seq) }
 
+// maxReadTries is how often Fetch tries to read a claimed request before
+// parking it in failed/.
+const maxReadTries = 20
+
+// Fetch claims new requests (new/ -> cur/) and returns them. A request that
+// cannot be claimed or read now is tried again on the next call; one bad
+// file never holds up the others, and a claimed request is never dropped.
+// The error reports problems, but the returned messages are still valid.
 func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
-	var names []string
+	var errs []error
 	// After a restart, requests claimed but never finished are redelivered.
 	if !m.recovered {
 		cur, err := listJSON(m.path(m.inbox(m.self, "cur")))
 		if err != nil {
-			return nil, err
+			errs = append(errs, err)
+		} else {
+			for _, n := range cur {
+				m.claimed[n] += 0
+			}
+			m.recovered = true
 		}
-		names = append(names, cur...)
-		m.recovered = true
 	}
 	m.fresh(m.path(m.inbox(m.self, "new")))
 	fresh, err := listJSON(m.path(m.inbox(m.self, "new")))
 	if err != nil {
-		return nil, err
+		errs = append(errs, err)
 	}
 	for _, n := range fresh {
 		err := os.Rename(m.path(m.inbox(m.self, "new"), n), m.path(m.inbox(m.self, "cur"), n))
@@ -366,17 +381,33 @@ func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			errs = append(errs, err) // still in new/; tried again next time
+			continue
 		}
+		m.claimed[n] += 0
+	}
+	names := make([]string, 0, len(m.claimed))
+	for n := range m.claimed {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	var out []*transport.Message
 	for _, n := range names {
 		p := m.path(m.inbox(m.self, "cur"), n)
 		data, err := os.ReadFile(p)
-		if err != nil {
-			return nil, err
+		if errors.Is(err, fs.ErrNotExist) {
+			delete(m.claimed, n)
+			continue
 		}
+		if err != nil {
+			if m.claimed[n]++; m.claimed[n] >= maxReadTries {
+				os.Rename(p, m.path(m.inbox(m.self, "failed"), n))
+				delete(m.claimed, n)
+			}
+			errs = append(errs, err)
+			continue
+		}
+		delete(m.claimed, n)
 		var msg transport.Message
 		if err := json.Unmarshal(data, &msg); err != nil || msg.ID+".json" != n {
 			// Unreadable or renamed: park it where an operator can look.
@@ -385,7 +416,34 @@ func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
 		}
 		out = append(out, &msg)
 	}
-	return out, nil
+	return out, errors.Join(errs...)
+}
+
+// pruneOrphanData removes this node's staged data for jobs whose record is
+// gone. Normally the source removes it when the job ends, but a removal
+// that races with another node's refresh file can leave the directory.
+func (m *Mailbox) pruneOrphanData(cutoff time.Time) error {
+	jobs, err := m.listNames(m.path("jobs")) // by listing: see listed.go
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	des, err := os.ReadDir(m.path("data", m.self))
+	if err != nil {
+		return nil
+	}
+	var errs []error
+	for _, de := range des {
+		if slices.Contains(jobs, de.Name()) {
+			continue
+		}
+		if fi, err := de.Info(); err == nil && fi.ModTime().Before(cutoff) {
+			errs = append(errs, os.RemoveAll(m.path("data", m.self, de.Name())))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func listJSON(dir string) ([]string, error) {
@@ -430,12 +488,20 @@ func (m *Mailbox) Finish(_ context.Context, msg *transport.Message, failed bool)
 // progress touch their file continuously.
 const StaleTmp = time.Hour
 
+// Pruning compares mtimes, which the NFS server sets, with the server's
+// clock (serverNow), never the local one: a host whose clock runs ahead
+// would otherwise delete other nodes' files that are still in use.
+
 func (m *Mailbox) Prune(_ context.Context, maxAge time.Duration) error {
 	m.openedUp.Do(m.openUp) // once per process: new entries get the right modes
-	cutoff := time.Now().Add(-maxAge)
+	now, err := m.serverNow()
+	if err != nil {
+		return fmt.Errorf("nfsmailbox: probe: %w", err)
+	}
+	cutoff := now.Add(-maxAge)
 	var errs []error
 	if des, err := os.ReadDir(m.path("tmp")); err == nil {
-		stale := time.Now().Add(-StaleTmp)
+		stale := now.Add(-StaleTmp)
 		for _, de := range des {
 			if fi, err := de.Info(); err == nil && fi.ModTime().Before(stale) {
 				errs = append(errs, os.Remove(m.path("tmp", de.Name())))
@@ -443,6 +509,7 @@ func (m *Mailbox) Prune(_ context.Context, maxAge time.Duration) error {
 		}
 	}
 	os.RemoveAll(m.path(m.inbox(m.self, "done"))) // used by older versions
+	errs = append(errs, m.pruneOrphanData(cutoff))
 	for _, d := range []string{
 		m.path(m.inbox(m.self, "failed")),
 		m.path("reply", m.self), // abandoned reply dirs (requester crashed)

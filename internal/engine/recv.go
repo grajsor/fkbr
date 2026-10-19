@@ -113,11 +113,15 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 	if err != nil {
 		return err
 	}
+	// The acks vanish with the source's job data once it is done, so a
+	// restart after the last ack would otherwise start again at 0.
+	next = max(next, status.st.Chunks)
 	status.st.Phase = "receiving"
 	status.put(ctx, true)
 	log := e.log.With("job", id)
 	wait := newWaitLog(log, "waiting for chunk", waitLogAfter, waitLogEvery)
 	ride := &rideOut{log: log}
+	srcGone := &goneWatch{e: e, node: src}
 	for {
 		raw, err := e.st.ChunkMeta(ctx, src, id, next)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) && ride.retry(ctx, err) {
@@ -150,10 +154,13 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 			case api.JobCancelled:
 				return errCancelled
 			case api.JobDone:
-				// Done without publishing chunk next: nothing more is coming.
-				if j.TotalChunks == 0 || next >= j.TotalChunks {
-					return nil
-				}
+				// The source finishes only once every target still in the
+				// job has acked every chunk, so this one has them all,
+				// even if it was interrupted before it could install.
+				return nil
+			}
+			if srcGone.gone(ctx) {
+				return fmt.Errorf("source %s is no longer registered (forgotten)", src)
 			}
 			if err := e.sleep(ctx); err != nil {
 				return err
@@ -243,6 +250,36 @@ func (e *Engine) readChunk(ctx context.Context, src, id string, meta *bundle.Chu
 		return fmt.Errorf("%w (got %d bytes sha256 %.12s…, want %d bytes %.12s…)", errChecksum, cr.n, sum, meta.Size, meta.SHA256)
 	}
 	return applyErr
+}
+
+// goneWatch tells when a node has been missing from the registry for
+// longer than offline_after (forgotten), checking at most every 2s. One
+// missing listing is not enough: an entry being replaced can be missed.
+type goneWatch struct {
+	e           *Engine
+	node        string
+	since, last time.Time
+}
+
+func (g *goneWatch) gone(ctx context.Context) bool {
+	if time.Since(g.last) < 2*time.Second {
+		return false
+	}
+	g.last = time.Now()
+	nodes, err := g.e.tr.Nodes(ctx)
+	if err != nil {
+		return false
+	}
+	for _, n := range nodes {
+		if n.ID == g.node {
+			g.since = time.Time{}
+			return false
+		}
+	}
+	if g.since.IsZero() {
+		g.since = g.last
+	}
+	return time.Since(g.since) > g.e.cfg.OfflineAfter
 }
 
 type countingReader struct {

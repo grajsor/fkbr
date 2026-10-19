@@ -53,7 +53,9 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
 5. **Claiming.** The worker renames `new/X` to `cur/X` before processing,
    then deletes it, or moves it to `failed/` (pruned after `keep_done`).
    After a crash, anything left in
-   `cur/` is processed again, so request handlers must be idempotent.
+   `cur/` is processed again, so request handlers must be idempotent. A
+   request that cannot be read is retried on the next poll without holding
+   up the others, and moved to `failed/` after 20 tries.
 6. **Replies.** Before publishing a request, the requester creates
    `reply/<self>/<req>/`. The executor writes parts `00000000.json`,
    `00000001.json`, ... The last part has `"final": true`, and a part with
@@ -64,7 +66,9 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
    so its mtime comes from the NFS server. To judge a peer, a node writes its
    own probe file to `tmp/` and compares the two mtimes, which both come from
    the server clock. Host clock skew therefore doesn't matter. A node counts
-   as offline when its heartbeat is older than `offline_after`.
+   as offline when its heartbeat is older than `offline_after`. The
+   heartbeat runs on its own, so a slow request does not delay it. Pruning
+   judges ages the same way, by mtimes against the server clock.
 8. **Leaving.** A node is removed from the registry (its `nodes/`,
    `inbox/`, `reply/` and `data/` directories) in three ways: `forget` by
    any node once it is offline; by any running node when it has been
@@ -168,7 +172,11 @@ for final acks), it drops a target that is holding things up:
 
 The last active target is never dropped. With a single target, a failure
 fails the job and an offline target makes the job wait (cancel it to
-stop). A detached target that notices (immediately, or when it comes back)
+stop). A target that was forgotten (gone from the registry for
+`offline_after`) is dropped too; if it was the last one, the job fails. A
+target whose source was forgotten fails the same way. A target that has
+not started (no status yet) is sent its receive request again every
+minute, in case the first one was lost. A detached target that notices (immediately, or when it comes back)
 discards its staging area and reports `detached`. Nothing partial is ever
 installed. A job that finished for some targets but detached others ends
 `partial`.

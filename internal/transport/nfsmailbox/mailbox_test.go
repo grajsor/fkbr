@@ -264,12 +264,14 @@ func TestPruneLegacyAndUnstartedJobs(t *testing.T) {
 	os.MkdirAll(legacy, 0o770)
 	os.WriteFile(filepath.Join(legacy, "x.json"), nil, 0o644)
 
-	old := &api.Job{ID: "000000000000000000000001", Created: time.Now().Add(-25 * time.Hour)}
-	young := &api.Job{ID: "000000000000000000000002", Created: time.Now().Add(-2 * time.Hour)}
-	for _, j := range []*api.Job{old, young} {
+	old := &api.Job{ID: "000000000000000000000001"}
+	young := &api.Job{ID: "000000000000000000000002"}
+	for j, age := range map[*api.Job]time.Duration{old: 25 * time.Hour, young: 2 * time.Hour} {
 		if err := a.CreateJob(ctx, j); err != nil {
 			t.Fatal(err)
 		}
+		past := time.Now().Add(-age)
+		os.Chtimes(filepath.Join(share, "jobs", j.ID, "job.json"), past, past)
 	}
 	if err := a.Prune(ctx, time.Hour); err != nil {
 		t.Fatal(err)
@@ -285,5 +287,59 @@ func TestPruneLegacyAndUnstartedJobs(t *testing.T) {
 	}
 	if _, err := a.GetJob(ctx, young.ID); err != nil {
 		t.Errorf("unstarted job pruned too early: %v", err)
+	}
+}
+
+// A request that cannot be read must not hold up or drop the others, and
+// is parked in failed/ after maxReadTries.
+func TestFetchKeepsGoodRequestsPastABadOne(t *testing.T) {
+	share := t.TempDir()
+	a, b := open(t, share, "a"), open(t, share, "b")
+	// A directory named like a request: the rename works, reading fails.
+	if err := os.Mkdir(filepath.Join(share, "inbox", "b", "new", "0001.json"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	a.Send(ctx, &transport.Message{Protocol: 1, ID: "0005", From: "a", To: "b", Notify: true})
+	got, err := b.Fetch(ctx)
+	if err == nil || len(got) != 1 || got[0].ID != "0005" {
+		t.Fatalf("Fetch = %v, %v; want 0005 and an error", got, err)
+	}
+	a.Send(ctx, &transport.Message{Protocol: 1, ID: "0006", From: "a", To: "b", Notify: true})
+	got, _ = b.Fetch(ctx)
+	if len(got) != 1 || got[0].ID != "0006" {
+		t.Fatalf("second Fetch = %v", got)
+	}
+	for i := 0; i < maxReadTries; i++ {
+		b.Fetch(ctx)
+	}
+	if _, err := os.Stat(filepath.Join(share, "inbox", "b", "failed", "0001.json")); err != nil {
+		t.Fatalf("bad request not parked: %v", err)
+	}
+	if _, err := b.Fetch(ctx); err != nil {
+		t.Fatalf("Fetch after parking: %v", err)
+	}
+}
+
+func TestPruneOrphanData(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	live := &api.Job{ID: "000000000000000000000003"}
+	if err := a.CreateJob(ctx, live); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	for _, id := range []string{live.ID, "000000000000000000000004"} {
+		d := filepath.Join(share, "data", "a", id)
+		os.MkdirAll(d, 0o777)
+		os.Chtimes(d, past, past)
+	}
+	if err := a.Prune(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(share, "data", "a", live.ID)); err != nil {
+		t.Errorf("data of a live job pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(share, "data", "a", "000000000000000000000004")); !os.IsNotExist(err) {
+		t.Errorf("orphan data not pruned: %v", err)
 	}
 }

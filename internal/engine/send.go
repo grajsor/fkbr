@@ -39,6 +39,9 @@ type sender struct {
 	progress  map[string]time.Time
 	online    map[string]bool
 	lastNodes time.Time
+	// gone is when each target was first seen missing from the registry.
+	gone       map[string]time.Time
+	lastNotify time.Time
 
 	log     *slog.Logger
 	totals  totals
@@ -54,7 +57,7 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	}
 	s := &sender{
 		e: e, job: job, status: e.newStatus(id, api.RoleSource),
-		detached: map[string]bool{}, acks: map[string]int{}, progress: map[string]time.Time{},
+		detached: map[string]bool{}, acks: map[string]int{}, progress: map[string]time.Time{}, gone: map[string]time.Time{},
 		log: e.log.With("job", id), start: time.Now(),
 	}
 	s.status.before = s.totals.apply
@@ -119,15 +122,11 @@ func (s *sender) run(ctx context.Context) error {
 	e := s.e
 	// Tell every target to start consuming. Duplicates are harmless.
 	for _, d := range s.active() {
-		msg, err := e.newMessage(d, transport.TypeReceive, transport.JobRef{ID: s.job.ID})
-		if err != nil {
+		if err := s.notify(ctx, d); err != nil {
 			return err
 		}
-		msg.Notify = true
-		if err := e.tr.Send(ctx, msg); err != nil {
-			return fmt.Errorf("notify %s: %w", d, err)
-		}
 	}
+	s.lastNotify = time.Now()
 	for _, d := range s.job.Request.DstNodes {
 		if n, err := e.st.Acked(ctx, e.Self(), s.job.ID, d); err == nil {
 			s.resumeFrom = max(s.resumeFrom, n)
@@ -326,8 +325,18 @@ func (s *sender) check(ctx context.Context, force bool) error {
 	for _, d := range j.Detached {
 		s.detached[d.Node] = true
 	}
+	renotify := time.Since(s.lastNotify) > renotifyEvery
 	for _, d := range s.active() {
 		switch roleState(j, api.RoleTarget, d) {
+		case "":
+			// Not started yet: the notify may have been lost (or the node
+			// was busy, or restarted from an old inbox). Send it again.
+			if renotify {
+				s.log.Info("target has not started; notifying it again", "target", d)
+				if err := s.notify(ctx, d); err != nil {
+					s.log.Warn("notify failed", "target", d, "err", err)
+				}
+			}
 		case api.JobFailed:
 			if len(s.active()) == 1 {
 				return fmt.Errorf("target %s failed", d)
@@ -338,6 +347,26 @@ func (s *sender) check(ctx context.Context, force bool) error {
 		case api.JobCancelled:
 			return errCancelled
 		}
+	}
+	if renotify {
+		s.lastNotify = time.Now()
+	}
+	return nil
+}
+
+// renotifyEvery is how often a target that has not started is notified
+// again.
+var renotifyEvery = time.Minute
+
+// notify asks target d to start consuming this job.
+func (s *sender) notify(ctx context.Context, d string) error {
+	msg, err := s.e.newMessage(d, transport.TypeReceive, transport.JobRef{ID: s.job.ID})
+	if err != nil {
+		return err
+	}
+	msg.Notify = true
+	if err := s.e.tr.Send(ctx, msg); err != nil {
+		return fmt.Errorf("notify %s: %w", d, err)
 	}
 	return nil
 }
@@ -378,10 +407,6 @@ func (s *sender) gc(ctx context.Context, total int) (bool, error) {
 	return total >= 0 && minAck >= total, nil
 }
 
-// detachLaggards is called while the source is blocked (no staging space,
-// or waiting for the last acks). A target that is holding things up and
-// has made no progress for detach_after, or is offline, is dropped so the
-// others can finish. The last active target is never dropped.
 // ackSummary lists each active target's acked chunks, e.g. "a=3/4 b=1/4".
 func (s *sender) ackSummary(total int) string {
 	var parts []string
@@ -395,11 +420,13 @@ func (s *sender) ackSummary(total int) string {
 	return strings.Join(parts, " ")
 }
 
+// detachLaggards is called while the source is blocked (no staging space,
+// or waiting for the last acks). A target that is holding things up and
+// has made no progress for detach_after, or is offline, is dropped so the
+// others can finish. The last active target is never dropped for that,
+// but a target that was forgotten (gone from the registry) is: if it was
+// the last one, the job fails instead of waiting forever.
 func (s *sender) detachLaggards(ctx context.Context, total int) error {
-	active := s.active()
-	if len(active) < 2 {
-		return nil
-	}
 	if time.Since(s.lastNodes) > 2*time.Second {
 		nodes, err := s.e.tr.Nodes(ctx)
 		if err != nil {
@@ -410,6 +437,30 @@ func (s *sender) detachLaggards(ctx context.Context, total int) error {
 			s.online[n.ID] = n.Online
 		}
 		s.lastNodes = time.Now()
+		for _, d := range s.active() {
+			if _, ok := s.online[d]; ok {
+				delete(s.gone, d)
+			} else if s.gone[d].IsZero() {
+				s.gone[d] = s.lastNodes
+			}
+		}
+	}
+	for _, d := range s.active() {
+		// Missing for a while, not just once: a listing can miss an entry
+		// that is being replaced.
+		if s.gone[d].IsZero() || time.Since(s.gone[d]) < s.e.cfg.OfflineAfter {
+			continue
+		}
+		if len(s.active()) == 1 {
+			return fmt.Errorf("target %s is no longer registered (forgotten)", d)
+		}
+		if err := s.detach(ctx, d, "no longer registered"); err != nil {
+			return err
+		}
+	}
+	active := s.active()
+	if len(active) < 2 {
+		return nil
 	}
 	minAck := -1
 	for _, d := range active {

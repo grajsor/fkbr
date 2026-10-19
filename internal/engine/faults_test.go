@@ -334,6 +334,8 @@ func TestPruneAtStartup(t *testing.T) {
 	if err := a.st.CreateJob(context.Background(), old); err != nil {
 		t.Fatal(err)
 	}
+	past := time.Now().Add(-48 * time.Hour) // pruning goes by the share's mtimes
+	os.Chtimes(filepath.Join(share, "jobs", old.ID, "job.json"), past, past)
 	for _, role := range []api.Role{api.RoleSource, api.RoleTarget} {
 		a.st.PutStatus(context.Background(), old.ID, &api.JobStatus{Node: "a", Role: role, State: api.JobDone})
 	}
@@ -415,5 +417,50 @@ func TestIOErrorsGiveUp(t *testing.T) {
 	}
 	if st := ownStatus(j, "s1", api.RoleTarget); st == nil || !strings.Contains(st.Error, "input/output error") {
 		t.Fatalf("target status: %+v", st)
+	}
+}
+
+// stuckInbox blocks Fetch until released, like a slow request or a share
+// that hangs while listing the inbox.
+type stuckInbox struct {
+	*nfsmailbox.Mailbox
+	release chan struct{}
+}
+
+func (s *stuckInbox) Fetch(ctx context.Context) ([]*transport.Message, error) {
+	select {
+	case <-s.release:
+	case <-ctx.Done():
+	}
+	return s.Mailbox.Fetch(ctx)
+}
+
+// A busy inbox loop must not make the node look offline.
+func TestHeartbeatWhileInboxBusy(t *testing.T) {
+	share := t.TempDir()
+	cfg := nodeCfg(t, share, "a")
+	fsys, err := localfs.Open(cfg.Roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb, err := nfsmailbox.Open(share, "a", nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stuck := &stuckInbox{Mailbox: mb, release: make(chan struct{})}
+	a := New(cfg, fsys, stuck, mb, Options{Version: "test"})
+	t.Cleanup(func() { a.Close() })
+	defer close(stuck.release)
+	runWorker(t, a)
+	b, _ := node(t, share, "b")
+	time.Sleep(3 * cfg.OfflineAfter)
+	ns, err := b.Nodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range ns {
+		if n.ID == "a" && !n.Online {
+			t.Fatalf("a looks offline while its inbox loop is busy (last seen %s ago)", n.LastSeen)
+		}
 	}
 }

@@ -83,6 +83,7 @@ type Transport interface {
 
 	// Fetch claims requests waiting in this node's inbox, oldest first.
 	// Only one worker per node may call it (the engine holds a local lock).
+	// It may return messages and an error together; handle the messages.
 	Fetch(ctx context.Context) ([]*Message, error)
 	// Reply sends one reply part back to req.From.
 	Reply(ctx context.Context, req *Message, r *Reply) error

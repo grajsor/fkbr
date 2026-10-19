@@ -277,8 +277,13 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 	e.log.Info("worker started", "node", e.Self(), "roots", len(e.info.Roots), "chown", e.info.ChownCapable)
 
-	hb := time.NewTicker(e.cfg.HeartbeatInterval)
-	defer hb.Stop()
+	// The heartbeat has its own goroutine: a slow listing, read or prune in
+	// the loop below must not make this node look offline. It stops after
+	// the jobs have paused (defers run in reverse) and before leaving.
+	hbCtx, hbStop := context.WithCancel(context.WithoutCancel(ctx))
+	hbDone := make(chan struct{})
+	go e.heartbeat(hbCtx, hbDone)
+	defer func() { hbStop(); <-hbDone }()
 	// Prune at start (a node may have been off for days) and then every
 	// half keep_done, so nothing outlives keep_done by much.
 	e.prune(ctx)
@@ -301,10 +306,6 @@ func (e *Engine) Run(ctx context.Context) error {
 				e.log.Error("worker lock lost; stopping this worker", "err", err)
 				return err
 			}
-		case <-hb.C:
-			if err := e.tr.Heartbeat(ctx); err != nil {
-				e.log.Warn("heartbeat failed", "err", err)
-			}
 		case <-prune.C:
 			e.prune(ctx)
 		case <-poll.C:
@@ -323,6 +324,23 @@ func (e *Engine) Run(ctx context.Context) error {
 				interval = e.cfg.Poll.Idle
 			}
 			poll.Reset(interval)
+		}
+	}
+}
+
+// heartbeat refreshes this node's heartbeat until ctx ends.
+func (e *Engine) heartbeat(ctx context.Context, done chan<- struct{}) {
+	defer close(done)
+	t := time.NewTicker(e.cfg.HeartbeatInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := e.tr.Heartbeat(ctx); err != nil {
+				e.log.Warn("heartbeat failed", "err", err)
+			}
 		}
 	}
 }

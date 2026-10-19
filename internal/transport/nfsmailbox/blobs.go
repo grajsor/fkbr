@@ -99,7 +99,11 @@ func (m *Mailbox) PruneBlobs(_ context.Context, maxAge time.Duration) error {
 	if err != nil {
 		return err
 	}
-	cutoff := time.Now().Add(-maxAge)
+	now, err := m.serverNow() // see Prune
+	if err != nil {
+		return fmt.Errorf("nfsmailbox: probe: %w", err)
+	}
+	cutoff := now.Add(-maxAge)
 	var errs []error
 	for _, k := range kinds {
 		ids, err := os.ReadDir(m.path("blobs", k.Name()))

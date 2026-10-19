@@ -315,16 +315,27 @@ func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	if err != nil {
 		return err
 	}
-	cutoff := time.Now().Add(-maxAge)
+	now, err := m.serverNow() // job.json's mtime is server time; see Prune
+	if err != nil {
+		return fmt.Errorf("nfsmailbox: probe: %w", err)
+	}
 	var errs []error
 	for _, de := range des {
+		fi, err := os.Stat(m.path("jobs", de.Name(), "job.json"))
+		if err != nil {
+			continue
+		}
+		age := now.Sub(fi.ModTime())
+		if age < maxAge {
+			continue
+		}
 		j, err := m.GetJob(ctx, de.Name())
-		if err != nil || j.Created.After(cutoff) {
+		if err != nil {
 			continue
 		}
 		// A job nobody ever picked up has no statuses; give it a day.
 		if len(j.Participants) == 0 {
-			if time.Since(j.Created) > unstartedJobAge {
+			if age > unstartedJobAge {
 				errs = append(errs, os.RemoveAll(m.path("jobs", de.Name())))
 			}
 			continue
