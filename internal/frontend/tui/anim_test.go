@@ -8,6 +8,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"fkbr/internal/api"
 )
 
 func TestNameXEasing(t *testing.T) {
@@ -128,31 +130,51 @@ func TestSpinnerSequence(t *testing.T) {
 	}
 }
 
-// The spinner is the last cell of the screen; the key bar keeps its width.
-func TestSpinnerInKeyBar(t *testing.T) {
+// The spinner replaces the bottom-right corner of the jobs panel, or of
+// the right pane while there are no jobs; the key bar has no spinner.
+func TestSpinnerInCorner(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(prev)
 	h := newHarness(t)
-	for _, w := range []int{120, 80, 41} {
-		h.send(tea.WindowSizeMsg{Width: w, Height: 24})
-		for f := 0; f < 12; f++ {
-			h.m.spin = f
-			bar := h.m.keyBar()
-			if lw := lipgloss.Width(bar); lw != w {
-				t.Fatalf("width %d frame %d: key bar %d wide", w, f, lw)
+	h.send(tea.WindowSizeMsg{Width: 80, Height: 24})
+	corner := func() (row int, last string) {
+		lines := strings.Split(h.m.View(), "\n")
+		for i, l := range lines {
+			if c := unpainted(l); c >= 0 {
+				t.Fatalf("line %d column %d unpainted", i, c)
 			}
-			if c := unpainted(bar); c >= 0 {
-				t.Fatalf("width %d frame %d: column %d unpainted", w, f, c)
-			}
-			plain := []rune(stripANSI(bar))
-			if got := string(plain[len(plain)-1]); got != spinChar(f) {
-				t.Fatalf("width %d frame %d: last cell %q, want %q", w, f, got, spinChar(f))
+			if w := lipgloss.Width(l); w != 80 {
+				t.Fatalf("line %d is %d wide", i, w)
 			}
 		}
+		for i := len(lines) - 1; i >= 0; i-- {
+			p := []rune(stripANSI(lines[i]))
+			if s := string(p[len(p)-1]); s == spinChar(h.m.spin) {
+				return i, s
+			}
+		}
+		return -1, ""
 	}
-	if !strings.Contains(h.m.keyBar(), h.m.st.spinner.Render(spinChar(h.m.spin))) {
-		t.Error("spinner not in its own (yellow) style")
+	h.m.spin = 3 // "|"
+	row, _ := corner()
+	lines := strings.Split(stripANSI(h.m.View()), "\n")
+	if row < 0 || !(strings.HasPrefix(lines[row], "└") || strings.HasPrefix(lines[row], "╚")) {
+		t.Fatalf("no jobs: spinner not on the panes' bottom line (row %d)", row)
+	}
+	if strings.Contains(lines[len(lines)-1], "|") {
+		t.Error("spinner still in the key bar")
+	}
+	h.send(eventMsg{api.Event{Type: api.EventJob, JobID: "j1", Job: &api.Job{ID: "j1", State: api.JobDone,
+		Request: api.TransferRequest{SrcNode: "master", DstNodes: []string{"s1"}}}}})
+	h.m.spin = 5 // "<"
+	row, _ = corner()
+	lines = strings.Split(stripANSI(h.m.View()), "\n")
+	if row != len(lines)-3 { // jobs panel bottom, above status and key bar
+		t.Fatalf("with jobs: spinner on row %d, want %d", row, len(lines)-3)
+	}
+	if !strings.Contains(h.m.View(), h.m.st.spinner.Render("<")) {
+		t.Error("spinner not in its yellow style")
 	}
 	h.m.spin = 0
 	h.m.Update(spinMsg{})

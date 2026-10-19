@@ -77,9 +77,10 @@ func nameX(phase animPhase, elapsed time.Duration, home, width, n int) int {
 	return home
 }
 
-// A small spinner in the bottom right corner turns all the time, so the
-// screen looks alive even when nothing moves: - > ) | ( < - and back. It
-// redraws only the bottom line, 4 times a second.
+// A small spinner replaces the bottom-right corner of the jobs panel (of
+// the right pane while there are no jobs) and turns all the time, so the
+// screen looks alive even when nothing moves: - > ) | ( < - and back,
+// 4 times a second.
 var (
 	spinFrames = []string{"-", ">", ")", "|", "(", "<", "-"}
 	spinEvery  = 250 * time.Millisecond

@@ -83,7 +83,7 @@ func newStyles() *styles {
 		keyLabel:   on(cBar).Foreground(cBarText),
 		status:     on(cInk).Foreground(cMarked),
 		statusErr:  on(cInk).Foreground(cErr),
-		spinner:    on(cInk).Foreground(cMarked).Bold(true),
+		spinner:    on(cPanel).Foreground(cMarked).Bold(true),
 
 		dialog: on(cSurface).Foreground(cSurfaceText).Padding(0, 1).
 			Border(lipgloss.DoubleBorder()).BorderForeground(cSurfaceTitle).BorderBackground(cSurface),
@@ -160,6 +160,21 @@ func (st *styles) frame(active bool, title, content string, inner int) string {
 	body := st.panel.Border(b, false, true, true, true).
 		BorderForeground(fg).BorderBackground(cPanel).Width(inner).Render(content)
 	return top + "\n" + body
+}
+
+// withCorner replaces the bottom-right corner of a box made by frame with
+// s in the spinner style.
+func (st *styles) withCorner(box string, active bool, s string) string {
+	b := st.border
+	if active {
+		b = st.borderActive
+	}
+	lines := strings.Split(box, "\n")
+	last := lines[len(lines)-1]
+	if i := strings.LastIndex(last, b.BottomRight); i >= 0 {
+		lines[len(lines)-1] = last[:i] + st.spinner.Render(s) + last[i+len(b.BottomRight):]
+	}
+	return strings.Join(lines, "\n")
 }
 
 // padLines pads every line of s to the widest one with fill. lipgloss's

@@ -996,6 +996,9 @@ func (m *model) renderPanes(h int) string {
 			title += " (offline)"
 		}
 		boxes[i] = m.st.frame(active, title, strings.Join(lines, "\n"), inner)
+		if i == 1 && m.jobsHeight() == 0 { // no jobs panel: the spinner sits here
+			boxes[i] = m.st.withCorner(boxes[i], active, spinChar(m.spin))
+		}
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, boxes[0], boxes[1])
 }
@@ -1037,7 +1040,8 @@ func (m *model) renderJobs(h int) string {
 	for len(lines) < n {
 		lines = append(lines, m.st.panel.Render(strings.Repeat(" ", inner)))
 	}
-	return m.st.frame(m.jobsFocus, "jobs (F9)", strings.Join(lines, "\n"), inner)
+	box := m.st.frame(m.jobsFocus, "jobs (F9)", strings.Join(lines, "\n"), inner)
+	return m.st.withCorner(box, m.jobsFocus, spinChar(m.spin))
 }
 
 func (m *model) keyBar() string {
@@ -1045,21 +1049,14 @@ func (m *model) keyBar() string {
 		{"1", "Help"}, {"2", "Nodes"}, {"3", "View"}, {"4", "Sync"}, {"5", "Copy"},
 		{"6", "Move"}, {"7", "Mkdir"}, {"8", "Delete"}, {"9", "Jobs"}, {"10", "Quit"},
 	}
-	// The last column is the spinner's; the last key gives way if needed.
-	room := m.width - 1
 	cell := max(4, m.width/len(keys))
 	var b strings.Builder
-	for i, k := range keys {
-		w := cell - len(k.n)
-		if i == len(keys)-1 && cell*len(keys) > room {
-			w -= cell*len(keys) - room
-		}
+	for _, k := range keys {
 		b.WriteString(m.st.keyNum.Render(k.n))
-		b.WriteString(m.st.keyLabel.Render(fit(k.label, w)))
+		b.WriteString(m.st.keyLabel.Render(fit(k.label, cell-len(k.n))))
 	}
-	if rest := room - cell*len(keys); rest > 0 {
+	if rest := m.width - cell*len(keys); rest > 0 {
 		b.WriteString(m.st.keyNum.Render(strings.Repeat(" ", rest)))
 	}
-	b.WriteString(m.st.spinner.Render(spinChar(m.spin)))
 	return b.String()
 }

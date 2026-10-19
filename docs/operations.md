@@ -102,8 +102,9 @@ a daemon for a machine that should stay a member while nobody is logged
 in.
 
 Every 30 s the name in the top left slides out and back in, and a small
-yellow spinner turns in the bottom right corner, so you can tell at a
-glance that the TUI is alive. `q` quits, like F10.
+yellow spinner turns in the bottom-right corner of the jobs panel (of the
+right pane while there are no jobs), so you can tell at a glance that the
+TUI is alive. `q` quits, like F10.
 
 The TUI writes this node's log to `/tmp/fkbr-<uid>-<node>/node.log` (F1
 shows the path; `-v` adds debug lines). It stays after you quit, so a
