@@ -119,11 +119,18 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 	status.put(ctx, true)
 	log := e.log.With("job", id)
 	wait := newWaitLog(log, "waiting for chunk", waitLogAfter, waitLogEvery)
+	ride := &rideOut{log: log}
 	for {
 		raw, err := e.st.ChunkMeta(ctx, src, id, next)
+		if err != nil && !errors.Is(err, fs.ErrNotExist) && ride.retry(ctx, err) {
+			continue
+		}
 		if errors.Is(err, fs.ErrNotExist) {
 			j, err := e.st.GetJob(ctx, id)
 			if err != nil {
+				if ride.retry(ctx, err) {
+					continue
+				}
 				return err
 			}
 			total := "unknown yet"
@@ -165,13 +172,25 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 			return fmt.Errorf("chunk %d meta: %w", next, err)
 		}
 		start := time.Now()
+		files, bytes := status.st.Files, status.st.Bytes
 		if err := e.applyChunk(ctx, src, id, &meta, rcv, status); err != nil {
+			if ride.retry(ctx, err) {
+				status.st.Files, status.st.Bytes = files, bytes // applied again from the start
+				continue
+			}
 			return fmt.Errorf("chunk %d: %w", next, err)
 		}
+		ride.ok()
 		log.Info("chunk applied", "chunk", next, "entries", meta.Entries, "stored", size(meta.Size), "took", time.Since(start).Round(time.Millisecond))
 		next++
-		if err := e.st.SetAcked(ctx, src, id, e.Self(), next); err != nil {
-			return err
+		for {
+			err := e.st.SetAcked(ctx, src, id, e.Self(), next)
+			if err == nil {
+				break
+			}
+			if !ride.retry(ctx, err) {
+				return err
+			}
 		}
 		status.st.Chunks = next
 		status.put(ctx, false)

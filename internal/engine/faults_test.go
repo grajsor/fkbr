@@ -28,6 +28,17 @@ type faultStore struct {
 	corruptSeq int // chunk seq returned with one byte flipped (-1: never)
 	// corruptOnce limits the corruption to the first read (transient).
 	corruptOnce, corrupted bool
+	// Soft-mount style I/O errors: the write of chunk eioWriteAt fails once;
+	// reading chunk eioReadSeq fails eioReads times (-1: always).
+	eioWriteAt, eioReadSeq, eioReads int
+	eioWriteHit                      bool
+	eioReadHits                      int
+}
+
+type eioWriter struct{ transport.ChunkWriter }
+
+func (w eioWriter) Write([]byte) (int, error) {
+	return 0, &os.PathError{Op: "write", Path: "chunk", Err: syscall.EIO}
 }
 
 type noSpaceWriter struct{ transport.ChunkWriter }
@@ -43,6 +54,10 @@ func (f *faultStore) CreateChunk(ctx context.Context, id string, seq int) (trans
 	if err == nil && seq == f.noSpaceAt && !f.noSpaceHit {
 		f.noSpaceHit = true
 		return noSpaceWriter{w}, nil
+	}
+	if err == nil && seq == f.eioWriteAt && !f.eioWriteHit {
+		f.eioWriteHit = true
+		return eioWriter{w}, nil
 	}
 	return w, err
 }
@@ -62,6 +77,13 @@ func (r *flipReader) Read(p []byte) (int, error) {
 }
 
 func (f *faultStore) OpenChunk(ctx context.Context, src, id string, seq int) (io.ReadCloser, error) {
+	f.mu.Lock()
+	if seq == f.eioReadSeq && (f.eioReads < 0 || f.eioReadHits < f.eioReads) {
+		f.eioReadHits++
+		f.mu.Unlock()
+		return nil, &os.PathError{Op: "open", Path: "chunk", Err: syscall.EIO}
+	}
+	f.mu.Unlock()
 	rc, err := f.Mailbox.OpenChunk(ctx, src, id, seq)
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -82,7 +104,7 @@ func buildFaulty(t *testing.T, cfg *config.Config) (*Engine, *faultStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := &faultStore{Mailbox: mb, noSpaceAt: -1, corruptSeq: -1}
+	fs := &faultStore{Mailbox: mb, noSpaceAt: -1, corruptSeq: -1, eioWriteAt: -1, eioReadSeq: -1}
 	e := New(cfg, fsys, mb, fs, Options{Version: "test"})
 	t.Cleanup(func() { e.Close() })
 	return e, fs
@@ -318,5 +340,80 @@ func TestPruneAtStartup(t *testing.T) {
 	runWorker(t, a)
 	if _, err := a.Job(context.Background(), old.ID); !errors.Is(err, api.ErrUnknownJob) {
 		t.Fatalf("old job survived startup prune: %v", err)
+	}
+}
+
+// shortTransient makes I/O error retries fast for a test.
+func shortTransient(t *testing.T, budget time.Duration) {
+	t.Helper()
+	w, b := transientWait, transientBudget
+	transientWait, transientBudget = 20*time.Millisecond, budget
+	t.Cleanup(func() { transientWait, transientBudget = w, b })
+}
+
+// A soft-mounted share returns EIO while the server is away. The source
+// pauses and resumes instead of failing the job.
+func TestSourceSurvivesIOError(t *testing.T) {
+	shortTransient(t, 10*time.Second)
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	master, fs := buildFaulty(t, mcfg)
+	fs.eioWriteAt = 2
+	s1, sroot := node(t, share, "s1")
+	makeTree(t, mcfg.Roots[0].Path, 10, 600<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, master, id, 30*time.Second); j.State != api.JobDone {
+		t.Fatalf("state %s: %+v", j.State, j.Participants)
+	}
+	if !fs.eioWriteHit {
+		t.Fatal("fault never injected")
+	}
+	sameTree(t, filepath.Join(mcfg.Roots[0].Path, "tree"), filepath.Join(sroot, "tree"))
+}
+
+// The target waits and reads the chunk again.
+func TestTargetSurvivesIOErrors(t *testing.T) {
+	shortTransient(t, 10*time.Second)
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	scfg := nodeCfg(t, share, "s1")
+	s1, fs := buildFaulty(t, scfg)
+	fs.eioReadSeq, fs.eioReads = 1, 3
+	makeTree(t, mroot, 5, 300<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, _ := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if j := waitJob(t, master, id, 30*time.Second); j.State != api.JobDone {
+		t.Fatalf("state %s: %+v", j.State, j.Participants)
+	}
+	if fs.eioReadHits != 3 {
+		t.Fatalf("faults injected: %d", fs.eioReadHits)
+	}
+	sameTree(t, filepath.Join(mroot, "tree"), filepath.Join(scfg.Roots[0].Path, "tree"))
+}
+
+// A share that stays broken fails the job once the budget is spent.
+func TestIOErrorsGiveUp(t *testing.T) {
+	shortTransient(t, 300*time.Millisecond)
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	scfg := nodeCfg(t, share, "s1")
+	s1, fs := buildFaulty(t, scfg)
+	fs.eioReadSeq, fs.eioReads = 0, -1
+	makeTree(t, mroot, 3, 100<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, _ := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	j := waitJob(t, master, id, 30*time.Second)
+	if j.State != api.JobFailed {
+		t.Fatalf("state %s", j.State)
+	}
+	if st := ownStatus(j, "s1", api.RoleTarget); st == nil || !strings.Contains(st.Error, "input/output error") {
+		t.Fatalf("target status: %+v", st)
 	}
 }

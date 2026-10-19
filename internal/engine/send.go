@@ -133,8 +133,13 @@ func (s *sender) run(ctx context.Context) error {
 	}
 
 	total := s.job.TotalChunks
+	ride := &rideOut{log: s.log}
 	for produced := total > 0; !produced; {
 		n, err := s.produce(ctx)
+		if err != nil && !isNoSpace(err) && ride.retry(ctx, err) {
+			s.resumeFrom = s.status.st.Chunks // regenerate, keep what is staged
+			continue
+		}
 		if isNoSpace(err) {
 			// The share is smaller than the configured quotas. Wait for
 			// targets to consume, then regenerate from the start without
@@ -148,9 +153,16 @@ func (s *sender) run(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if err := e.st.SetComplete(ctx, s.job.ID, n); err != nil {
-			return err
+		for {
+			err := e.st.SetComplete(ctx, s.job.ID, n)
+			if err == nil {
+				break
+			}
+			if !ride.retry(ctx, err) {
+				return err
+			}
 		}
+		ride.ok()
 		total, produced = n, true
 	}
 	s.status.st.Chunks = total
@@ -160,17 +172,20 @@ func (s *sender) run(ctx context.Context) error {
 	wait := newWaitLog(s.log, "waiting for targets", waitLogAfter, waitLogEvery)
 	for {
 		done, err := s.gc(ctx, total)
+		if err == nil && !done {
+			if err = s.check(ctx, true); err == nil {
+				err = s.detachLaggards(ctx, total)
+			}
+		}
+		if err != nil && ride.retry(ctx, err) {
+			continue
+		}
 		if err != nil || done {
 			wait.done()
 			return err
 		}
+		ride.ok()
 		wait.tick("acked", s.ackSummary(total))
-		if err := s.check(ctx, true); err != nil {
-			return err
-		}
-		if err := s.detachLaggards(ctx, total); err != nil {
-			return err
-		}
 		if err := e.sleep(ctx); err != nil {
 			return err
 		}

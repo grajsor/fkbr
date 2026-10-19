@@ -145,8 +145,16 @@ Mount the share on every host with short caching:
 nfs-server:/export/transfer  /mnt/transfer  nfs  rw,hard,actimeo=1,lookupcache=positive  0 0
 ```
 
-`check` warns about `soft` mounts, long `acdirmin` and a missing
-`lookupcache=positive`.
+You often can't choose the options, and fkbr copes without them. With
+long caching it refreshes directories before reading them and waits for
+files by listing; `check` then reports the caching as information only.
+
+`soft` mounts are the one thing to raise with whoever owns the mount:
+while the NFS server is unreachable, calls fail with I/O errors instead of
+waiting, and other programs on the mount can lose writes. fkbr transfers
+ride this out: on `EIO`, `ETIMEDOUT` or `ESTALE` the source or target
+waits and retries, for up to 3 minutes of consecutive errors, and the log
+shows when it started and recovered. `check` warns about `soft`.
 
 ## Commands
 
