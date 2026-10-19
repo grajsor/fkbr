@@ -47,6 +47,7 @@ type styles struct {
 	// On the panels.
 	panel, file, dir, marked, dim, warn, err lipgloss.Style
 	cursor, cursorMarked                     lipgloss.Style
+	cursorBase                               lipgloss.Style // cursor before pulsing
 	rule, title, titleActive                 lipgloss.Style
 	border, borderActive                     lipgloss.Border
 	borderFg, borderActiveFg                 lipgloss.TerminalColor
@@ -93,6 +94,7 @@ func newStyles() *styles {
 		inputCursor: on(cAccent).Foreground(cAccentText),
 	}
 	st.ascii = lipgloss.ColorProfile() == termenv.Ascii
+	st.cursorBase = st.cursor
 	return st
 }
 

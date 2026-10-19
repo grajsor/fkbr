@@ -515,3 +515,23 @@ func TestHelpShowsLogPath(t *testing.T) {
 		t.Fatalf("help without the log path: %T", h.m.dlg)
 	}
 }
+
+func TestQQuits(t *testing.T) {
+	h := newHarness(t)
+	if _, cmd := h.m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}); cmd == nil {
+		t.Fatal("q in the panes did not quit")
+	}
+	h.send(eventMsg{api.Event{Type: api.EventJob, JobID: "j1", Job: &api.Job{ID: "j1", State: api.JobDone,
+		Request: api.TransferRequest{SrcNode: "master", DstNodes: []string{"s1"}}}}})
+	h.key("f9")
+	if _, cmd := h.m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")}); cmd == nil {
+		t.Fatal("q in the jobs panel did not quit")
+	}
+	// In a dialog, q keeps its meaning: it closes the viewer.
+	h.m.jobsFocus = false
+	h.key("f1")
+	h.key("q")
+	if h.m.dlg != nil {
+		t.Fatal("q did not close the help")
+	}
+}

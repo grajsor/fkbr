@@ -304,7 +304,7 @@ Jobs
   F9   focus the jobs panel: ↑↓ select, Enter details,
        c cancel, u catch up detached targets, Esc back
 
-  F1 help · F10 or Ctrl+C quit
+  F1 help · F10, q or Ctrl+C quit
 
 Jobs run in the node daemons and keep running after you quit.`)
 

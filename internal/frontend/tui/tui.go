@@ -77,13 +77,15 @@ type model struct {
 
 	runsNode bool
 	logPath  string
-	// Header animation (anim.go).
-	anim      animPhase
-	animAt    time.Time
-	jobsFocus bool
-	jobCursor int
-	moves     map[string]moveInfo
-	events    <-chan api.Event
+	// Header animation and cursor pulse (anim.go).
+	anim       animPhase
+	animAt     time.Time
+	pulse      bool
+	pulseStart time.Time
+	jobsFocus  bool
+	jobCursor  int
+	moves      map[string]moveInfo
+	events     <-chan api.Event
 }
 
 func newModel(ctx context.Context, c api.Client) *model {
@@ -134,7 +136,12 @@ type (
 type target struct{ node, root string }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.loadNodes(), m.subscribe(), animTick(animEvery))
+	cmds := []tea.Cmd{m.loadNodes(), m.subscribe(), animTick(animEvery)}
+	if pulseEnabled(lipgloss.ColorProfile()) {
+		m.pulse, m.pulseStart = true, time.Now()
+		cmds = append(cmds, pulseTick())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) loadNodes() tea.Cmd {
@@ -314,6 +321,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case animMsg:
 		return m, m.animate()
 
+	case pulseMsg:
+		return m, pulseTick()
+
 	case viewMsg:
 		if msg.err != nil {
 			m.setStatus("view: "+msg.err.Error(), true)
@@ -454,7 +464,7 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	p := m.panes[m.active]
 	h := m.paneHeight()
 	switch msg.String() {
-	case "f10":
+	case "f10", "q":
 		return m.quit()
 	case "tab":
 		m.active = 1 - m.active
@@ -784,7 +794,7 @@ func (m *model) jobsKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc", "f9", "tab":
 		m.jobsFocus = false
-	case "f10":
+	case "f10", "q":
 		return m.quit()
 	case "up", "k":
 		m.jobCursor = max(0, m.jobCursor-1)
@@ -897,6 +907,9 @@ func jobLine(j *api.Job, width int) string {
 
 // View lays out header, panes (or a dialog), jobs, status and key bar.
 func (m *model) View() string {
+	if m.pulse {
+		m.st.cursor = m.st.cursorBase.Background(lipgloss.Color(pulseColour(time.Since(m.pulseStart))))
+	}
 	if m.width < 40 || m.height < 12 {
 		return "terminal too small for " + product.Name + " (need 40x12)"
 	}

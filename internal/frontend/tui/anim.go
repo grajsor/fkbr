@@ -1,10 +1,12 @@
 package tui
 
 import (
+	"fmt"
 	"math"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/muesli/termenv"
 )
 
 // The name in the header slides out to the left every animEvery and back
@@ -75,4 +77,44 @@ func nameX(phase animPhase, elapsed time.Duration, home, width, n int) int {
 		return home + int(math.Round(float64(width-home)*u*u*u)) // ease out
 	}
 	return home
+}
+
+// The cursor bar breathes slowly between two shades of the bar green, so
+// the screen looks alive even when nothing moves. It needs 4 redraws a
+// second, of which the terminal gets only the cursor lines (measured on
+// the Pi: under 1% of a core and about 2 KB/s of terminal output). With 16
+// colours or none there is no shade in between, so the bar stays still and
+// no timer runs.
+var (
+	pulseDark   = "#98c1a2"
+	pulseLight  = "#c8e0cd"
+	pulsePeriod = 4 * time.Second
+	pulseFrame  = 250 * time.Millisecond
+)
+
+type pulseMsg struct{}
+
+func pulseTick() tea.Cmd {
+	return tea.Tick(pulseFrame, func(time.Time) tea.Msg { return pulseMsg{} })
+}
+
+func pulseEnabled(p termenv.Profile) bool {
+	return p == termenv.TrueColor || p == termenv.ANSI256
+}
+
+// pulseColour is the bar colour at elapsed time into the pulse: dark at
+// the start of each breath, light half way through.
+func pulseColour(elapsed time.Duration) string {
+	f := math.Mod(float64(elapsed)/float64(pulsePeriod), 1)
+	s := (1 - math.Cos(2*math.Pi*f)) / 2
+	return mixHex(pulseDark, pulseLight, s)
+}
+
+// mixHex blends two #rrggbb colours; s=0 gives a, s=1 gives b.
+func mixHex(a, b string, s float64) string {
+	var ar, ag, ab, br, bg, bb int
+	fmt.Sscanf(a, "#%02x%02x%02x", &ar, &ag, &ab)
+	fmt.Sscanf(b, "#%02x%02x%02x", &br, &bg, &bb)
+	mix := func(x, y int) int { return int(math.Round(float64(x) + (float64(y)-float64(x))*s)) }
+	return fmt.Sprintf("#%02x%02x%02x", mix(ar, br), mix(ag, bg), mix(ab, bb))
 }

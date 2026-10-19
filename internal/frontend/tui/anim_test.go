@@ -115,3 +115,39 @@ func TestAnimationCycle(t *testing.T) {
 		t.Fatalf("in did not end idle: %d", h.m.anim)
 	}
 }
+
+func TestPulseColour(t *testing.T) {
+	if got := pulseColour(0); got != pulseDark {
+		t.Errorf("start of a breath: %s, want %s", got, pulseDark)
+	}
+	if got := pulseColour(pulsePeriod / 2); got != pulseLight {
+		t.Errorf("middle of a breath: %s, want %s", got, pulseLight)
+	}
+	if a, b := pulseColour(pulsePeriod/4), pulseColour(pulsePeriod+pulsePeriod/4); a != b {
+		t.Errorf("not periodic: %s vs %s", a, b)
+	}
+	for p, want := range map[termenv.Profile]bool{termenv.TrueColor: true, termenv.ANSI256: true, termenv.ANSI: false, termenv.Ascii: false} {
+		if got := pulseEnabled(p); got != want {
+			t.Errorf("%s: pulse %v, want %v", p.Name(), got, want)
+		}
+	}
+}
+
+// The pulsing cursor is drawn in the colour of the moment.
+func TestCursorPulses(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	defer lipgloss.SetColorProfile(prev)
+	h := newHarness(t)
+	h.m.pulse = true
+	h.m.pulseStart = time.Now()
+	dark := h.m.View()
+	h.m.pulseStart = time.Now().Add(-pulsePeriod / 2)
+	light := h.m.View()
+	if dark == light {
+		t.Fatal("cursor colour does not change over a breath")
+	}
+	if !strings.Contains(light, "48;2;") || unpainted(strings.Split(light, "\n")[2]) >= 0 {
+		t.Error("pulsing cursor line not fully painted")
+	}
+}
