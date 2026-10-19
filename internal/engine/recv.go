@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"slices"
+	"time"
 
 	"fkbr/internal/api"
 	"fkbr/internal/bundle"
@@ -52,6 +53,8 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 		return status.finish(ctx, api.JobFailed, err)
 	}
 
+	log := e.log.With("job", id)
+	log.Info("receiving", "from", req.SrcNode, "into", req.DstRoot+"/"+req.DstDir, "resume_at_chunk", status.st.Chunks)
 	if job.IsDetached(e.Self()) {
 		err = errDetached // dropped while this node was down
 	} else {
@@ -68,6 +71,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 		return ctx.Err() // keep staging; resume on restart
 	case errors.Is(err, errDetached):
 		// An orderly outcome, not a failure of this request.
+		log.Warn("detached by the source; nothing installed", "after_chunks", status.st.Chunks)
 		rcv.Abort()
 		status.finish(ctx, api.JobDetached, fmt.Errorf("%w; run '%s catchup %s'", err, product.Name, id))
 		return nil
@@ -81,10 +85,13 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 
 	status.st.Phase = "installing"
 	status.put(ctx, true)
+	start := time.Now()
 	res, err := rcv.Commit()
 	if err != nil {
 		return status.finish(ctx, api.JobFailed, fmt.Errorf("install: %w", err))
 	}
+	log.Info("installed", "files", res.Files, "dirs", res.Dirs, "symlinks", res.Symlinks, "bytes", size(res.Bytes),
+		"skipped", res.Skipped, "errors", res.Errors, "took", time.Since(start).Round(time.Millisecond))
 	st := &status.st
 	st.Files = res.Files + res.Symlinks + res.Dirs
 	st.Bytes = res.Bytes
@@ -110,6 +117,8 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 	}
 	status.st.Phase = "receiving"
 	status.put(ctx, true)
+	log := e.log.With("job", id)
+	wait := newWaitLog(log, "waiting for chunk", waitLogAfter, waitLogEvery)
 	for {
 		raw, err := e.st.ChunkMeta(ctx, src, id, next)
 		if errors.Is(err, fs.ErrNotExist) {
@@ -117,6 +126,11 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 			if err != nil {
 				return err
 			}
+			total := "unknown yet"
+			if j.TotalChunks > 0 {
+				total = fmt.Sprint(j.TotalChunks)
+			}
+			wait.tick("chunk", next, "of", total, "source", src, "source_state", roleState(j, api.RoleSource, ""))
 			switch {
 			case j.Cancelled:
 				return errCancelled
@@ -144,13 +158,17 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 		if err != nil {
 			return err
 		}
+		wait.done("chunk", next)
+		wait = newWaitLog(log, "waiting for chunk", waitLogAfter, waitLogEvery)
 		var meta bundle.ChunkMeta
 		if err := json.Unmarshal(raw, &meta); err != nil {
 			return fmt.Errorf("chunk %d meta: %w", next, err)
 		}
+		start := time.Now()
 		if err := e.applyChunk(ctx, src, id, &meta, rcv, status); err != nil {
 			return fmt.Errorf("chunk %d: %w", next, err)
 		}
+		log.Info("chunk applied", "chunk", next, "entries", meta.Entries, "stored", size(meta.Size), "took", time.Since(start).Round(time.Millisecond))
 		next++
 		if err := e.st.SetAcked(ctx, src, id, e.Self(), next); err != nil {
 			return err

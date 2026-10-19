@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"path"
 	"strings"
 	"syscall"
@@ -38,6 +39,11 @@ type sender struct {
 	progress  map[string]time.Time
 	online    map[string]bool
 	lastNodes time.Time
+
+	log     *slog.Logger
+	start   time.Time
+	stored  int64 // bytes staged on the share by this run
+	waiting *waitLog
 }
 
 func (e *Engine) runSend(ctx context.Context, id string) error {
@@ -48,6 +54,7 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	s := &sender{
 		e: e, job: job, status: e.newStatus(id, api.RoleSource),
 		detached: map[string]bool{}, acks: map[string]int{}, progress: map[string]time.Time{},
+		log: e.log.With("job", id), start: time.Now(),
 	}
 	now := time.Now()
 	for _, d := range job.Detached {
@@ -67,6 +74,13 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	if job.Request.SrcNode != e.Self() {
 		return s.status.finish(ctx, api.JobFailed, fmt.Errorf("job source is %s, not %s", job.Request.SrcNode, e.Self()))
 	}
+	req := job.Request
+	what := summary(req.Paths, 3)
+	if req.SyncPlan != "" {
+		what = fmt.Sprintf("%s (sync, %d entries)", req.BaseDir, req.PathsCount)
+	}
+	s.log.Info("sending", "paths", what, "from", req.SrcRoot, "to", strings.Join(req.DstNodes, ","),
+		"dest", req.DstRoot+"/"+req.DstDir, "zstd", req.Compress, "resume_after", s.resumeFrom)
 	err = s.run(ctx)
 	switch {
 	case ctx.Err() != nil:
@@ -81,6 +95,10 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	if err := e.st.RemoveJobData(ctx, id); err != nil {
 		e.log.Warn("removing staged data", "job", id, "err", err)
 	}
+	took := time.Since(s.start)
+	st := s.status.st
+	s.log.Info("send done", "files", st.Files, "bytes", size(st.Bytes), "chunks", st.Chunks, "stored", size(s.stored),
+		"targets", summary(s.active(), 8), "detached", len(s.detached), "took", took.Round(time.Millisecond), "rate", rate(st.Bytes, took))
 	return s.status.finish(ctx, api.JobDone, nil)
 }
 
@@ -138,11 +156,15 @@ func (s *sender) run(ctx context.Context) error {
 	s.status.st.Chunks = total
 	s.status.st.Phase = "waiting for targets"
 	s.status.put(ctx, true)
+	s.log.Info("all chunks staged; waiting for targets", "chunks", total)
+	wait := newWaitLog(s.log, "waiting for targets", waitLogAfter, waitLogEvery)
 	for {
 		done, err := s.gc(ctx, total)
 		if err != nil || done {
+			wait.done()
 			return err
 		}
+		wait.tick("acked", s.ackSummary(total))
 		if err := s.check(ctx, true); err != nil {
 			return err
 		}
@@ -317,6 +339,7 @@ func (s *sender) gc(ctx context.Context, total int) (bool, error) {
 		if n > s.acks[d] {
 			s.acks[d] = n
 			s.progress[d] = now
+			s.log.Info("target acked", "target", d, "chunks", n)
 		}
 		if minAck < 0 || n < minAck {
 			minAck = n
@@ -334,6 +357,19 @@ func (s *sender) gc(ctx context.Context, total int) (bool, error) {
 // or waiting for the last acks). A target that is holding things up and
 // has made no progress for detach_after, or is offline, is dropped so the
 // others can finish. The last active target is never dropped.
+// ackSummary lists each active target's acked chunks, e.g. "a=3/4 b=1/4".
+func (s *sender) ackSummary(total int) string {
+	var parts []string
+	for _, d := range s.active() {
+		if total >= 0 {
+			parts = append(parts, fmt.Sprintf("%s=%d/%d", d, s.acks[d], total))
+		} else {
+			parts = append(parts, fmt.Sprintf("%s=%d", d, s.acks[d]))
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
 func (s *sender) detachLaggards(ctx context.Context, total int) error {
 	active := s.active()
 	if len(active) < 2 {
@@ -391,7 +427,7 @@ func (s *sender) detach(ctx context.Context, node, reason string) error {
 	s.detached[node] = true
 	s.status.note("detached %s after %d chunks: %s", node, d.Chunks, reason)
 	s.status.put(ctx, true)
-	s.e.log.Warn("target detached", "job", s.job.ID, "node", node, "reason", reason)
+	s.log.Warn("target detached", "target", node, "after_chunks", d.Chunks, "reason", reason)
 	return nil
 }
 
@@ -428,6 +464,7 @@ func (s *sender) waitAfterNoSpace(ctx context.Context, cause error) error {
 func (s *sender) waitForSpace(ctx context.Context) error {
 	t := s.e.cfg.Transfer
 	waiting := false
+	wait := newWaitLog(s.log, "waiting for staging space", waitLogAfter, waitLogEvery)
 	for {
 		if _, err := s.gc(ctx, -1); err != nil {
 			return err
@@ -441,6 +478,7 @@ func (s *sender) waitForSpace(ctx context.Context) error {
 				s.status.st.Phase = "sending"
 				s.status.put(ctx, true)
 			}
+			wait.done()
 			return nil
 		}
 		if !waiting {
@@ -448,6 +486,7 @@ func (s *sender) waitForSpace(ctx context.Context) error {
 			s.status.st.Phase = "waiting for staging space (targets consuming)"
 			s.status.put(ctx, true)
 		}
+		wait.tick("staged_job", size(jobBytes), "staged_share", size(total), "acked", s.ackSummary(-1))
 		if err := s.check(ctx, true); err != nil {
 			return err
 		}
@@ -508,6 +547,13 @@ func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
 	s.status.st.Chunks = meta.Seq + 1
 	s.status.st.Files, s.status.st.Bytes = k.w.Files, k.w.Bytes
 	s.status.put(k.ctx, true)
+	s.stored += meta.Size
+	ratio := "-"
+	if meta.Size > 0 && meta.Raw > 0 {
+		ratio = fmt.Sprintf("%.2f", float64(meta.Raw)/float64(meta.Size))
+	}
+	s.log.Info("chunk staged", "chunk", meta.Seq, "entries", meta.Entries, "raw", size(meta.Raw), "stored", size(meta.Size),
+		"ratio", ratio, "files_so_far", k.w.Files, "bytes_so_far", size(k.w.Bytes))
 	return nil
 }
 

@@ -48,6 +48,8 @@ type ChunkMeta struct {
 	// Bad lists files whose content changed or failed while being read.
 	// Their data in the bundle is unusable and receivers must drop them.
 	Bad []string `json:"bad,omitempty"`
+	// Raw is the chunk's size before compression (for logs; optional).
+	Raw int64 `json:"raw,omitempty"`
 }
 
 // Sink stores chunks. Create is called when a chunk starts; the returned
@@ -155,6 +157,7 @@ func (w *Writer) closeChunk() error {
 		return err
 	}
 	c.meta.Size = c.size.n
+	c.meta.Raw = c.raw.n
 	c.meta.SHA256 = hex.EncodeToString(c.hash.Sum(nil))
 	w.seq++
 	return w.sink.Commit(c.meta)

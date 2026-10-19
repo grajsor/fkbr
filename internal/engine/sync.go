@@ -71,10 +71,13 @@ func (e *Engine) serveScan(ctx context.Context, m *transport.Message) error {
 		seq++
 		return e.tr.Reply(ctx, m, r)
 	}
+	start := time.Now()
 	st, err := e.scanLocal(ctx, req, func(st inventory.ScanStats) { reply(st, false) })
 	if err != nil {
 		return err
 	}
+	e.log.Info("scanned for a sync", "plan", req.PlanID, "for", m.From, "path", req.Root+"/"+req.Path,
+		"entries", st.Entries, "bytes", size(st.Bytes), "took", time.Since(start).Round(time.Millisecond))
 	return reply(*st, true)
 }
 
@@ -243,6 +246,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		return nil, err
 	}
 	plan.SrcEntries, plan.SrcBytes, plan.Problems = ps.SrcEntries, ps.SrcBytes, ps.Problems
+	var todo []string
 	for i, t := range targets {
 		ts := ps.Targets[i]
 		plan.Targets = append(plan.Targets, api.SyncTarget{
@@ -250,7 +254,10 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 			Delete: ts.Delete, Unchanged: ts.Unchanged,
 			OverLimit: maxDel >= 0 && ts.Delete+ts.Replace > int64(maxDel),
 		})
+		todo = append(todo, fmt.Sprintf("%s:copy=%d,delete=%d", t, ts.Copy, ts.Delete))
 	}
+	e.log.Info("sync planned", "plan", plan.ID, "mode", req.Mode, "source", req.SrcNode+":"+req.SrcRoot+"/"+req.SrcPath,
+		"entries", ps.SrcEntries, "targets", summary(todo, 4), "problems", len(ps.Problems))
 	return plan, e.savePlan(ctx, plan)
 }
 
@@ -342,6 +349,8 @@ func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api
 		}
 		plan.Jobs = append(plan.Jobs, jid)
 	}
+	e.log.Info("sync applied", "plan", plan.ID, "jobs", summary(plan.Jobs, 4), "delete_errors", len(plan.DeleteErrors),
+		"problems", len(plan.Problems))
 	return plan, e.savePlan(ctx, plan)
 }
 

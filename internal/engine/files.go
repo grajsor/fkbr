@@ -164,6 +164,7 @@ func (e *Engine) serveFileOp(ctx context.Context, m *transport.Message) error {
 		if err := e.mkdirLocal(req); err != nil {
 			return err
 		}
+		e.log.Info("mkdir for a peer", "from", m.From, "path", req.Root+"/"+req.Path)
 	case transport.TypeRemove:
 		var req api.RemoveRequest
 		if err := json.Unmarshal(m.Body, &req); err != nil {
@@ -176,6 +177,8 @@ func (e *Engine) serveFileOp(ctx context.Context, m *transport.Message) error {
 		if err != nil {
 			return err
 		}
+		e.log.Info("removed for a peer", "from", m.From, "root", req.Root, "paths", summary(req.Paths, 3),
+			"removed", res.Removed, "errors", len(res.Errors))
 		out = res
 	case transport.TypeRead:
 		var req api.ReadRequest
