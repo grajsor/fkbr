@@ -1,6 +1,7 @@
 package nfsmailbox
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -106,4 +107,27 @@ func TestPruneOpensUpOwnEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 	checkModes(t, root)
+}
+
+func TestReadListed(t *testing.T) {
+	m := open(t, t.TempDir(), "a")
+	dir := m.path("data", "src", "job")
+	if _, err := m.readListed(dir, "x.json"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing dir: %v", err)
+	}
+	if err := mkdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.readListed(dir, "x.json"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("missing file: %v", err)
+	}
+	if ok, err := m.listed(dir, "x.json"); ok || err != nil {
+		t.Fatalf("listed missing file: %v %v", ok, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "x.json"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := m.readListed(dir, "x.json"); err != nil || string(b) != "hi" {
+		t.Fatalf("listed file: %q %v", b, err)
+	}
 }

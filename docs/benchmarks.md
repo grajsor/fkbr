@@ -76,7 +76,11 @@ This benchmark also found a bug: a target that looked up a job's staging
 directory before the source created it cached "does not exist" for as long
 as its mount caches attributes. On the Pi (`acdirmin=60`), that stalled
 two in five fan-out runs for up to 60 s. Since the fix, ten runs in a row
-showed no stall.
+showed no stall. A rarer one showed up in the sync runs: a node sometimes
+missed a reply that was already on the share, for minutes, and the same
+caused occasional "no answer within 30s" in production. Nodes now wait
+for files by listing the directory instead of looking up the name (see
+`docs/protocol.md`, rule 2).
 
 ## One machine (from milestone 6)
 

@@ -287,8 +287,7 @@ func (m *Mailbox) Send(_ context.Context, msg *transport.Message) error {
 	if !config.ValidID(msg.To) {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, msg.To)
 	}
-	m.fresh(m.path("nodes", msg.To))
-	if _, err := os.Stat(m.path("nodes", msg.To, "info.json")); err != nil {
+	if ok, _ := m.listed(m.path("nodes", msg.To), "info.json"); !ok {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, msg.To)
 	}
 	// The reply directory must exist before the request is visible, so the
@@ -314,8 +313,7 @@ func (m *Mailbox) AwaitReplies(ctx context.Context, reqID string, fn func(*trans
 	t := time.NewTicker(m.opts.Poll)
 	defer t.Stop()
 	for seq := 0; ; {
-		m.fresh(dir)
-		data, err := os.ReadFile(filepath.Join(dir, seqName(seq)))
+		data, err := m.readListed(dir, seqName(seq)) // see listed.go
 		switch {
 		case err == nil:
 			var r transport.Reply

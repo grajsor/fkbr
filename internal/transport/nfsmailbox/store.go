@@ -91,10 +91,11 @@ func (m *Mailbox) GetJob(_ context.Context, id string) (*api.Job, error) {
 	if err := json.Unmarshal(data, &job); err != nil {
 		return nil, fmt.Errorf("job %s: %w", id, err)
 	}
-	if b, err := os.ReadFile(filepath.Join(dir, "COMPLETE")); err == nil {
+	// Markers appear later, so look for them by listing (see listed.go).
+	if b, err := m.readListed(dir, "COMPLETE"); err == nil {
 		job.TotalChunks, _ = strconv.Atoi(strings.TrimSpace(string(b)))
 	}
-	if _, err := os.Stat(filepath.Join(dir, "CANCEL")); err == nil {
+	if ok, _ := m.listed(dir, "CANCEL"); ok {
 		job.Cancelled = true
 	}
 	job.Detached = nil
@@ -223,8 +224,7 @@ func (w *chunkWriter) Abort() {
 }
 
 func (m *Mailbox) ChunkMeta(_ context.Context, src, id string, seq int) ([]byte, error) {
-	m.fresh(m.path("data", src, id))
-	return os.ReadFile(m.path("data", src, id, chunkName(seq, ".json")))
+	return m.readListed(m.path("data", src, id), chunkName(seq, ".json"))
 }
 
 func (m *Mailbox) OpenChunk(_ context.Context, src, id string, seq int) (io.ReadCloser, error) {
@@ -258,8 +258,7 @@ func (m *Mailbox) SetAcked(_ context.Context, src, id, node string, n int) error
 }
 
 func (m *Mailbox) Acked(_ context.Context, src, id, node string) (int, error) {
-	m.fresh(m.path("data", src, id, "acks"))
-	b, err := os.ReadFile(m.path("data", src, id, "acks", node))
+	b, err := m.readListed(m.path("data", src, id, "acks"), node)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
 	}

@@ -31,36 +31,41 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
 
 ## Rules
 
-0. **Open modes.** Directories are created `0777` (no sticky bit) and files
+1. **Open modes.** Directories are created `0777` (no sticky bit) and files
    `0644`, set explicitly so the umask cannot narrow them: nodes run as
    different users and create, rename and delete entries in each other's
    directories. Files are never written in place, so nobody needs write
    access to a file. A node chmods entries it owns that have other modes
    once per process (shares from earlier versions used `0770`/`0660`).
-1. **Atomic publication.** A file is written to `tmp/`, fsynced, closed and
+2. **Wait by listing.** A node waiting for a file another node will create
+   (a reply, the next chunk, an ack, `COMPLETE`) lists the directory and
+   opens the name only once it is listed. Looking the name up early caches
+   "does not exist", and NFS clients may keep that even after the file
+   appears.
+3. **Atomic publication.** A file is written to `tmp/`, fsynced, closed and
    then renamed to its final name. Readers ignore everything else. Since
    `tmp/` is on the same export, the rename is atomic. Close-to-open
    consistency guarantees a reader that sees the name also sees the content.
-2. **One consumer per inbox.** Only node `<id>` reads `inbox/<id>/`, so
+4. **One consumer per inbox.** Only node `<id>` reads `inbox/<id>/`, so
    there are no claim races and NFS locks are never used. On the node itself,
    a `flock` on local disk (`state_dir/worker.lock`) keeps a second worker
    from starting.
-3. **Claiming.** The worker renames `new/X` to `cur/X` before processing,
+5. **Claiming.** The worker renames `new/X` to `cur/X` before processing,
    then deletes it, or moves it to `failed/` (pruned after `keep_done`).
    After a crash, anything left in
    `cur/` is processed again, so request handlers must be idempotent.
-4. **Replies.** Before publishing a request, the requester creates
+6. **Replies.** Before publishing a request, the requester creates
    `reply/<self>/<req>/`. The executor writes parts `00000000.json`,
    `00000001.json`, ... The last part has `"final": true`, and a part with
    `"error"` ends the stream. Once done, or on timeout, the requester deletes
    the directory. An executor that finds the directory missing stops, because
    nobody is listening any more.
-5. **Liveness.** `heartbeat` is recreated through the usual tmp+rename path,
+7. **Liveness.** `heartbeat` is recreated through the usual tmp+rename path,
    so its mtime comes from the NFS server. To judge a peer, a node writes its
    own probe file to `tmp/` and compares the two mtimes, which both come from
    the server clock. Host clock skew therefore doesn't matter. A node counts
    as offline when its heartbeat is older than `offline_after`.
-6. **Leaving.** A node is removed from the registry (its `nodes/`,
+8. **Leaving.** A node is removed from the registry (its `nodes/`,
    `inbox/`, `reply/` and `data/` directories) in three ways: `forget` by
    any node once it is offline; by any running node when it has been
    offline longer than `forget_after` (default 7 days); or by itself when a
