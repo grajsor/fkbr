@@ -226,7 +226,9 @@ func (p *pane) selectedBytes() (n int, bytes int64) {
 }
 
 // render draws the pane's content area (without border).
-func (p *pane) render(st *styles, width, height int, active bool) []string {
+// render draws the rows. On the active cursor row a name that does not fit
+// scrolls, marquee elapsed into its cycle (see anim.go).
+func (p *pane) render(st *styles, width, height int, active bool, marquee time.Duration) []string {
 	lines := make([]string, 0, height)
 	if p.err != "" {
 		lines = append(lines, st.err.Render(fit("! "+p.err, width)))
@@ -237,9 +239,10 @@ func (p *pane) render(st *styles, width, height int, active bool) []string {
 	p.scroll(height - len(lines))
 	for i := p.offset; i < len(p.rows) && len(lines) < height; i++ {
 		r := p.rows[i]
-		text := p.formatRow(r, width)
+		cur := i == p.cursor && active
+		text := p.formatRow(r, width, cur, marquee)
 		marked := p.selected[r.name] && !r.up
-		if i == p.cursor && active {
+		if cur {
 			s := st.cursor
 			if marked {
 				s = st.cursorMarked
@@ -264,16 +267,22 @@ func (p *pane) render(st *styles, width, height int, active bool) []string {
 	return lines
 }
 
-func (p *pane) formatRow(r row, width int) string {
+func (p *pane) formatRow(r row, width int, scroll bool, marquee time.Duration) string {
 	if p.level != levelDir || r.up {
 		name := r.name
 		if r.up {
 			name = "/.."
 		}
 		if r.info == "" {
+			if scroll {
+				name = scrolled(name, width, marquee)
+			}
 			return fit(name, width)
 		}
 		nw := min(max(12, width/3), width)
+		if scroll {
+			name = scrolled(name, nw, marquee)
+		}
 		return fit(fit(name, nw)+" "+r.info, width)
 	}
 	// name | size | date
@@ -287,7 +296,13 @@ func (p *pane) formatRow(r row, width int) string {
 		name = "@" + name
 	}
 	if nameW < 8 { // too narrow for columns
+		if scroll {
+			name = scrolled(name, width, marquee)
+		}
 		return fit(name, width)
+	}
+	if scroll {
+		name = scrolled(name, nameW, marquee)
 	}
 	size := humanSize(r.entry.Size)
 	if r.isDir {

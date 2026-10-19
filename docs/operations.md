@@ -224,6 +224,9 @@ With only 16 colours the panels turn black with green text. `-colors
 true|256|16|none` overrides the detection, and `NO_COLOR=1` turns colours
 off (the cursor then shows in reverse video).
 
+A name too long for its column scrolls slowly on the cursor row, so you
+can read all of it.
+
 Move deletes the source only after the copy finished with no errors, no
 skipped entries and no detached targets. Otherwise the source is kept and
 the status line says why. Panes showing a job's destination refresh when

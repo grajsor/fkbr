@@ -77,14 +77,16 @@ type model struct {
 
 	runsNode bool
 	logPath  string
-	// Header animation and spinner (anim.go).
-	spin      int
-	anim      animPhase
-	animAt    time.Time
-	jobsFocus bool
-	jobCursor int
-	moves     map[string]moveInfo
-	events    <-chan api.Event
+	// Header animation, spinner and marquee (anim.go).
+	spin       int
+	anim       animPhase
+	animAt     time.Time
+	marqueeKey string
+	marqueeAt  time.Time
+	jobsFocus  bool
+	jobCursor  int
+	moves      map[string]moveInfo
+	events     <-chan api.Event
 }
 
 func newModel(ctx context.Context, c api.Client) *model {
@@ -989,7 +991,16 @@ func (m *model) renderPanes(h int) string {
 	for i, p := range m.panes {
 		inner := widths[i] - 2
 		active := i == m.active && !m.jobsFocus
-		lines := p.render(m.st, inner, h, active)
+		var marquee time.Duration
+		if active {
+			// The marquee starts over whenever the cursor is on another entry.
+			key := fmt.Sprintf("%d|%s|%s|%s|%d", i, p.node, p.root, p.path, p.cursor)
+			if key != m.marqueeKey {
+				m.marqueeKey, m.marqueeAt = key, time.Now()
+			}
+			marquee = time.Since(m.marqueeAt)
+		}
+		lines := p.render(m.st, inner, h, active, marquee)
 		lines = append(lines, m.st.rule.Render(strings.Repeat("─", inner)), m.st.panel.Render(p.footer(inner)))
 		title := p.title()
 		if n, ok := m.nodes[p.node]; ok && p.node != "" && !n.Online {

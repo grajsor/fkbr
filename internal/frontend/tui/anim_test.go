@@ -182,3 +182,54 @@ func TestSpinnerInCorner(t *testing.T) {
 		t.Errorf("tick did not advance the spinner: %d", h.m.spin)
 	}
 }
+
+func TestMarqueeOffset(t *testing.T) {
+	const overflow = 5
+	for _, c := range []struct {
+		at   time.Duration
+		want int
+	}{
+		{0, 0},
+		{marqueeRest - time.Millisecond, 0}, // resting at the start
+		{marqueeRest + marqueeStep/2, 0},    // first step not yet taken
+		{marqueeRest + marqueeStep, 1},      // one character per step
+		{marqueeRest + 3*marqueeStep, 3},
+		{marqueeRest + 5*marqueeStep, 5},       // end shown...
+		{2*marqueeRest + 5*marqueeStep - 1, 5}, // ...and held
+		{2*marqueeRest + 5*marqueeStep, 0},     // then back to the start
+	} {
+		if got := marqueeOffset(c.at, overflow); got != c.want {
+			t.Errorf("at %s: offset %d, want %d", c.at, got, c.want)
+		}
+	}
+	if marqueeOffset(time.Hour, 0) != 0 {
+		t.Error("a name that fits must not scroll")
+	}
+}
+
+// The cursor row scrolls a name that does not fit; other rows do not.
+func TestLongNameScrolls(t *testing.T) {
+	h := newHarness(t)
+	long := "a-very-long-file-name-that-does-not-fit-the-pane.tar.zst"
+	h.f.files["master:data/."] = append(h.f.files["master:data/."], api.Entry{Name: long, Type: api.TypeFile, Size: 1})
+	h.send(tea.WindowSizeMsg{Width: 80, Height: 24})
+	h.open("master", "data")
+	h.m.panes[0].cursorTo(long)
+	view := func() string { return stripANSI(h.m.View()) }
+	if v := view(); !strings.Contains(v, "a-very-long-file…") || strings.Contains(v, "pane.tar.zst") {
+		t.Fatalf("start: expected the beginning, cut off:\n%s", v)
+	}
+	// Land in the rest at the end: the name column is the pane's inner
+	// width (80/2 - 2) less size and date (7 + 12) and two spaces.
+	overflow := len(long) - (80/2 - 2 - 21)
+	h.m.marqueeAt = time.Now().Add(-marqueeRest - time.Duration(overflow)*marqueeStep - marqueeStep/2)
+	if v := view(); !strings.Contains(v, "pane.tar.zst") {
+		t.Fatalf("after scrolling: end of the name not shown:\n%s", v)
+	}
+	// Moving the cursor starts over on the next name.
+	h.key("up")
+	h.m.View()
+	if time.Since(h.m.marqueeAt) > time.Second {
+		t.Error("marquee did not restart for the new cursor row")
+	}
+}

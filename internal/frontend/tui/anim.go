@@ -5,6 +5,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/mattn/go-runewidth"
 )
 
 // The name in the header slides out to the left every animEvery and back
@@ -100,4 +101,39 @@ func spinChar(i int) string {
 		k = 2*(n-1) - k
 	}
 	return spinFrames[k]
+}
+
+// A name too long for its column scrolls on the cursor row: it rests at
+// the start, moves a character per marqueeStep until its end shows, rests
+// there and starts over. It needs no timer of its own: marqueeStep matches
+// the spinner, whose redraws carry it.
+var (
+	marqueeRest = 1500 * time.Millisecond
+	marqueeStep = spinEvery
+)
+
+// marqueeOffset is how many characters a name that is overflow cells too
+// long has scrolled at elapsed time since the cursor came to it.
+func marqueeOffset(elapsed time.Duration, overflow int) int {
+	if overflow <= 0 {
+		return 0
+	}
+	run := time.Duration(overflow) * marqueeStep
+	t := elapsed % (2*marqueeRest + run)
+	switch {
+	case t < marqueeRest:
+		return 0
+	case t < marqueeRest+run:
+		return int((t - marqueeRest) / marqueeStep)
+	}
+	return overflow
+}
+
+// scrolled drops the first characters of name to show it scrolled within
+// width cells at elapsed time.
+func scrolled(name string, width int, elapsed time.Duration) string {
+	if off := marqueeOffset(elapsed, runewidth.StringWidth(name)-width); off > 0 {
+		return string([]rune(name)[off:])
+	}
+	return name
 }
