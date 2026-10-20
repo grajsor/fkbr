@@ -34,15 +34,16 @@ var commit = "dev"
 // version is the release and commit, e.g. "v1.0 5cc1bcd".
 var version = product.Version(buildCommit())
 
-// buildCommit is the commit make stamped in, or else the one Go records
-// for a plain `go build` inside a git checkout ("dev" without either).
+// buildCommit is the commit make stamped in, else the one Go records for
+// a plain `go build` inside a git checkout, else the one git wrote into a
+// zip or tar.gz download, else "dev".
 func buildCommit() string {
 	if commit != "dev" {
 		return commit
 	}
 	bi, ok := debug.ReadBuildInfo()
 	if !ok {
-		return commit
+		return archivedOr(commit)
 	}
 	rev, dirty := "", false
 	for _, s := range bi.Settings {
@@ -54,12 +55,19 @@ func buildCommit() string {
 		}
 	}
 	if len(rev) < 7 {
-		return commit
+		return archivedOr(commit)
 	}
 	if dirty {
 		return rev[:7] + "-dirty"
 	}
 	return rev[:7]
+}
+
+func archivedOr(def string) string {
+	if c := product.ArchivedCommit(); c != "" {
+		return c
+	}
+	return def
 }
 
 func main() {

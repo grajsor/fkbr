@@ -1,0 +1,3 @@
+# Archives (zip/tar.gz downloads, git archive) write the commit into this
+# file, so builds from them still know it (see internal/product).
+internal/product/commit.txt export-subst

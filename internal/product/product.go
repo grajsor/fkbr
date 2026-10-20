@@ -4,7 +4,10 @@
 // changes these constants plus the module path, cmd/ directory and docs.
 package product
 
-import "strings"
+import (
+	_ "embed"
+	"strings"
+)
 
 // Name is the binary and product name.
 const Name = "fkbr"
@@ -19,6 +22,22 @@ func Version(commit string) string {
 		return "v" + Release
 	}
 	return "v" + Release + " " + commit
+}
+
+// archived is commit.txt: "$Format:%h$" in a checkout, the short commit
+// in an archive made by git (a zip or tar.gz download), which writes it in
+// on export (.gitattributes: export-subst).
+//
+//go:embed commit.txt
+var archived string
+
+// ArchivedCommit returns the commit git wrote into an archive, or "".
+func ArchivedCommit() string {
+	c := strings.TrimSpace(archived)
+	if c == "" || strings.HasPrefix(c, "$Format") {
+		return ""
+	}
+	return c
 }
 
 // EnvPrefix starts the environment variables: EnvPrefix+"CONFIG" etc.

@@ -25,3 +25,10 @@ func TestVersion(t *testing.T) {
 		t.Errorf("Version(dev) = %q, want %q", got, want)
 	}
 }
+
+// In a checkout commit.txt holds the placeholder, which must not count.
+func TestArchivedCommitInCheckout(t *testing.T) {
+	if c := ArchivedCommit(); c != "" {
+		t.Fatalf("ArchivedCommit in a checkout = %q", c)
+	}
+}
