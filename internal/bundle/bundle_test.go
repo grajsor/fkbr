@@ -1,11 +1,11 @@
 package bundle
 
 import (
-	"archive/tar"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"strings"
@@ -174,26 +174,6 @@ func TestChangedFileMarkedBad(t *testing.T) {
 	}
 }
 
-func TestReadRejectsEscapes(t *testing.T) {
-	for _, name := range []string{"../evil", "/etc/passwd", "a/../../b"} {
-		var buf bytes.Buffer
-		tw := tar.NewWriter(&buf)
-		tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Size: 0, Mode: 0o644})
-		tw.Close()
-		err := Read(&buf, false, func(*Header, io.Reader) error { return nil })
-		if !errors.Is(err, api.ErrBadPath) {
-			t.Errorf("%q: want ErrBadPath, got %v", name, err)
-		}
-	}
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	tw.WriteHeader(&tar.Header{Name: "dev", Typeflag: tar.TypeChar, Mode: 0o644})
-	tw.Close()
-	if err := Read(&buf, false, func(*Header, io.Reader) error { return nil }); err == nil {
-		t.Error("device entry must be rejected")
-	}
-}
-
 func TestUnsupportedType(t *testing.T) {
 	w := NewWriter(&memSink{}, 1<<20, false)
 	if err := w.Add(Item{Name: "fifo", Entry: api.Entry{Type: api.TypeOther}}); !errors.Is(err, ErrUnsupported) {
@@ -201,9 +181,41 @@ func TestUnsupportedType(t *testing.T) {
 	}
 }
 
-func must(t *testing.T, err error) {
+func must(t testing.TB, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// The first chunks are small and double up to the chunk size, so targets
+// start early; content still round-trips.
+func TestChunkSizesRamp(t *testing.T) {
+	s := &memSink{}
+	w := NewWriter(s, 32<<20, false)
+	data := make([]byte, 100<<10)
+	want := map[string][]byte{}
+	for i := 0; i < 900; i++ { // ~88 MiB
+		name := fmt.Sprintf("f%03d", i)
+		data[0] = byte(i)
+		b := append([]byte(nil), data...)
+		want[name] = b
+		must(t, w.Add(fileItem(name, b)))
+	}
+	if _, err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	limits := []int64{4 << 20, 8 << 20, 16 << 20, 32 << 20, 32 << 20}
+	for i, m := range s.metas {
+		lim := limits[min(i, len(limits)-1)]
+		if m.Raw > lim+(200<<10) || (i < len(s.metas)-1 && m.Raw < lim-(200<<10)) {
+			t.Errorf("chunk %d: %d bytes, want about %d", i, m.Raw, lim)
+		}
+	}
+	got := readAll(t, s)
+	for name, b := range want {
+		if !bytes.Equal(got[name], b) {
+			t.Fatalf("%s differs", name)
+		}
 	}
 }

@@ -20,7 +20,9 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
+	"unsafe"
 
 	"fkbr/internal/api"
 	"fkbr/internal/bundle"
@@ -75,6 +77,35 @@ type Receiver struct {
 	ownerFails, setidLost int64
 	// dirsNotChowned counts directories left owned by us on purpose.
 	dirsNotChowned int64
+	// dir is the staging directory files were last written to, kept open:
+	// files arrive grouped by directory, and a name relative to an open
+	// directory resolves in one step instead of one per path component.
+	dir     *os.Root
+	dirPath string
+}
+
+// stagingDir returns dir (inside the staging tree) open, creating it.
+func (r *Receiver) stagingDir(dir string) (*os.Root, error) {
+	if r.dir != nil && r.dirPath == dir {
+		return r.dir, nil
+	}
+	r.closeDir()
+	if err := r.root.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	d, err := r.root.OpenRoot(dir)
+	if err != nil {
+		return nil, err
+	}
+	r.dir, r.dirPath = d, dir
+	return d, nil
+}
+
+func (r *Receiver) closeDir() {
+	if r.dir != nil {
+		r.dir.Close()
+		r.dir, r.dirPath = nil, ""
+	}
 }
 
 // New opens (or resumes) staging for job, installing into dstDir (relative
@@ -138,6 +169,7 @@ func (r *Receiver) appendLine(name string, line []byte) error {
 
 // MarkBad drops files the source reported as unreadable or changed.
 func (r *Receiver) MarkBad(names []string) error {
+	r.closeDir() // what it removes may be the open directory
 	for _, n := range names {
 		n, err := localfs.CleanRel(n)
 		if err != nil || r.bad[n] {
@@ -165,6 +197,13 @@ func (r *Receiver) Apply(h *bundle.Header, data io.Reader) error {
 		return nil
 	}
 	p := path.Join(r.tree, h.Name)
+	if h.Entry.Type == api.TypeFile {
+		d, err := r.stagingDir(path.Dir(p))
+		if err != nil {
+			return err
+		}
+		return r.applyFile(d, path.Base(p), h, data)
+	}
 	if h.Name != "." {
 		if err := r.root.MkdirAll(path.Dir(p), 0o700); err != nil {
 			return err
@@ -186,25 +225,24 @@ func (r *Receiver) Apply(h *bundle.Header, data io.Reader) error {
 		}
 		r.chown(p, h.Entry, true)
 		return nil
-	case api.TypeFile:
-		return r.applyFile(p, h, data)
 	}
 	return fmt.Errorf("%s: unsupported type %q", h.Name, h.Entry.Type)
 }
 
-func (r *Receiver) applyFile(p string, h *bundle.Header, data io.Reader) error {
+// applyFile stages one file (segment) as name in the open staging dir d.
+func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.Reader) error {
 	// A previous run may have left a non-file here; replace it.
-	if fi, err := r.root.Lstat(p); err == nil && !fi.Mode().IsRegular() {
-		if err := r.root.RemoveAll(p); err != nil {
+	if fi, err := d.Lstat(name); err == nil && !fi.Mode().IsRegular() {
+		if err := d.RemoveAll(name); err != nil {
 			return err
 		}
 	}
-	f, err := r.root.OpenFile(p, os.O_WRONLY|os.O_CREATE, 0o600)
+	f, err := d.OpenFile(name, os.O_WRONLY|os.O_CREATE, 0o600)
 	if errors.Is(err, fs.ErrPermission) {
 		// Replay of a file already completed and given to its owner: we
 		// may not write to it any more, but the staging dir is ours.
-		if err = r.root.Remove(p); err == nil {
-			f, err = r.root.OpenFile(p, os.O_WRONLY|os.O_CREATE, 0o600)
+		if err = d.Remove(name); err == nil {
+			f, err = d.OpenFile(name, os.O_WRONLY|os.O_CREATE, 0o600)
 		}
 	}
 	if err != nil {
@@ -223,12 +261,50 @@ func (r *Receiver) applyFile(p string, h *bundle.Header, data io.Reader) error {
 			f.Close()
 			return err
 		}
+		// Through the open file: each path-based call would resolve the
+		// whole staging path again, one component at a time.
+		if err := r.setFileMeta(f, h.Entry); err != nil {
+			f.Close()
+			return err
+		}
 	}
-	if err := f.Close(); err != nil {
+	return f.Close()
+}
+
+// setFileMeta is setMeta for a regular file that is open for writing, in
+// the same order: mode, mtime, owner, setuid/setgid again after chown.
+func (r *Receiver) setFileMeta(f *os.File, e api.Entry) error {
+	m := r.mode(e.Mode)
+	if err := f.Chmod(m); err != nil {
 		return err
 	}
-	if h.Last() {
-		return r.setMeta(p, h.Entry)
+	if err := futimes(f, e.MtimeNs); err != nil {
+		return err
+	}
+	ok := false
+	if r.opts.Chown {
+		ok = f.Chown(int(e.UID), int(e.GID)) == nil
+	} else {
+		ok = e.UID == uint32(os.Getuid()) && e.GID == uint32(os.Getgid())
+	}
+	if !ok {
+		r.ownerFails++
+	}
+	if ok && r.opts.Chown && m&(fs.ModeSetuid|fs.ModeSetgid) != 0 {
+		if err := f.Chmod(m); err != nil {
+			r.setidLost++
+		}
+	}
+	return nil
+}
+
+// futimes sets an open file's access and modification times (utimensat
+// with a NULL path, Linux 2.6.22+).
+func futimes(f *os.File, ns int64) error {
+	ts := [2]syscall.Timespec{syscall.NsecToTimespec(ns), syscall.NsecToTimespec(ns)}
+	_, _, errno := syscall.Syscall6(syscall.SYS_UTIMENSAT, f.Fd(), 0, uintptr(unsafe.Pointer(&ts[0])), 0, 0, 0)
+	if errno != 0 {
+		return &os.PathError{Op: "futimens", Path: f.Name(), Err: errno}
 	}
 	return nil
 }
@@ -355,6 +431,7 @@ func (r *Receiver) chown(p string, e api.Entry, link bool) bool {
 
 // Commit moves staged entries into place and removes the staging area.
 func (r *Receiver) Commit() (*Result, error) {
+	r.closeDir()
 	res := &Result{}
 	created := map[string]bool{}
 	if err := r.ensureDir(r.dstDir, created); err != nil {
@@ -450,6 +527,13 @@ func (r *Receiver) commitDir(rel string, res *Result, created map[string]bool) e
 			return err
 		}
 		if sfi.IsDir() {
+			if _, err := r.root.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+				// Nothing there yet: everything below is new, so the
+				// whole staged directory moves into place at once.
+				if err := r.moveNewDir(src, dst, res, created); err == nil {
+					continue
+				}
+			}
 			if err := r.ensureDir(dst, created); err != nil {
 				res.Errors++
 				res.problem("%s: %v", child, err)
@@ -464,6 +548,46 @@ func (r *Receiver) commitDir(rel string, res *Result, created map[string]bool) e
 		if err := r.install(child, src, dst, sfi, res); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// moveNewDir renames a staged directory to dst, which does not exist, and
+// counts what it holds; its directories count as created, so their
+// metadata is applied.
+func (r *Receiver) moveNewDir(src, dst string, res *Result, created map[string]bool) error {
+	var n Result
+	var dirs []string
+	err := fs.WalkDir(r.root.FS(), src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel := strings.TrimPrefix(strings.TrimPrefix(p, src), "/")
+		switch {
+		case d.IsDir():
+			n.Dirs++
+			dirs = append(dirs, path.Join(dst, rel))
+		case d.Type()&fs.ModeSymlink != 0:
+			n.Symlinks++
+		default:
+			fi, err := d.Info()
+			if err != nil {
+				return err
+			}
+			n.Files++
+			n.Bytes += fi.Size()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := r.writable(path.Dir(dst), func() error { return renameEntry(r.root, src, dst) }); err != nil {
+		return err
+	}
+	res.Dirs, res.Files, res.Symlinks, res.Bytes = res.Dirs+n.Dirs, res.Files+n.Files, res.Symlinks+n.Symlinks, res.Bytes+n.Bytes
+	for _, d := range dirs {
+		created[d] = true
 	}
 	return nil
 }
@@ -556,6 +680,7 @@ func (r *Receiver) applyDirMeta(res *Result, created map[string]bool) error {
 
 // Abort discards the staging area.
 func (r *Receiver) Abort() error {
+	r.closeDir()
 	err := r.root.RemoveAll(r.base)
 	r.root.Remove(StagingDir)
 	return err

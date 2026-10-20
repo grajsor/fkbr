@@ -34,6 +34,7 @@ import (
 	"fkbr/internal/api"
 	"fkbr/internal/atomicfile"
 	"fkbr/internal/config"
+	"fkbr/internal/product"
 	"fkbr/internal/transport"
 )
 
@@ -151,7 +152,8 @@ func (m *Mailbox) checkProtocol() error {
 		return fmt.Errorf("nfsmailbox: %w", err)
 	}
 	if got := strings.TrimSpace(string(data)); got != want {
-		return fmt.Errorf("nfsmailbox: share uses protocol %s, this binary speaks %s", got, want)
+		return fmt.Errorf("share %s uses protocol %s, this %s speaks %s: run the same version on every node "+
+			"(to switch, stop all nodes, empty the share directory, and start them with the new version)", m.root, got, product.Name, want)
 	}
 	return nil
 }

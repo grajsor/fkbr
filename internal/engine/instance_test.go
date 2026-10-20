@@ -62,9 +62,12 @@ func TestHeartbeatConflict(t *testing.T) {
 			share := t.TempDir()
 			a, _ := node(t, share, "a")
 			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
 			done := make(chan error, 1)
-			go func() { done <- a.Run(ctx) }()
+			stopped := make(chan struct{})
+			go func() { done <- a.Run(ctx); close(stopped) }()
+			// Stop the worker before the share is removed: a running one
+			// would recreate its inbox while the cleanup deletes it.
+			t.Cleanup(func() { cancel(); <-stopped })
 			waitUntil(t, func() bool { n, ok := registered(t, a, "a"); return ok && n.Online }, "a online")
 			other := newToken(time.Now().Add(-tc.otherAge))
 			hb := filepath.Join(share, "nodes", "a", "heartbeat")

@@ -212,9 +212,10 @@ func TestRejectsStagingAsDest(t *testing.T) {
 // is removed.
 func TestInstallContinuesPastFailedEntries(t *testing.T) {
 	_, dstDir, src, dst := setup(t)
+	os.MkdirAll(filepath.Join(dstDir, "tree"), 0o755) // so entries install one by one
 	orig := renameEntry
 	renameEntry = func(r *os.Root, from, to string) error {
-		if strings.HasPrefix(to, "tree/sub/") {
+		if to == "tree/sub" || strings.HasPrefix(to, "tree/sub/") {
 			return &os.LinkError{Op: "renameat", Old: from, New: to, Err: syscall.EIO}
 		}
 		return orig(r, from, to)
@@ -302,5 +303,31 @@ func TestSparseFiles(t *testing.T) {
 	writeSparse(f, bytes.NewReader(data), 0)
 	if got, _ := os.ReadFile(f.Name()); !bytes.Equal(got, data) {
 		t.Fatal("replay left old data in a zero range")
+	}
+}
+
+// A directory that does not exist at the destination moves in with one
+// rename; the result still counts what it holds.
+func TestNewDirMovesWhole(t *testing.T) {
+	_, dstDir, src, dst := setup(t)
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, err := New(dst, "job1", "new", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	var renames int
+	orig := renameEntry
+	renameEntry = func(root *os.Root, from, to string) error { renames++; return orig(root, from, to) }
+	t.Cleanup(func() { renameEntry = orig })
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renames != 1 || res.Files != 3 || res.Dirs != 2 || res.Symlinks != 1 || res.Bytes != 5+(300<<10)+10 {
+		t.Fatalf("renames %d, result %+v", renames, res)
+	}
+	if fi, err := os.Stat(filepath.Join(dstDir, "new/tree/sub")); err != nil || fi.Mode().Perm() != 0o750 {
+		t.Fatalf("sub: %v %v", fi, err)
 	}
 }

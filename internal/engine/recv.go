@@ -234,8 +234,10 @@ func (e *Engine) readChunk(ctx context.Context, src, id string, meta *bundle.Chu
 		return err
 	}
 	defer rc.Close()
+	ra := readAhead(rc)
+	defer ra.Close()
 	h := sha256.New()
-	cr := &countingReader{r: io.TeeReader(rc, h)}
+	cr := &countingReader{r: io.TeeReader(ra, h)}
 	applyErr := bundle.Read(cr, meta.Compressed, func(hd *bundle.Header, data io.Reader) error {
 		status.st.Bytes += hd.Length
 		if hd.Entry.Type != api.TypeFile || hd.Last() {

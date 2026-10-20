@@ -56,7 +56,7 @@ roots:
 # Transfers (defaults shown). Staging is chunked and bounded because the
 # share's free space may be smaller than what you copy.
 # transfer:
-#   chunk_size: 128MiB     # approximate size of one staged chunk
+#   chunk_size: 128MiB     # largest staged chunk (the first ones are smaller: 4, 8, 16 MiB ...)
 #   job_quota: 1GiB        # max bytes this node stages for one job
 #   staging_quota: 4GiB    # max bytes this node stages for all jobs
 #   max_jobs: 2            # concurrent sending jobs, and receiving jobs

@@ -1,4 +1,4 @@
-# fkbr NFS mailbox protocol (version 1)
+# fkbr NFS mailbox protocol (version 2)
 
 Nodes share nothing but one directory, normally an NFS mount. They never
 open network connections to each other. This document describes what lives
@@ -9,7 +9,7 @@ on the share and the rules every node follows. The implementation is
 
 ```
 <nfs_root>/
-├── protocol-version                 "1\n"; a node refuses to start on a mismatch
+├── protocol-version                 "2\n"; a node refuses to start on a mismatch
 ├── tmp/                             every file is written here first
 ├── nodes/<id>/info.json             registry entry (api.NodeInfo)
 ├── nodes/<id>/heartbeat             rewritten every heartbeat_interval; holds the worker's instance token
@@ -125,10 +125,14 @@ write policy.
    It writes `jobs/<job>/job.json` and sends `send` to the source node.
 2. **Produce.** The source sends `receive` to each target, then walks the
    source paths (lexical, depth-first) into a bundle: a sequence of chunks,
-   each a complete tar archive (zstd optional) of about `chunk_size`. A
-   file bigger than the space left in a chunk is split into segments
-   carried in consecutive chunks; the PAX records `FKBR.off` and
-   `FKBR.total` give each segment's offset and the file's full size. Each
+   each complete in itself (zstd optional). The first chunk holds about
+   4 MiB and each next one twice as much, up to `chunk_size`, so targets
+   start within moments; the sizes depend only on the chunk number, so a
+   resumed source regenerates the same chunks. The walk runs ahead and
+   small files (up to 1 MiB) are read by a few workers in the meantime
+   (at most 64 MiB ahead); the bundle keeps the walk order. A file bigger
+   than the space left in a chunk is split into segments carried in
+   consecutive chunks. Each
    chunk's meta (`size`, `sha256`, `first` entry, `bad` files) is published
    after the chunk itself. The source writes `COMPLETE` after the last
    chunk.
@@ -138,10 +142,12 @@ write policy.
    every target's ack count is above N.
 4. **Consume.** A target reads chunks in order. It verifies size and
    sha256, extracts into `<root>/.fkbr-tmp/<job>/tree` through `os.Root`,
-   then raises its ack count. Files listed in `bad` (changed or unreadable
+   then raises its ack count. It reads each chunk ahead (up to 16 MiB) while
+   it writes files, and sets a file's metadata through the open file. Files listed in `bad` (changed or unreadable
    while the source read them) are dropped and reported.
 5. **Install.** After the last chunk, the target renames entries into
-   `dst_dir` under the conflict policy (`skip`, `overwrite`,
+   `dst_dir`. A directory that does not exist there yet moves in whole,
+   with one rename. Everything else follows the conflict policy (`skip`, `overwrite`,
    `overwrite-if-older`). An entry that cannot be renamed into place (say,
    an unwritable directory) is reported as an error; the rest is still
    installed. Each file is replaced whole, so two jobs installing into
@@ -175,6 +181,33 @@ until its job ends, so a restarted worker picks it up again.
   deterministic) without re-staging chunks that were already published. If
   a regenerated chunk differs from a still-staged one, the source changed,
   and the job fails rather than mixing old and new data.
+
+## Chunk format
+
+A chunk (before optional zstd) is the magic `FKB2`, its entries, and a
+0 byte. Integers are LEB128 varints; the mtime is zigzag-encoded.
+
+```
+kind              'D' directory, 'L' symlink, 'F' file (or a segment of one)
+shared, n, bytes  name = previous name[:shared] + bytes (n of them)
+mode uid gid mtime_ns
+'L': n, target
+'F': size offset length, then length bytes of data, unpadded
+```
+
+Names share their beginning with the previous entry's, which in walk
+order is usually the whole directory path, so an entry costs about 10
+bytes plus the part of its name that differs. (The tar format used before
+protocol 2 cost about 1.5 KiB per entry.)
+
+A receiver trusts nothing in a chunk: names are cleaned (no absolute
+paths, nothing climbing above the bundle root, no NUL, at most 4096
+bytes), the shared prefix cannot be longer than the previous name, mode,
+IDs, sizes and offsets are range-checked, a segment must lie inside its
+file, link targets are at most 4096 bytes, and an unknown kind, missing
+data, a missing end byte or data after it is an error. The sha256 in the
+meta covers the whole stored chunk. Extraction then goes through
+`os.Root`, so nothing can land outside the destination root either way.
 
 ## Fan-out, groups and write policy
 

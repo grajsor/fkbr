@@ -14,7 +14,8 @@ import (
 )
 
 // ProtocolVersion is the version of the on-NFS protocol and the wire DTOs.
-const ProtocolVersion = 1
+// 2: chunks in fkbr's own format instead of tar (2026-10-20).
+const ProtocolVersion = 2
 
 var (
 	ErrUnknownNode = errors.New("unknown node")

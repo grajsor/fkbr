@@ -1,12 +1,16 @@
 package engine
 
 import (
+	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"fkbr/internal/api"
@@ -258,5 +262,28 @@ func TestRemoveReadOnlyTree(t *testing.T) {
 	}
 	if fi, _ := os.Stat(filepath.Join(aroot, "keep")); fi.Mode().Perm() != 0o555 {
 		t.Errorf("parent mode not restored: %v", fi.Mode())
+	}
+}
+
+func TestReadAhead(t *testing.T) {
+	data := make([]byte, 5*readAheadBlock+123)
+	for i := range data {
+		data[i] = byte(i * 7)
+	}
+	ra := readAhead(bytes.NewReader(data))
+	got, err := io.ReadAll(ra)
+	ra.Close()
+	if err != nil || !bytes.Equal(got, data) {
+		t.Fatalf("read %d bytes, err %v", len(got), err)
+	}
+	// Closing early must not hang.
+	ra = readAhead(bytes.NewReader(data))
+	ra.Read(make([]byte, 10))
+	ra.Close()
+	// Errors come through after the data.
+	boom := errors.New("boom")
+	ra = readAhead(io.MultiReader(bytes.NewReader(data[:100]), iotest.ErrReader(boom)))
+	if got, err := io.ReadAll(ra); len(got) != 100 || !errors.Is(err, boom) {
+		t.Fatalf("got %d bytes, err %v", len(got), err)
 	}
 }

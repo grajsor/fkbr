@@ -1,16 +1,15 @@
 // Package bundle turns a stream of filesystem entries into a sequence of
-// self-contained chunks and back. Every chunk is a complete tar archive
-// (optionally zstd-compressed), so chunks can be verified, retried and consumed one
-// at a time and deleted once every target has them. A regular file larger
-// than the space left in a chunk is split into segments carried in
-// consecutive chunks; PAX records give each segment's offset and the
-// file's total size.
+// self-contained chunks and back. Every chunk is complete in itself, in a
+// compact format of fkbr's own (native.go; optionally zstd-compressed), so
+// chunks can be verified, retried and consumed one at a time and deleted
+// once every target has them. A regular file larger than the space left in
+// a chunk is split into segments carried in consecutive chunks; each
+// segment records its offset and the file's total size.
 //
 // The package knows nothing about NFS: chunks go to a Sink.
 package bundle
 
 import (
-	"archive/tar"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -19,20 +18,10 @@ import (
 	"io"
 	"io/fs"
 	"strconv"
-	"strings"
-	"time"
 
 	"github.com/klauspost/compress/zstd"
 
 	"fkbr/internal/api"
-	"fkbr/internal/localfs"
-	"fkbr/internal/product"
-)
-
-// PAX record names for file segments, e.g. "FKBR.off".
-var (
-	paxOffset = strings.ToUpper(product.Name) + ".off"
-	paxTotal  = strings.ToUpper(product.Name) + ".total"
 )
 
 // ChunkMeta is published alongside each chunk once it is complete.
@@ -75,6 +64,10 @@ type Item struct {
 }
 
 // Writer produces chunks of approximately ChunkSize uncompressed bytes.
+// The first chunks are smaller (rampStart, doubling up to ChunkSize), so
+// targets can start consuming within moments instead of waiting for a
+// whole large chunk; the size depends only on the chunk number, so an
+// interrupted sender regenerates the same chunks.
 type Writer struct {
 	sink      Sink
 	chunkSize int64
@@ -90,13 +83,25 @@ func NewWriter(sink Sink, chunkSize int64, compress bool) *Writer {
 	return &Writer{sink: sink, chunkSize: chunkSize, compress: compress}
 }
 
+// rampStart is the size of the first chunk; later ones double up to the
+// configured chunk size.
+const rampStart = 4 << 20
+
+// limit is the size of the chunk being written.
+func (w *Writer) limit() int64 {
+	if w.seq >= 30 {
+		return w.chunkSize
+	}
+	return min(w.chunkSize, int64(rampStart)<<w.seq)
+}
+
 type chunk struct {
 	out  io.WriteCloser
 	hash hash.Hash
 	size countWriter // stored bytes
 	zw   *zstd.Encoder
-	tw   *tar.Writer
-	raw  *countWriter // uncompressed tar bytes
+	ew   *nativeEntries
+	raw  *countWriter // uncompressed bytes
 	meta ChunkMeta
 }
 
@@ -135,7 +140,10 @@ func (w *Writer) open() error {
 		dst = c.zw
 	}
 	c.raw = &countWriter{w: dst}
-	c.tw = tar.NewWriter(c.raw)
+	if c.ew, err = newNativeEntries(c.raw); err != nil {
+		out.Close()
+		return err
+	}
 	w.cur = c
 	return nil
 }
@@ -146,7 +154,7 @@ func (w *Writer) closeChunk() error {
 		return nil
 	}
 	w.cur = nil
-	err := c.tw.Close()
+	err := c.ew.close()
 	if c.zw != nil && err == nil {
 		err = c.zw.Close()
 	}
@@ -161,28 +169,6 @@ func (w *Writer) closeChunk() error {
 	c.meta.SHA256 = hex.EncodeToString(c.hash.Sum(nil))
 	w.seq++
 	return w.sink.Commit(c.meta)
-}
-
-func (w *Writer) header(name string, e api.Entry, size int64) *tar.Header {
-	h := &tar.Header{
-		Name:    name,
-		Mode:    int64(e.Mode),
-		Uid:     int(e.UID),
-		Gid:     int(e.GID),
-		ModTime: time.Unix(0, e.MtimeNs),
-		Size:    size,
-		Format:  tar.FormatPAX,
-	}
-	switch e.Type {
-	case api.TypeDir:
-		h.Typeflag = tar.TypeDir
-	case api.TypeSymlink:
-		h.Typeflag = tar.TypeSymlink
-		h.Linkname = e.LinkTarget
-	default:
-		h.Typeflag = tar.TypeReg
-	}
-	return h
 }
 
 func (w *Writer) note(name string, off int64) {
@@ -206,7 +192,7 @@ func (w *Writer) Add(it Item) error {
 			return err
 		}
 		w.note(it.Name, 0)
-		if err := w.cur.tw.WriteHeader(w.header(it.Name, it.Entry, 0)); err != nil {
+		if err := w.cur.ew.header(it.Name, it.Entry, 0, 0); err != nil {
 			return err
 		}
 		w.Files++
@@ -241,10 +227,11 @@ func (w *Writer) addFile(it Item) error {
 			return err
 		}
 		seg := total - off
-		remain := w.chunkSize - w.cur.raw.n
+		limit := w.limit()
+		remain := limit - w.cur.raw.n
 		if seg > remain {
 			// Split only if a worthwhile piece fits; otherwise start fresh.
-			if remain < w.chunkSize/16 && w.cur.meta.Entries > 0 {
+			if remain < limit/16 && w.cur.meta.Entries > 0 {
 				if err := w.closeChunk(); err != nil {
 					return err
 				}
@@ -252,24 +239,17 @@ func (w *Writer) addFile(it Item) error {
 			}
 			seg = max(remain, 0)
 			if seg == 0 {
-				seg = min(total-off, w.chunkSize)
-			}
-		}
-		h := w.header(it.Name, it.Entry, seg)
-		if seg != total {
-			h.PAXRecords = map[string]string{
-				paxOffset: strconv.FormatInt(off, 10),
-				paxTotal:  strconv.FormatInt(total, 10),
+				seg = min(total-off, limit)
 			}
 		}
 		w.note(it.Name, off)
-		if err := w.cur.tw.WriteHeader(h); err != nil {
+		if err := w.cur.ew.header(it.Name, it.Entry, off, seg); err != nil {
 			return err
 		}
-		n, err := io.CopyN(w.cur.tw, f, seg)
+		n, err := io.CopyN(w.cur.ew, f, seg)
 		if err != nil {
-			// Shrunk or unreadable: pad so the tar stays valid, mark bad.
-			if _, perr := io.CopyN(w.cur.tw, zeroReader{}, seg-n); perr != nil {
+			// Shrunk or unreadable: pad so the chunk stays valid, mark bad.
+			if _, perr := io.CopyN(w.cur.ew, zeroReader{}, seg-n); perr != nil {
 				return perr
 			}
 			if itemErr == nil {
@@ -300,7 +280,7 @@ func (w *Writer) addFile(it Item) error {
 }
 
 func (w *Writer) maybeRoll() error {
-	if w.cur != nil && w.cur.raw.n >= w.chunkSize {
+	if w.cur != nil && w.cur.raw.n >= w.limit() {
 		return w.closeChunk()
 	}
 	return nil
@@ -355,65 +335,5 @@ func Read(r io.Reader, compressed bool, fn func(h *Header, data io.Reader) error
 		defer zr.Close()
 		r = zr
 	}
-	tr := tar.NewReader(r)
-	for {
-		th, err := tr.Next()
-		if err == io.EOF {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		h, err := fromTar(th)
-		if err != nil {
-			return err
-		}
-		if err := fn(h, tr); err != nil {
-			return err
-		}
-	}
-}
-
-func fromTar(th *tar.Header) (*Header, error) {
-	name, err := localfs.CleanRel(th.Name)
-	if err != nil {
-		return nil, err
-	}
-	h := &Header{
-		Name: name,
-		Entry: api.Entry{
-			Name:    name,
-			Mode:    uint32(th.Mode) & 0o7777,
-			UID:     uint32(th.Uid),
-			GID:     uint32(th.Gid),
-			MtimeNs: th.ModTime.UnixNano(),
-		},
-	}
-	switch th.Typeflag {
-	case tar.TypeDir:
-		h.Entry.Type = api.TypeDir
-	case tar.TypeSymlink:
-		h.Entry.Type = api.TypeSymlink
-		h.Entry.LinkTarget = th.Linkname
-	case tar.TypeReg:
-		h.Entry.Type = api.TypeFile
-		h.Entry.Size, h.Length = th.Size, th.Size
-		if v, ok := th.PAXRecords[paxTotal]; ok {
-			if h.Entry.Size, err = strconv.ParseInt(v, 10, 64); err != nil {
-				return nil, fmt.Errorf("%s: bad %s", name, paxTotal)
-			}
-			if h.Offset, err = strconv.ParseInt(th.PAXRecords[paxOffset], 10, 64); err != nil {
-				return nil, fmt.Errorf("%s: bad %s", name, paxOffset)
-			}
-		}
-		if h.Offset < 0 || h.Length < 0 || h.Offset+h.Length > h.Entry.Size {
-			return nil, fmt.Errorf("%s: segment out of range", name)
-		}
-	default:
-		return nil, fmt.Errorf("%s: unsupported tar entry type %q", name, th.Typeflag)
-	}
-	if name == "." && h.Entry.Type != api.TypeDir {
-		return nil, fmt.Errorf("bundle root must be a directory")
-	}
-	return h, nil
+	return readNative(r, fn)
 }

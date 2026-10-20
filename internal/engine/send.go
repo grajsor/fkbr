@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"os"
 	"path"
 	"strings"
 	"syscall"
@@ -221,20 +222,39 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 			sink.cw.Abort() // drop the half-written temp file
 		}
 	}()
-	add := func(p, rel string, ent api.Entry, err error) error {
-		if rel == receive.StagingDir || strings.HasPrefix(rel, receive.StagingDir+"/") {
-			return localfs.SkipDir
-		}
-		if err != nil {
-			s.status.problem("%s: %v", rel, err)
+	// The walk runs ahead in its own goroutine and starts reading small
+	// files (prefetch.go); this loop bundles the entries in walk order.
+	recs := make(chan walkRec, 1024)
+	stop := make(chan struct{})
+	pf := newPrefetcher()
+	var walkErr error
+	go func() {
+		defer close(recs)
+		walkErr = s.walkSource(ctx, recs, stop, pf)
+	}()
+	add := func(r walkRec) error {
+		switch {
+		case r.problem != "":
+			s.status.problem("%s", r.problem)
+			return nil
+		case r.err != nil:
+			s.status.problem("%s: %v", r.rel, r.err)
 			return nil
 		}
 		if err := s.check(ctx, false); err != nil {
 			return err
 		}
-		err = w.Add(bundle.Item{Name: s.nameFor(p, rel), Entry: ent, Open: func() (bundle.File, error) {
-			return e.fs.Open(req.SrcRoot, rel)
-		}})
+		open := func() (bundle.File, error) { return e.fs.Open(req.SrcRoot, r.rel) }
+		if r.pre != nil {
+			open = func() (bundle.File, error) {
+				f, err := r.pre.file()
+				if err != nil {
+					return nil, err
+				}
+				return f, nil
+			}
+		}
+		err := w.Add(bundle.Item{Name: s.nameFor(r.p, r.rel), Entry: r.ent, Open: open})
 		var ie *bundle.ItemError
 		if errors.Is(err, bundle.ErrUnsupported) || errors.As(err, &ie) {
 			s.status.problem("%v", err)
@@ -244,42 +264,91 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 		s.status.put(ctx, false)
 		return err
 	}
-	visit := func(p string) error {
-		if !req.NoRecurse {
-			return e.fs.Walk(req.SrcRoot, p, func(rel string, ent api.Entry, err error) error {
-				return add(p, rel, ent, err)
-			})
-		}
-		ent, err := e.fs.Stat(req.SrcRoot, p)
-		if errors.Is(err, fs.ErrNotExist) {
-			s.status.problem("%s: vanished since it was planned", p)
-			return nil
-		}
-		if err := add(p, p, ent, err); err != nil && err != localfs.SkipDir {
-			return err
-		}
-		return nil
-	}
-	if req.PathsBlob != "" {
-		rc, err := e.st.OpenBlob(ctx, req.PathsBlob)
-		if err != nil {
-			return 0, err
-		}
-		err = readPathList(rc, visit)
-		rc.Close()
-		if err != nil {
-			return 0, err
-		}
-	} else {
-		for _, p := range req.Paths {
-			if err := visit(p); err != nil {
-				return 0, err
+	var addErr error
+	for r := range recs {
+		if addErr == nil {
+			if addErr = add(r); addErr != nil {
+				close(stop) // the walker stops; keep draining what it sent
+				pf.wake()
 			}
 		}
+		if r.pre != nil {
+			pf.release(r.pre)
+		}
+	}
+	if addErr != nil {
+		return 0, addErr
+	}
+	if walkErr != nil {
+		return 0, walkErr
 	}
 	n, err := w.Close()
 	s.status.st.Files, s.status.st.Bytes, s.status.st.Chunks = w.Files, w.Bytes, n
 	return n, err
+}
+
+// walkRec is one walked entry on its way to the bundle writer.
+type walkRec struct {
+	p, rel  string // the requested path and the entry, root-relative
+	ent     api.Entry
+	err     error       // the entry could not be read
+	problem string      // a note instead of an entry
+	pre     *prefetched // the file's content, read ahead (small files)
+}
+
+var errWalkStopped = errors.New("walk stopped")
+
+// walkSource walks the job's paths in the bundle's order and sends every
+// entry to recs, starting reads of small files on the way. It returns when
+// done or when stop is closed.
+func (s *sender) walkSource(ctx context.Context, recs chan<- walkRec, stop <-chan struct{}, pf *prefetcher) error {
+	e, req := s.e, s.job.Request
+	emit := func(r walkRec) error {
+		if r.err == nil && r.problem == "" && r.ent.Type == api.TypeFile && r.ent.Size <= prefetchMaxFile {
+			rel := r.rel
+			if r.pre = pf.start(r.ent.Size, func() (*os.File, error) { return e.fs.Open(req.SrcRoot, rel) }, stop); r.pre == nil {
+				return errWalkStopped
+			}
+		}
+		select {
+		case recs <- r:
+			return nil
+		case <-stop:
+			return errWalkStopped
+		}
+	}
+	visit := func(p string) error {
+		if !req.NoRecurse {
+			return e.fs.Walk(req.SrcRoot, p, func(rel string, ent api.Entry, err error) error {
+				if rel == receive.StagingDir || strings.HasPrefix(rel, receive.StagingDir+"/") {
+					return localfs.SkipDir
+				}
+				return emit(walkRec{p: p, rel: rel, ent: ent, err: err})
+			})
+		}
+		if p == receive.StagingDir || strings.HasPrefix(p, receive.StagingDir+"/") {
+			return nil
+		}
+		ent, err := e.fs.Stat(req.SrcRoot, p)
+		if errors.Is(err, fs.ErrNotExist) {
+			return emit(walkRec{problem: fmt.Sprintf("%s: vanished since it was planned", p)})
+		}
+		return emit(walkRec{p: p, rel: p, ent: ent, err: err})
+	}
+	if req.PathsBlob != "" {
+		rc, err := e.st.OpenBlob(ctx, req.PathsBlob)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		return readPathList(rc, visit)
+	}
+	for _, p := range req.Paths {
+		if err := visit(p); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // nameFor is an entry's name in the bundle: relative to BaseDir when set
