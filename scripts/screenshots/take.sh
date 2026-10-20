@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # take.sh: rebuild the demo swarm and retake the README screenshots into
-# docs/screenshots at 2x (SCALE=1 for the old size). Needs pyte and pillow,
+# docs/screenshots (SCALE=2 for double size). Needs pyte and pillow,
 # and DejaVu fonts. With uv installed nothing else is needed (uv fetches
 # them into its cache); otherwise PY=/path/to/python with both installed.
 # Run `make` first; it uses bin/fkbr. The demo lives in /tmp/fkbr-demo.

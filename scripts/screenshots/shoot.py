@@ -68,9 +68,9 @@ def color(c, default):
         return default
 
 
-# SCALE 2 renders at twice the size (36 px font, 2640x1496) so text and
-# borders stay sharp on HiDPI screens and when zoomed.
-SCALE = int(os.environ.get("SCALE", "2"))
+# SCALE=2 renders at twice the size (36 px font, 2640x1462); in practice
+# it looked the same, only bigger, so 1 is the default.
+SCALE = int(os.environ.get("SCALE", "1"))
 SIZE = 18 * SCALE
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", SIZE)
 bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", SIZE)
