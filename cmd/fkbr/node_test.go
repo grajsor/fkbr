@@ -39,16 +39,36 @@ func testCfg(t *testing.T, share string) *config.Config {
 func TestStartNodeRefusesTakenID(t *testing.T) {
 	share := t.TempDir()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	first, err := startNode(context.Background(), testCfg(t, share), log)
+	first, err := startNode(context.Background(), testCfg(t, share), log, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer first.stop()
-	second, err := startNode(context.Background(), testCfg(t, share), log)
+	second, err := startNode(context.Background(), testCfg(t, share), log, false)
 	if !errors.Is(err, engine.ErrNodeIDTaken) {
 		if second != nil {
 			second.stop()
 		}
 		t.Fatalf("second node: %v", err)
+	}
+}
+
+// A TUI's node leaves the share when it stops. LeaveOnStop must be set
+// before the worker starts: it decides at start whether it is a visitor.
+func TestTUINodeLeavesOnStop(t *testing.T) {
+	share := t.TempDir()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	n, err := startNode(context.Background(), testCfg(t, share), log, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(share, "nodes", "n1")); err != nil {
+		t.Fatalf("not registered: %v", err)
+	}
+	if err := n.stop(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(share, "nodes", "n1")); !os.IsNotExist(err) {
+		t.Fatalf("TUI node still registered after stop: %v", err)
 	}
 }

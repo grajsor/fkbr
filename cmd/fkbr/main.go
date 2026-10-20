@@ -240,7 +240,13 @@ func run() error {
 	}
 	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// A closed terminal (ssh dropped) stops the node cleanly too, so a TUI
+	// leaves the share; under nohup, SIGHUP stays ignored.
+	sigs := []os.Signal{os.Interrupt, syscall.SIGTERM}
+	if !signal.Ignored(syscall.SIGHUP) {
+		sigs = append(sigs, syscall.SIGHUP)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
 	defer stop()
 
 	switch cmd {
@@ -323,10 +329,15 @@ type node struct {
 // startNode runs the worker and serves the socket until stop is called. It
 // returns once the worker runs, or with the reason it could not start (the
 // node ID is in use, say), so a TUI never runs on without its worker.
-func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger) (*node, error) {
+// leave makes the node leave the share when it stops (a TUI's node); the
+// worker reads it as it starts.
+func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger, leave bool) (*node, error) {
 	c, err := local.Open(cfg, buildCommit(), log)
 	if err != nil {
 		return nil, err
+	}
+	if leave {
+		c.LeaveOnStop()
 	}
 	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
 		c.Close()
@@ -378,7 +389,7 @@ func (n *node) stop() error {
 }
 
 func daemon(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
-	n, err := startNode(ctx, cfg, log)
+	n, err := startNode(ctx, cfg, log, false)
 	if err != nil {
 		return err
 	}
@@ -411,13 +422,12 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors str
 			log, logPath = slog.New(slog.NewTextHandler(lf, &slog.HandlerOptions{Level: level})), p
 		}
 	}
-	n, err := startNode(ctx, cfg, log)
+	// A node that only lives while the TUI is open leaves the share on quit.
+	n, err := startNode(ctx, cfg, log, true)
 	if err != nil {
 		return err
 	}
 	log.Info("TUI runs this node", "node", cfg.NodeID, "version", version)
-	// A node that only lives while the TUI is open leaves the share on quit.
-	n.c.LeaveOnStop()
 	// If the worker stops on its own (lock lost, or another worker started
 	// at the same moment kept the ID), the TUI ends too and stop returns why.
 	tctx, tcancel := context.WithCancel(ctx)
