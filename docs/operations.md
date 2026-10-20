@@ -118,6 +118,10 @@ yellow spinner turns in the bottom-right corner of the jobs panel (of the
 right pane while there are no jobs), so you can tell at a glance that the
 TUI is alive. `q` quits, like F10.
 
+The mouse works too: a click moves the cursor, a double click opens, a
+right click marks, the wheel scrolls, and a click on the key bar presses
+that key. Hold Shift to select text, or start with `-mouse=false`.
+
 The TUI writes this node's log to `/tmp/fkbr-<uid>-<node>/node.log` (F1
 shows the path; `-v` adds debug lines). It stays after you quit, so a
 failed copy can be looked into later.

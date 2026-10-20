@@ -239,9 +239,13 @@ func (d *confirmDialog) view(st *styles, width, height int) string {
 		}
 		b.WriteString("  " + fit(l, w-2) + "\n")
 	}
-	b.WriteString("\ny = yes · n / Esc = no")
+	b.WriteString("\n" + confirmHint)
 	return b.String()
 }
+
+// confirmHint ends a confirm dialog. A click on its answers works too
+// (dialogClick): it must start with "y = yes".
+const confirmHint = "y = yes · n / Esc = no"
 
 // textDialog shows scrollable text (file viewer, help, job details).
 type textDialog struct {
@@ -339,6 +343,15 @@ MARKING
   + - *          mark all, none, invert
   In a node list, the marked nodes are @dest: the destination
   that F5 and F4 offer until you unmark them.
+
+MOUSE
+  click          move there (in either pane or the jobs)
+  double-click   open, like Enter
+  right-click    mark or unmark
+  wheel          move up or down; scroll a dialog
+  key bar        a click presses that key
+  click outside  close a dialog
+  Shift+drag     select text (-mouse=false: no Shift needed)
 
 FILES
   F3             view (first 64 KiB; XML and JSON coloured)

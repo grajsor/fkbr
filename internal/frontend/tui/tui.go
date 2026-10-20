@@ -37,6 +37,9 @@ type Options struct {
 	Version string
 	// Notice is shown in the status line at start.
 	Notice string
+	// NoMouse leaves the mouse to the terminal (text selection without
+	// Shift).
+	NoMouse bool
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -51,7 +54,11 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 	if opts.Notice != "" {
 		m.setStatus(opts.Notice, false)
 	}
-	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
+	popts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
+	if !opts.NoMouse {
+		popts = append(popts, tea.WithMouseCellMotion())
+	}
+	_, err := tea.NewProgram(m, popts...).Run()
 	if err == tea.ErrProgramKilled && ctx.Err() != nil {
 		return nil
 	}
@@ -76,6 +83,9 @@ type model struct {
 	st     *styles
 	panes  [2]*pane
 	active int
+	// lastClick and dlgBox serve the mouse (mouse.go).
+	lastClick click
+	dlgBox    box
 
 	nodes    map[string]api.Node
 	jobs     map[string]api.Job
@@ -234,6 +244,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		return m, nil
+
+	case tea.MouseMsg:
+		return m, m.mouse(msg)
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -1113,7 +1126,14 @@ func (m *model) View() string {
 		area := ph + 4
 		content := lipgloss.NewStyle().MaxWidth(m.width - 4).MaxHeight(area - 2).
 			Render(padLines(m.dlg.view(m.st, m.width, area), m.st.inputLabel))
-		out = append(out, lipgloss.Place(m.width, area, lipgloss.Center, lipgloss.Center, m.st.dialog.Render(content),
+		framed := m.st.dialog.Render(content)
+		w, h := lipgloss.Width(framed), lipgloss.Height(framed)
+		x, y := placedBox(m.width, area, w, h)
+		d := m.st.dialog
+		m.dlgBox = box{x: x, y: 1 + y, w: w, h: h,
+			cx: x + d.GetBorderLeftSize() + d.GetPaddingLeft(), cy: 1 + y + d.GetBorderTopSize() + d.GetPaddingTop(),
+			contentH: lineCount(content)}
+		out = append(out, lipgloss.Place(m.width, area, lipgloss.Center, lipgloss.Center, framed,
 			lipgloss.WithWhitespaceBackground(cPanel)))
 	} else {
 		out = append(out, m.renderPanes(ph))

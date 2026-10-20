@@ -134,6 +134,7 @@ func run() error {
 	forceLocal := flag.Bool("local", false, "do not attach to a running node; run the engine in this process")
 	verbose := flag.Bool("v", false, "debug logging")
 	colors := flag.String("colors", "auto", "TUI colours: auto, true, 256, 16 or none")
+	mouse := flag.Bool("mouse", true, "TUI: clicks, right-click marks, wheel (-mouse=false leaves the mouse to the terminal)")
 	flag.Usage = usage
 	flag.Parse()
 	args := flag.Args()
@@ -257,7 +258,7 @@ func run() error {
 	case "check":
 		return runCheck(ctx, cfg)
 	case "tui":
-		return runTUI(ctx, cfg, *forceLocal, *colors, level)
+		return runTUI(ctx, cfg, *forceLocal, tui.Options{Colors: *colors, Version: version, NoMouse: !*mouse}, level)
 	}
 	c, err := connect(ctx, cfg, *forceLocal, log)
 	if err != nil {
@@ -463,7 +464,8 @@ func daemon(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 
 // runTUI attaches to a running node, or else runs this node itself for as
 // long as the TUI is open.
-func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors string, level slog.Level) error {
+// opts carries the display settings; runTUI fills in the rest.
+func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, opts tui.Options, level slog.Level) error {
 	if !forceLocal {
 		c, notice, err := dialNode(ctx, cfg)
 		if err != nil {
@@ -471,7 +473,8 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors str
 		}
 		if c != nil {
 			defer c.Close()
-			return tui.Run(ctx, c, tui.Options{Colors: colors, Version: version, Notice: notice})
+			opts.Notice = notice
+			return tui.Run(ctx, c, opts)
 		}
 	}
 	// Log lines would draw over the UI, so the node logs to a file beside
@@ -501,7 +504,8 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors str
 		case <-tctx.Done():
 		}
 	}()
-	terr := tui.Run(tctx, n.c, tui.Options{RunsNode: true, Colors: colors, LogPath: logPath, Version: version})
+	opts.RunsNode, opts.LogPath = true, logPath
+	terr := tui.Run(tctx, n.c, opts)
 	if err := n.stop(); err != nil && terr == nil {
 		terr = err
 	}
