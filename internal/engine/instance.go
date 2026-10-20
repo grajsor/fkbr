@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"os/user"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,24 @@ func processAlive(pid int) bool {
 	}
 	err := syscall.Kill(pid, 0)
 	return err == nil || err == syscall.EPERM
+}
+
+// processUser names the owner of process pid: a user name, else "uid N"
+// (users from LDAP and the like are not in /etc/passwd), else "?".
+func processUser(pid int) string {
+	fi, err := os.Stat("/proc/" + strconv.Itoa(pid))
+	if err != nil {
+		return "?"
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "?"
+	}
+	uid := strconv.FormatUint(uint64(st.Uid), 10)
+	if u, err := user.LookupId(uid); err == nil {
+		return u.Username
+	}
+	return "uid " + uid
 }
 
 // runningHere reports whether registry entry n belongs to another worker

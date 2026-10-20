@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -24,6 +26,20 @@ func TestSecondWorkerOnSameHostRefused(t *testing.T) {
 	}
 	if n, _ := registered(t, a, "a"); n.Instance != a.info.Instance {
 		t.Fatalf("registry entry taken over: %+v", n)
+	}
+	// The message names who runs it, and only a worker that started is ready.
+	if u, _ := user.Current(); u != nil && !strings.Contains(err.Error(), "user "+u.Username) {
+		t.Errorf("message does not name the user: %v", err)
+	}
+	select {
+	case <-twin.Ready():
+		t.Error("refused worker reported ready")
+	default:
+	}
+	select {
+	case <-a.Ready():
+	default:
+		t.Error("running worker not ready")
 	}
 }
 

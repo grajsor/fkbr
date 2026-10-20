@@ -92,9 +92,9 @@ fkbr /mnt/nfs/xfer
   `-roles a,b` adds tags for
   your own groups (`@a`) and for `accept_writes_from`. Neither is needed
   otherwise; every node is equal.
-- **Flags:** they can come before or after the share
-  (`fkbr /mnt/nfs/xfer -ro`). The share can also come from `-share` or
-  `$FKBR_SHARE`.
+- **Flags:** they can go anywhere: before or after the share, or after
+  the command (`fkbr /mnt/nfs/xfer daemon -ro`). `--` ends them. The share
+  can also come from `-share` or `$FKBR_SHARE`.
 - **Runtime dir:** `-state DIR` overrides where the lock and socket go.
 
 **The TUI is the node.** While a TUI runs, it does all of this node's work:

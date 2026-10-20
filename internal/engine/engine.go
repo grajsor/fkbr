@@ -55,6 +55,9 @@ type Engine struct {
 	// leaveOnStop makes a clean stop of Run remove this node from the
 	// registry (see LeaveOnStop).
 	leaveOnStop atomic.Bool
+	// ready is closed once Run has passed its start checks (see Ready).
+	ready     chan struct{}
+	readyOnce sync.Once
 
 	hub hub
 }
@@ -74,6 +77,7 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 		st:      st,
 		log:     log,
 		running: map[string]bool{},
+		ready:   make(chan struct{}),
 		sendSem: make(chan struct{}, cfg.Transfer.MaxJobs),
 		recvSem: make(chan struct{}, cfg.Transfer.MaxJobs),
 		info: api.NodeInfo{
@@ -101,6 +105,10 @@ func (e *Engine) Self() string { return e.cfg.NodeID }
 // when a daemon had registered it: then it is a member that happens to be
 // run by a TUI for now (e.g. after the daemon crashed).
 func (e *Engine) LeaveOnStop() { e.leaveOnStop.Store(true) }
+
+// Ready is closed once Run is this node's worker: it holds the lock, is
+// registered and heartbeating. A Run that is refused never closes it.
+func (e *Engine) Ready() <-chan struct{} { return e.ready }
 
 func (e *Engine) Close() error { return e.fs.Close() }
 
@@ -267,8 +275,8 @@ func (e *Engine) Run(ctx context.Context) error {
 			return fmt.Errorf("%w: %q is in use by host %s; pass -node with another name", ErrNodeIDTaken, n.ID, n.Hostname)
 		}
 		if e.runningHere(n) {
-			return fmt.Errorf("%w: %q is already running on this host (pid %d, since %s); stop it, or pass -node with another name",
-				ErrNodeIDTaken, n.ID, n.PID, n.Started.Local().Format(time.DateTime))
+			return fmt.Errorf("%w: %q is already running on this host (pid %d, user %s, since %s); stop it, or pass -node with another name",
+				ErrNodeIDTaken, n.ID, n.PID, processUser(n.PID), n.Started.Local().Format(time.DateTime))
 		}
 	}
 	liveInstances.Store(e.info.Instance, true)
@@ -293,6 +301,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
 	e.log.Info("worker started", "node", e.Self(), "roots", len(e.info.Roots), "chown", e.info.ChownCapable)
+	e.readyOnce.Do(func() { close(e.ready) })
 
 	// The heartbeat has its own goroutine: a slow listing, read or prune in
 	// the loop below must not make this node look offline. It stops after

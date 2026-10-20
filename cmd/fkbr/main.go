@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/debug"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -151,6 +152,13 @@ func run() error {
 	if len(args) > 0 {
 		cmd, args = args[0], args[1:]
 	}
+	global, args := globalFlags(flag.CommandLine, cmd, args)
+	if err := flag.CommandLine.Parse(global); err != nil {
+		return err
+	}
+	if _, ok := cli.Commands[cmd]; !ok && isCommand(cmd) && len(args) > 0 {
+		return fmt.Errorf("%s takes no arguments: %q", cmd, strings.Join(args, " "))
+	}
 	if cmd == "version" {
 		fmt.Println(product.Name, version)
 		return nil
@@ -251,6 +259,35 @@ func run() error {
 	return cli.Run(ctx, c, cmd, args, os.Stdout)
 }
 
+// commandFlags are command flags that share a name with a global flag; after
+// that command, the command's own wins.
+var commandFlags = map[string][]string{"prune": {"keep"}}
+
+// globalFlags takes the global flags out of a command's arguments, so they
+// work after the command too ("fkbr SHARE daemon -node a"). Everything from
+// "--" on stays with the command.
+func globalFlags(fs *flag.FlagSet, cmd string, args []string) (global, rest []string) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		if a == "--" {
+			return global, append(rest, args[i:]...)
+		}
+		name, _, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		f := fs.Lookup(name)
+		if len(a) < 2 || a[0] != '-' || f == nil || slices.Contains(commandFlags[cmd], name) {
+			rest = append(rest, a)
+			continue
+		}
+		global = append(global, a)
+		b, isBool := f.Value.(interface{ IsBoolFlag() bool })
+		if !hasValue && !(isBool && b.IsBoolFlag()) && i+1 < len(args) {
+			i++
+			global = append(global, args[i])
+		}
+	}
+	return global, rest
+}
+
 func isCommand(s string) bool {
 	if _, ok := cli.Commands[s]; ok {
 		return true
@@ -279,10 +316,13 @@ func connect(ctx context.Context, cfg *config.Config, forceLocal bool, log *slog
 type node struct {
 	c      *local.Client
 	cancel context.CancelFunc
-	done   chan error
+	exited chan struct{} // closed when the worker has stopped; then err is set
+	err    error
 }
 
-// startNode runs the worker and serves the socket until stop is called.
+// startNode runs the worker and serves the socket until stop is called. It
+// returns once the worker runs, or with the reason it could not start (the
+// node ID is in use, say), so a TUI never runs on without its worker.
 func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger) (*node, error) {
 	c, err := local.Open(cfg, buildCommit(), log)
 	if err != nil {
@@ -298,7 +338,7 @@ func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger) (*node
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
-	n := &node{c: c, cancel: cancel, done: make(chan error, 1)}
+	n := &node{c: c, cancel: cancel, exited: make(chan struct{})}
 	apiErr := make(chan error, 1)
 	go func() { apiErr <- remote.ServeSocket(ctx, l, cfg.Socket, os.FileMode(cfg.SocketMode), c, log) }()
 	go func() {
@@ -314,17 +354,27 @@ func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger) (*node
 			os.Remove(filepath.Join(cfg.StateDir, "worker.lock"))
 			os.Remove(cfg.StateDir) // only if empty
 		}
-		n.done <- err
+		n.err = err
+		close(n.exited)
 	}()
-	return n, nil
+	select {
+	case <-c.Ready():
+		return n, nil
+	case <-n.exited:
+		c.Close()
+		if n.err == nil {
+			n.err = ctx.Err()
+		}
+		return nil, n.err
+	}
 }
 
 // stop ends the worker (jobs pause and resume on the next start) and waits.
 func (n *node) stop() error {
 	n.cancel()
-	err := <-n.done
+	<-n.exited
 	n.c.Close()
-	return err
+	return n.err
 }
 
 func daemon(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
@@ -336,9 +386,9 @@ func daemon(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 	select {
 	case <-ctx.Done():
 		return n.stop()
-	case err := <-n.done:
+	case <-n.exited:
 		n.c.Close()
-		return err
+		return n.err
 	}
 }
 
@@ -368,7 +418,18 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors str
 	log.Info("TUI runs this node", "node", cfg.NodeID, "version", version)
 	// A node that only lives while the TUI is open leaves the share on quit.
 	n.c.LeaveOnStop()
-	terr := tui.Run(ctx, n.c, tui.Options{RunsNode: true, Colors: colors, LogPath: logPath, Version: version})
+	// If the worker stops on its own (lock lost, or another worker started
+	// at the same moment kept the ID), the TUI ends too and stop returns why.
+	tctx, tcancel := context.WithCancel(ctx)
+	defer tcancel()
+	go func() {
+		select {
+		case <-n.exited:
+			tcancel()
+		case <-tctx.Done():
+		}
+	}()
+	terr := tui.Run(tctx, n.c, tui.Options{RunsNode: true, Colors: colors, LogPath: logPath, Version: version})
 	if err := n.stop(); err != nil && terr == nil {
 		terr = err
 	}
