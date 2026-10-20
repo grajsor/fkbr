@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"syscall"
@@ -27,11 +28,39 @@ import (
 	"fkbr/internal/product"
 )
 
-// commit is set at build time with -ldflags "-X main.commit=...".
+// commit is set at build time with -ldflags "-X main.commit=..." (make).
 var commit = "dev"
 
 // version is the release and commit, e.g. "v1.0 5cc1bcd".
-var version = product.Version(commit)
+var version = product.Version(buildCommit())
+
+// buildCommit is the commit make stamped in, or else the one Go records
+// for a plain `go build` inside a git checkout ("dev" without either).
+func buildCommit() string {
+	if commit != "dev" {
+		return commit
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return commit
+	}
+	rev, dirty := "", false
+	for _, s := range bi.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			rev = s.Value
+		case "vcs.modified":
+			dirty = s.Value == "true"
+		}
+	}
+	if len(rev) < 7 {
+		return commit
+	}
+	if dirty {
+		return rev[:7] + "-dirty"
+	}
+	return rev[:7]
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -235,7 +264,7 @@ func connect(ctx context.Context, cfg *config.Config, forceLocal bool, log *slog
 			return c, nil
 		}
 	}
-	return local.Open(cfg, commit, log) // the registry shows just the commit
+	return local.Open(cfg, buildCommit(), log) // the registry shows just the commit
 }
 
 // node is this host's worker plus its API socket, running in the background.
@@ -247,7 +276,7 @@ type node struct {
 
 // startNode runs the worker and serves the socket until stop is called.
 func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger) (*node, error) {
-	c, err := local.Open(cfg, commit, log)
+	c, err := local.Open(cfg, buildCommit(), log)
 	if err != nil {
 		return nil, err
 	}

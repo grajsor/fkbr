@@ -184,7 +184,7 @@ in-process mode.
 | `jobs`, `job [-f] ID`, `cancel ID`, `catchup ID` | follow and control jobs |
 | `events` | live change stream as JSON lines |
 | `check` | validate the host (see above) |
-| `version` | the release and the commit it was built from, e.g. `fkbr v1.0 f0c0e0b` |
+| `version` | the release and the commit it was built from, e.g. `fkbr v1.0 f0c0e0b`; `-dirty` if it had uncommitted changes, just `v1.0` if built without git |
 
 A command's own flags may come before or after its paths
 (`sync /a hostb:/a -mirror` works); after `--` everything is a path.
