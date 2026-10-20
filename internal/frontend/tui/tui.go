@@ -945,18 +945,26 @@ func jobDetails(j *api.Job) string {
 			srcBytes = p.Bytes
 		}
 	}
+	// From submit to the last status; while running it moves on with each
+	// update of the job (no timer of its own).
+	elapsed := ""
 	switch {
-	case j.State.Terminal() && !last.IsZero() && !j.Created.IsZero():
-		took := last.Sub(j.Created).Round(time.Second)
-		state += fmt.Sprintf(", took %s", took)
-		if took > 0 && srcBytes > 0 {
-			state += fmt.Sprintf(" (%s at %s/s)", humanSize(srcBytes), humanSize(int64(float64(srcBytes)/took.Seconds())))
+	case j.Created.IsZero():
+	case j.State.Terminal() && !last.IsZero():
+		took := last.Sub(j.Created)
+		elapsed = humanDuration(took)
+		if took >= time.Second && srcBytes > 0 {
+			elapsed += fmt.Sprintf(", %s at %s/s", humanSize(srcBytes), humanSize(int64(float64(srcBytes)/took.Seconds())))
 		}
-	case !j.State.Terminal() && !j.Created.IsZero():
-		state += fmt.Sprintf(" for %s", time.Since(j.Created).Round(time.Second))
+		elapsed += " (finished " + last.Local().Format("15:04:05") + ")"
+	case !j.State.Terminal():
+		elapsed = humanDuration(time.Since(j.Created)) + " so far"
 	}
-	fmt.Fprintf(&b, "state:     %s\ncreated:   %s by %s\nfrom:      %s:%s  %s\nto:        %s:%s/%s\nif exists: %s   zstd: %v\n",
-		state, j.Created.Local().Format("2006-01-02 15:04:05"), j.Initiator,
+	fmt.Fprintf(&b, "state:     %s\ncreated:   %s by %s\n", state, j.Created.Local().Format("2006-01-02 15:04:05"), j.Initiator)
+	if elapsed != "" {
+		fmt.Fprintf(&b, "elapsed:   %s\n", elapsed)
+	}
+	fmt.Fprintf(&b, "from:      %s:%s  %s\nto:        %s:%s/%s\nif exists: %s   zstd: %v\n",
 		r.SrcNode, r.SrcRoot, strings.Join(r.Paths, " "),
 		strings.Join(r.DstNodes, ","), r.DstRoot, r.DstDir, r.Conflict, r.Compress)
 	if j.CatchUpOf != "" {
@@ -1052,6 +1060,20 @@ func progressOf(j *api.Job) (done, total, files int64, counted bool, rate float6
 }
 
 // jobLine summarises a job in one line for the jobs panel.
+// humanDuration is d in h/min/s: "45 s", "1 min 12 s", "2 h 3 min".
+func humanDuration(d time.Duration) string {
+	s := int64(d.Round(time.Second) / time.Second)
+	switch {
+	case d < time.Second:
+		return "under 1 s"
+	case s < 60:
+		return fmt.Sprintf("%d s", s)
+	case s < 3600:
+		return fmt.Sprintf("%d min %d s", s/60, s%60)
+	}
+	return fmt.Sprintf("%d h %d min", s/3600, s%3600/60)
+}
+
 func jobLine(j *api.Job, width int) string {
 	r := j.Request
 	var src *api.JobStatus

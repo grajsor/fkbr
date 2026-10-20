@@ -378,7 +378,7 @@ SYNC (F4)
 
 JOBS (F9)
   ↑ ↓            choose a job
-  Enter          details: progress and ETA, every node, notes
+  Enter          details: time taken, progress, ETA, every node, notes
   c              cancel
   u              catch up nodes that were offline
   Esc            back

@@ -570,8 +570,19 @@ func TestJobDetailsLayout(t *testing.T) {
 	if !strings.Contains(d, "receiving") {
 		t.Errorf("running node's phase missing:\n%s", d)
 	}
-	if !strings.Contains(d, "state:     done, took 1m12s") {
-		t.Errorf("duration missing:\n%s", d)
+	if !strings.Contains(d, "state:     done\n") || !strings.Contains(d, "elapsed:   1 min 12 s, 2.0G at 28M/s (finished 16:29:09)\n") {
+		t.Errorf("elapsed time missing:\n%s", d)
+	}
+}
+
+func TestHumanDuration(t *testing.T) {
+	for d, want := range map[time.Duration]string{
+		0: "under 1 s", 400 * time.Millisecond: "under 1 s", 1600 * time.Millisecond: "2 s", 45 * time.Second: "45 s", 72 * time.Second: "1 min 12 s",
+		time.Hour: "1 h 0 min", 2*time.Hour + 3*time.Minute + 50*time.Second: "2 h 3 min", 50 * time.Hour: "50 h 0 min",
+	} {
+		if got := humanDuration(d); got != want {
+			t.Errorf("humanDuration(%v) = %q, want %q", d, got, want)
+		}
 	}
 }
 
@@ -589,6 +600,9 @@ func TestJobProgressAndETA(t *testing.T) {
 	}
 	// The slowest target decides: b has 250 MiB of 1000 MiB after 10 s.
 	d := jobDetails(job(true, 250<<20))
+	if !strings.Contains(d, "elapsed:   10 s so far\n") {
+		t.Errorf("elapsed while running:\n%s", d)
+	}
 	if !strings.Contains(d, "progress:  250M of 1.0G (25%)") || !strings.Contains(d, "ETA 30s") {
 		t.Errorf("progress line:\n%s", d)
 	}
