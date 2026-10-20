@@ -23,6 +23,10 @@ type Root struct {
 	ID         string `yaml:"id"`
 	Path       string `yaml:"path"`
 	AllowWrite bool   `yaml:"allow_write"`
+	// Hide is the share's path inside this root, if it is there (cd ~ &&
+	// fkbr ~/box): left out of listings and transfers, never written. Set
+	// by Finish.
+	Hide string `yaml:"-"`
 }
 
 type Poll struct {
@@ -198,7 +202,38 @@ func decode(data []byte) (*Config, error) {
 // Finish applies defaults and validates.
 func (c *Config) Finish() error {
 	c.applyDefaults()
-	return c.Validate()
+	if err := c.Validate(); err != nil {
+		return err
+	}
+	return c.placeShare()
+}
+
+// placeShare checks the roots against the share, with symlinks resolved:
+// a root inside the share is refused (it would hand out fkbr's own files),
+// and a share inside a root is hidden from that root.
+func (c *Config) placeShare() error {
+	share := RealPath(c.NFSRoot)
+	for i := range c.Roots {
+		r := &c.Roots[i]
+		p := RealPath(r.Path)
+		if p == share || strings.HasPrefix(p, share+"/") {
+			return fmt.Errorf("root %q (%s) is inside the share %s; run %s from the directory you want to share, or pass -root",
+				r.ID, r.Path, c.NFSRoot, product.Name)
+		}
+		r.Hide = ""
+		if inside, ok := strings.CutPrefix(share, strings.TrimSuffix(p, "/")+"/"); ok {
+			r.Hide = inside
+		}
+	}
+	return nil
+}
+
+// RealPath is p with symlinks resolved, or just cleaned if that fails.
+func RealPath(p string) string {
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		return r
+	}
+	return filepath.Clean(p)
 }
 
 // ParseRoot parses a root given on the command line: "id=path" (writable)

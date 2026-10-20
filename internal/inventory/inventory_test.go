@@ -17,8 +17,13 @@ const t0 = int64(1_700_000_000_000_000_000)
 
 func snap(t *testing.T, entries ...Entry) *Reader {
 	t.Helper()
+	return snapH(t, Header{Node: "n"}, entries...)
+}
+
+func snapH(t *testing.T, h Header, entries ...Entry) *Reader {
+	t.Helper()
 	var buf bytes.Buffer
-	w, err := NewWriter(&buf, Header{Node: "n"})
+	w, err := NewWriter(&buf, h)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -300,5 +305,42 @@ func readSnap(t *testing.T, b []byte) string {
 			return strings.Join(out, ",")
 		}
 		out = append(out, e.P)
+	}
+}
+
+// A target that cannot store what the source has (FAT: mtimes in 2 s
+// steps, no modes) is compared within those limits, or every sync would
+// send everything again.
+func TestPlanCoarseTarget(t *testing.T) {
+	src := func() *Reader {
+		f := file("f", 1)
+		f.M = t0 + 1_930_000_000
+		g := file("g", 1)
+		g.M = t0 + 2_500_000_000
+		return snap(t, dir("."), f, g)
+	}
+	dst := func(h Header) *Reader {
+		f, g := file("f", 1), file("g", 1)
+		f.Mo, g.Mo = 0o755, 0o755
+		d := dir(".")
+		d.Mo = 0o777
+		return snapH(t, h, d, f, g)
+	}
+	s := newSink()
+	Plan(src(), []Target{{Node: "fat", Snap: dst(Header{Node: "fat", MtimeStep: 2, NoModes: true})}}, PlanOptions{}, s)
+	if s.copies["f"] != 0 || s.copies["g"] == 0 {
+		t.Errorf("FAT target: copies %v, want only g (2.5 s newer)", s.copies)
+	}
+	s = newSink()
+	f := file("f", 1)
+	f.M = t0 + 1_930_000_000
+	Plan(snap(t, dir("."), f), []Target{{Node: "fat", Snap: snapH(t, Header{Node: "fat", MtimeStep: 2, NoModes: true}, dir("."), file("f", 1))}}, PlanOptions{}, s)
+	if len(s.copies) != 0 {
+		t.Errorf("FAT target in sync: copies %v", s.copies)
+	}
+	s = newSink()
+	Plan(src(), []Target{{Node: "ext4", Snap: dst(Header{Node: "ext4"})}}, PlanOptions{}, s)
+	if s.copies["f"] == 0 {
+		t.Errorf("exact target: f differs in mode and mtime but is not copied: %v", s.copies)
 	}
 }

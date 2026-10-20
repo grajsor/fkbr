@@ -19,8 +19,10 @@ import (
 
 // Client talks to a daemon over its Unix socket.
 type Client struct {
-	http *http.Client
-	self string
+	http  *http.Client
+	self  string
+	share string
+	roots []api.Root
 }
 
 var _ api.Client = (*Client)(nil)
@@ -34,13 +36,17 @@ func Dial(ctx context.Context, socket string) (*Client, error) {
 		},
 	}
 	c := &Client{http: &http.Client{Transport: tr}}
-	var self struct{ ID string }
+	var self struct {
+		ID    string
+		Share string
+		Roots []api.Root
+	}
 	dctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if err := c.call(dctx, http.MethodGet, "/v1/self", nil, &self); err != nil {
 		return nil, err
 	}
-	c.self = self.ID
+	c.self, c.share, c.roots = self.ID, self.Share, self.Roots
 	return c, nil
 }
 
@@ -79,6 +85,12 @@ func (c *Client) call(ctx context.Context, method, path string, in, out any) err
 }
 
 func (c *Client) Self() string { return c.self }
+
+// Share is the share directory the node runs on ("" from older nodes).
+func (c *Client) Share() string { return c.share }
+
+// LocalRoots are the directories the node shares, with their paths.
+func (c *Client) LocalRoots() []api.Root { return c.roots }
 
 func (c *Client) Close() error {
 	c.http.CloseIdleConnections()

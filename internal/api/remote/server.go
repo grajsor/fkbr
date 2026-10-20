@@ -2,7 +2,7 @@
 // and provides the matching api.Client. The daemon serves; CLI and TUI
 // connect. A future web UI can mount Handler as well.
 //
-//	GET  /v1/self                 {"id": node}
+//	GET  /v1/self                 {"id": node, "share": dir, "roots": []api.Root}
 //	GET  /v1/nodes                []api.Node
 //	POST /v1/nodes/{id}/forget
 //	POST /v1/prune                ?keep=DURATION (default 0)
@@ -43,7 +43,14 @@ import (
 func Handler(svc api.Service) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/self", func(w http.ResponseWriter, r *http.Request) {
-		reply(w, map[string]string{"id": svc.Self()}, nil)
+		self := map[string]any{"id": svc.Self()}
+		if s, ok := svc.(interface {
+			Share() string
+			LocalRoots() []api.Root
+		}); ok {
+			self["share"], self["roots"] = s.Share(), s.LocalRoots()
+		}
+		reply(w, self, nil)
 	})
 	mux.HandleFunc("GET /v1/nodes", func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.Nodes(r.Context())

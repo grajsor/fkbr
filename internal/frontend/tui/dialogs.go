@@ -11,6 +11,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/product"
+	"fkbr/internal/safetext"
 )
 
 // dialog is a modal box. update returns done=true to close it.
@@ -151,7 +152,7 @@ func (d *transferDialog) view(st *styles, width, _ int) string {
 		what = d.paths[0]
 	}
 	var b strings.Builder
-	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("%s %s from %s:%s", verb, clip(what, w-20), d.srcNode, d.srcRoot)) + "\n\n")
+	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("%s %s from %s:%s", verb, clip(safetext.Clean(what), w-20), d.srcNode, d.srcRoot)) + "\n\n")
 	st.styleInputs(d.focus, &d.inputs[0], &d.inputs[1], &d.inputs[2])
 	for i := range d.inputs {
 		d.inputs[i].Width = w - 14
@@ -229,8 +230,9 @@ func (d *confirmDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 func (d *confirmDialog) view(st *styles, width, height int) string {
 	w := min(width-6, 76)
 	var b strings.Builder
-	b.WriteString(st.dialogTitle.Render(d.title) + "\n\n")
+	b.WriteString(st.dialogTitle.Render(safetext.Clean(d.title)) + "\n\n")
 	for i, l := range d.lines {
+		l = safetext.Clean(l)
 		if i == max(3, height-12) {
 			fmt.Fprintf(&b, "  … and %d more\n", len(d.lines)-i)
 			break
@@ -270,7 +272,7 @@ func (d *textDialog) content(w int) string {
 }
 
 func newTextDialog(title, text string) *textDialog {
-	return &textDialog{title: title, text: text}
+	return &textDialog{title: safetext.Clean(title), text: safetext.Text(text)}
 }
 
 func (d *textDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -491,7 +493,7 @@ func (d *syncDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 func (d *syncDialog) view(st *styles, width, _ int) string {
 	w := min(width-6, 76)
 	var b strings.Builder
-	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("Sync %s → (make the destination match it)", clip(d.what(), w-40))) + "\n\n")
+	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("Sync %s → (make the destination match it)", clip(safetext.Clean(d.what()), w-40))) + "\n\n")
 	st.styleInputs(d.focus, &d.inputs[0], &d.inputs[1], &d.inputs[2])
 	for i := range d.inputs {
 		d.inputs[i].Width = w - 14

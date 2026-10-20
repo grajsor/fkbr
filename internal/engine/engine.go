@@ -99,6 +99,12 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 
 func (e *Engine) Self() string { return e.cfg.NodeID }
 
+// Share is the share directory this node runs on.
+func (e *Engine) Share() string { return e.cfg.NFSRoot }
+
+// LocalRoots are the directories this node shares, with their paths.
+func (e *Engine) LocalRoots() []api.Root { return e.fs.Roots() }
+
 // LeaveOnStop makes this node leave the share when Run stops cleanly, so a
 // node that only runs while someone uses it (the TUI) is not left behind
 // as an offline member of @all. It stays if a job still needs it, and

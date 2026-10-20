@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -45,6 +46,9 @@ type Options struct {
 	ChownDirs bool
 	// AllowSetID keeps setuid/setgid bits instead of stripping them.
 	AllowSetID bool
+	// Hide is the share's path inside the root, if it is there; nothing is
+	// written into it (see config.Root.Hide).
+	Hide string
 }
 
 // Result summarises a commit.
@@ -82,6 +86,9 @@ type Receiver struct {
 	// directory resolves in one step instead of one per path component.
 	dir     *os.Root
 	dirPath string
+	// destNames caches destination directory listings during a commit
+	// (see listed).
+	destNames map[string]map[string]bool
 }
 
 // stagingDir returns dir (inside the staging tree) open, creating it.
@@ -117,6 +124,9 @@ func New(root *os.Root, job, dstDir string, opts Options) (*Receiver, error) {
 	}
 	if dst == StagingDir || strings.HasPrefix(dst, StagingDir+"/") {
 		return nil, fmt.Errorf("%w: cannot receive into %s", api.ErrBadPath, StagingDir)
+	}
+	if opts.Hide != "" && (dst == opts.Hide || strings.HasPrefix(dst, opts.Hide+"/")) {
+		return nil, fmt.Errorf("%w: cannot receive into %s, the share", api.ErrBadPath, opts.Hide)
 	}
 	if !opts.Conflict.Valid() {
 		return nil, fmt.Errorf("invalid conflict policy %q", opts.Conflict)
@@ -191,16 +201,123 @@ type dirRecord struct {
 	Entry api.Entry `json:"entry"`
 }
 
-// Apply stages one bundle entry.
+// Apply stages one bundle entry. An entry this destination cannot hold is
+// refused (see entryError) and the rest goes on.
 func (r *Receiver) Apply(h *bundle.Header, data io.Reader) error {
-	if r.bad[h.Name] {
+	if r.skip(h.Name) {
 		return nil
 	}
+	err := r.apply(h, data)
+	if err != nil && isEntryError(err) {
+		return r.refuse(h.Name, err)
+	}
+	return err
+}
+
+// skip reports whether name, or a directory above it, was dropped.
+func (r *Receiver) skip(name string) bool {
+	if len(r.bad) == 0 {
+		return false
+	}
+	for n := name; ; n = path.Dir(n) {
+		if r.bad[n] {
+			return true
+		}
+		if n == "." || n == "/" {
+			return false
+		}
+	}
+}
+
+// entryError is an error that concerns only one entry: the destination
+// cannot hold it (a name FAT refuses, a file over the size limit, a
+// symlink where there are none, a name that clashes with another).
+type entryError struct{ err error }
+
+func (e entryError) Error() string { return e.err.Error() }
+func (e entryError) Unwrap() error { return e.err }
+
+func isEntryError(err error) bool {
+	var ee entryError
+	return errors.As(err, &ee) || errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENAMETOOLONG) ||
+		errors.Is(err, syscall.EFBIG) || errors.Is(err, syscall.EILSEQ)
+}
+
+// refuse drops an entry the destination cannot hold, for good (a resume
+// skips it too), and records why for the commit's report. What it left in
+// staging is removed, unless its name clashes: that removal would hit the
+// other entry.
+func (r *Receiver) refuse(name string, cause error) error {
+	r.closeDir()
+	r.bad[name] = true
+	if err := r.appendLine("bad", []byte(name)); err != nil {
+		return err
+	}
+	line, _ := json.Marshal(refusal{name, cause.Error()})
+	if err := r.appendLine("refused", line); err != nil {
+		return err
+	}
+	if errors.Is(cause, errClashed) {
+		return nil
+	}
+	return r.root.RemoveAll(path.Join(r.tree, name))
+}
+
+type refusal struct {
+	Name string `json:"name"`
+	Err  string `json:"err"`
+}
+
+// listed is hasName for destination directories during a commit, with
+// each directory read once (only where a name already exists).
+func (r *Receiver) listed(dir, name string) bool {
+	names, ok := r.destNames[dir]
+	if !ok {
+		names = map[string]bool{}
+		if f, err := r.root.Open(dir); err == nil {
+			ns, err := f.Readdirnames(-1)
+			f.Close()
+			if err != nil {
+				return true // cannot tell; let the operation itself decide
+			}
+			for _, n := range ns {
+				names[n] = true
+			}
+		}
+		if r.destNames == nil {
+			r.destNames = map[string]map[string]bool{}
+		}
+		r.destNames[dir] = names
+	}
+	return names[name]
+}
+
+// hasName reports whether directory dir lists exactly name. Where a name
+// exists but is not listed, the filesystem matched another spelling
+// (README for readme on FAT).
+func (r *Receiver) hasName(dir, name string) bool {
+	f, err := r.root.Open(dir)
+	if err != nil {
+		return true // cannot tell; let the operation itself decide
+	}
+	defer f.Close()
+	names, err := f.Readdirnames(-1)
+	return err != nil || slices.Contains(names, name)
+}
+
+var errClashed = errors.New("clashes with another name here (a case-insensitive filesystem?)")
+
+func errClash(name string) error { return entryError{fmt.Errorf("%s: %w", name, errClashed)} }
+
+func (r *Receiver) apply(h *bundle.Header, data io.Reader) error {
 	p := path.Join(r.tree, h.Name)
 	if h.Entry.Type == api.TypeFile {
 		d, err := r.stagingDir(path.Dir(p))
 		if err != nil {
 			return err
+		}
+		if _, err := d.Lstat(path.Base(p)); err == nil && h.Offset == 0 && !r.hasName(path.Dir(p), path.Base(p)) {
+			return errClash(h.Name)
 		}
 		return r.applyFile(d, path.Base(p), h, data)
 	}
@@ -211,6 +328,9 @@ func (r *Receiver) Apply(h *bundle.Header, data io.Reader) error {
 	}
 	switch h.Entry.Type {
 	case api.TypeDir:
+		if _, err := r.root.Lstat(p); err == nil && h.Name != "." && !r.hasName(path.Dir(p), path.Base(p)) {
+			return errClash(h.Name)
+		}
 		if err := r.root.MkdirAll(p, 0o700); err != nil {
 			return err
 		}
@@ -221,13 +341,16 @@ func (r *Receiver) Apply(h *bundle.Header, data io.Reader) error {
 			return err
 		}
 		if err := r.root.Symlink(h.Entry.LinkTarget, p); err != nil {
-			return err
+			return entryError{err} // FAT has no symlinks
 		}
 		r.chown(p, h.Entry, true)
 		return nil
 	}
 	return fmt.Errorf("%s: unsupported type %q", h.Name, h.Entry.Type)
 }
+
+// openStaged opens a staged file; tests replace it to fail.
+var openStaged = (*os.Root).OpenFile
 
 // applyFile stages one file (segment) as name in the open staging dir d.
 func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.Reader) error {
@@ -237,12 +360,12 @@ func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.
 			return err
 		}
 	}
-	f, err := d.OpenFile(name, os.O_WRONLY|os.O_CREATE, 0o600)
+	f, err := openStaged(d, name, os.O_WRONLY|os.O_CREATE, 0o600)
 	if errors.Is(err, fs.ErrPermission) {
 		// Replay of a file already completed and given to its owner: we
 		// may not write to it any more, but the staging dir is ours.
 		if err = d.Remove(name); err == nil {
-			f, err = d.OpenFile(name, os.O_WRONLY|os.O_CREATE, 0o600)
+			f, err = openStaged(d, name, os.O_WRONLY|os.O_CREATE, 0o600)
 		}
 	}
 	if err != nil {
@@ -254,7 +377,7 @@ func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.
 	}
 	if n, err := writeSparse(f, data, h.Offset); err != nil || n != h.Length {
 		f.Close()
-		return fmt.Errorf("%s: wrote %d of %d bytes: %v", h.Name, n, h.Length, err)
+		return fmt.Errorf("%s: wrote %d of %d bytes: %w", h.Name, n, h.Length, err)
 	}
 	if h.Last() {
 		if err := f.Truncate(h.Entry.Size); err != nil {
@@ -443,6 +566,9 @@ func (r *Receiver) Commit() (*Result, error) {
 	if err := r.applyDirMeta(res, created); err != nil {
 		return res, err
 	}
+	if err := r.reportRefused(res); err != nil {
+		return res, err
+	}
 	res.OwnerNotPreserved = r.ownerFails
 	if r.dirsNotChowned > 0 {
 		res.problem("ownership of %d directories not preserved (needs root or CAP_DAC_OVERRIDE, else later copies into them would fail)", r.dirsNotChowned)
@@ -455,6 +581,28 @@ func (r *Receiver) Commit() (*Result, error) {
 	}
 	r.root.Remove(StagingDir) // only succeeds when no other job is staging
 	return res, nil
+}
+
+// reportRefused counts the entries refused while staging as errors.
+func (r *Receiver) reportRefused(res *Result) error {
+	f, err := r.root.Open(path.Join(r.base, "refused"))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, 1<<20)
+	for sc.Scan() {
+		var x refusal
+		if json.Unmarshal(sc.Bytes(), &x) == nil {
+			res.Errors++
+			res.problem("%s: not placed: %s", x.Name, x.Err)
+		}
+	}
+	return sc.Err()
 }
 
 // ensureDir creates dir (and parents) in the destination, recording which
@@ -526,13 +674,23 @@ func (r *Receiver) commitDir(rel string, res *Result, created map[string]bool) e
 		if err != nil {
 			return err
 		}
+		if h := r.opts.Hide; h != "" && (dst == h || strings.HasPrefix(dst, h+"/")) {
+			res.Errors++
+			res.problem("%s: that is the share here, not written", child)
+			continue
+		}
 		if sfi.IsDir() {
-			if _, err := r.root.Lstat(dst); errors.Is(err, fs.ErrNotExist) {
+			_, err := r.root.Lstat(dst)
+			if errors.Is(err, fs.ErrNotExist) {
 				// Nothing there yet: everything below is new, so the
 				// whole staged directory moves into place at once.
 				if err := r.moveNewDir(src, dst, res, created); err == nil {
 					continue
 				}
+			} else if err == nil && !r.listed(path.Dir(dst), path.Base(dst)) {
+				res.Errors++
+				res.problem("%s: %v", child, errClashed)
+				continue
 			}
 			if err := r.ensureDir(dst, created); err != nil {
 				res.Errors++
@@ -598,6 +756,11 @@ func (r *Receiver) install(name, src, dst string, sfi fs.FileInfo, res *Result) 
 	case errors.Is(err, fs.ErrNotExist):
 	case err != nil:
 		return err
+	case !r.listed(path.Dir(dst), path.Base(dst)):
+		// Another spelling (README for readme): replacing it would lose it.
+		res.Errors++
+		res.problem("%s: %v", name, errClashed)
+		return nil
 	case dfi.IsDir():
 		res.Errors++
 		res.problem("%s: destination is a directory", name)

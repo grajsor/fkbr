@@ -15,6 +15,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/product"
+	"fkbr/internal/safetext"
 )
 
 var cpUsage = product.Expand(`usage: cp [-conflict skip|overwrite|overwrite-if-older] [-z] [-detach] SRC... DST
@@ -108,7 +109,7 @@ func follow(ctx context.Context, c api.Client, id string, out io.Writer) error {
 			return summary(j, out)
 		}
 		if tty {
-			fmt.Fprintf(os.Stderr, "\r\033[K%.*s", termWidth(), progressLine(j))
+			fmt.Fprintf(os.Stderr, "\r\033[K%.*s", termWidth(), safetext.Clean(progressLine(j)))
 		}
 		select {
 		case <-ctx.Done():

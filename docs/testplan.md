@@ -81,7 +81,23 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Subcommand flags after the paths (`sync /a b:/c -mirror`) | Same as before the paths | auto |
 | TUI: 30,000 random keys and resizes down to 10x4 | No panic, no exit | lab (weird `fuzz_tui.py`) |
 
-## 6. Mixed fleet
+## 6. How fkbr is started and where
+
+| Case | Expected | Status |
+|---|---|---|
+| TUI quits, or its terminal closes (SIGHUP, an ssh drop) | The node leaves the share; nothing left behind | auto, lab (funky `sighup`; found: a TUI stayed registered after quitting, and a hangup left entry, socket and lock) |
+| Same node name, second share on the same host | Refused with what to do (it attached to the other share's node) | auto, lab (funky) |
+| CLI or TUI started elsewhere, or with `-ro`/`-root`, while the node runs | Attaches, with a note on what the node shares | auto, lab (funky) |
+| Share inside the shared directory (`cd ~ && fkbr ~/box`) | Share left out: not listed, sent, written or deleted (it was copied along) | auto, lab (funky) |
+| Shared directory inside the share, reached by a symlink or `-root` | Refused (a symlink got past the check) | auto, lab (funky) |
+| Names, link targets, a peer's host/OS, file contents with terminal escapes | Shown as `?` in the TUI and on a terminal; exact when piped, in `-json` and in actions (they reached the terminal raw) | auto, lab (funky) |
+| Target on FAT: names it cannot hold, README next to readme, 2 s mtimes, no modes | Those names refused and reported, the rest arrives; sync settles (one bad name failed the whole copy; the clash overwrote silently; sync re-sent everything) | auto, lab (funky `vfat_*`) |
+| File over the target's `ulimit -f` | That file reported, the rest arrives | lab (funky) |
+| Stdout and stderr closed, 40 open files, odd hostnames | Work | lab (funky) |
+| Share entries replaced by symlinks to elsewhere | Pruning deletes nothing outside the share | lab (funky) |
+| Files whose stat size is 0 (`/proc`) | Arrive empty, like with tar and rsync | lab (funky) |
+
+## 7. Mixed fleet
 
 | Case | Expected | Status |
 |---|---|---|
@@ -98,6 +114,9 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
   several nodes on one machine; `nfscut.py target|source` cuts a lab node
   off the NAS mid-transfer; `fuzz_tui.py SECONDS SEED` (with pyte) throws
   random keys and resizes at the TUI.
+- **Funky** (`~/fkbr-lab/funky`): `funky.py [test...]` (with pyte; sudo
+  for the FAT image and hostnames): how fkbr is started and where, hostile
+  names and peers, odd target filesystems and limits.
 - **Compare** (`~/fkbr-lab/compare`): `compare.py setup | setup_big |
   run N | runbig | clean` times fkbr, tar, rsync and borg through the
   share and verifies every copy; results go to `docs/benchmarks.md`.

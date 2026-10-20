@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -27,6 +28,7 @@ import (
 	"fkbr/internal/frontend/cli"
 	"fkbr/internal/frontend/tui"
 	"fkbr/internal/product"
+	"fkbr/internal/safetext"
 )
 
 // commit is set at build time with -ldflags "-X main.commit=..." (make).
@@ -73,7 +75,7 @@ func archivedOr(def string) string {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, product.Name+":", err)
+		fmt.Fprintln(os.Stderr, product.Name+":", safetext.Clean(err.Error()))
 		os.Exit(1)
 	}
 }
@@ -262,7 +264,16 @@ func run() error {
 		return err
 	}
 	defer c.Close()
-	return cli.Run(ctx, c, cmd, args, os.Stdout)
+	return cli.Run(ctx, c, cmd, args, stdout())
+}
+
+// stdout cleans what goes to a terminal of control characters (names and
+// peer fields could carry escapes); piped output stays exact, as with ls.
+func stdout() io.Writer {
+	if fi, err := os.Stdout.Stat(); err == nil && fi.Mode()&os.ModeCharDevice != 0 {
+		return safetext.Writer(os.Stdout)
+	}
+	return os.Stdout
 }
 
 // commandFlags are command flags that share a name with a global flag; after
@@ -310,12 +321,59 @@ func isCommand(s string) bool {
 // jobs run where a node's worker runs.
 func connect(ctx context.Context, cfg *config.Config, forceLocal bool, log *slog.Logger) (api.Client, error) {
 	if !forceLocal {
-		if c, err := remote.Dial(ctx, cfg.Socket); err == nil {
+		c, notice, err := dialNode(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if c != nil {
 			log.Debug("using running node", "socket", cfg.Socket)
+			if notice != "" {
+				fmt.Fprintln(os.Stderr, product.Name+": note:", safetext.Clean(notice))
+			}
 			return c, nil
 		}
 	}
 	return local.Open(cfg, buildCommit(), log) // the registry shows just the commit
+}
+
+// dialNode attaches to this node's running daemon or TUI; nil if none
+// answers. A node of this name that runs for another share is an error. One
+// that shares other directories than this command would (started
+// elsewhere, or with other -root/-ro) is used, with a notice saying so.
+func dialNode(ctx context.Context, cfg *config.Config) (*remote.Client, string, error) {
+	c, err := remote.Dial(ctx, cfg.Socket)
+	if err != nil {
+		return nil, "", nil
+	}
+	if s := c.Share(); s != "" && config.RealPath(s) != config.RealPath(cfg.NFSRoot) {
+		c.Close()
+		return nil, "", fmt.Errorf("%q already runs on this host for the share %s; pass -node with another name to use %s too",
+			cfg.NodeID, s, cfg.NFSRoot)
+	}
+	if theirs := c.LocalRoots(); theirs != nil && !sameRoots(theirs, cfg.Roots) {
+		var ds []string
+		for _, r := range theirs {
+			d := r.Path
+			if !r.Writable {
+				d += " (read-only)"
+			}
+			ds = append(ds, d)
+		}
+		return c, fmt.Sprintf("using the running node %s, which shares %s", c.Self(), strings.Join(ds, ", ")), nil
+	}
+	return c, "", nil
+}
+
+func sameRoots(a []api.Root, b []config.Root) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].ID != b[i].ID || a[i].Writable != b[i].AllowWrite || config.RealPath(a[i].Path) != config.RealPath(b[i].Path) {
+			return false
+		}
+	}
+	return true
 }
 
 // node is this host's worker plus its API socket, running in the background.
@@ -407,9 +465,13 @@ func daemon(ctx context.Context, cfg *config.Config, log *slog.Logger) error {
 // long as the TUI is open.
 func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors string, level slog.Level) error {
 	if !forceLocal {
-		if c, err := remote.Dial(ctx, cfg.Socket); err == nil {
+		c, notice, err := dialNode(ctx, cfg)
+		if err != nil {
+			return err
+		}
+		if c != nil {
 			defer c.Close()
-			return tui.Run(ctx, c, tui.Options{Colors: colors, Version: version})
+			return tui.Run(ctx, c, tui.Options{Colors: colors, Version: version, Notice: notice})
 		}
 	}
 	// Log lines would draw over the UI, so the node logs to a file beside

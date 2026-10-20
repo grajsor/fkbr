@@ -21,6 +21,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/product"
+	"fkbr/internal/safetext"
 )
 
 // Options describe how the TUI was started.
@@ -34,6 +35,8 @@ type Options struct {
 	LogPath string
 	// Version scrolls through the header now and then (anim.go).
 	Version string
+	// Notice is shown in the status line at start.
+	Notice string
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -45,6 +48,9 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 	m.runsNode = opts.RunsNode
 	m.logPath = opts.LogPath
 	m.version = opts.Version
+	if opts.Notice != "" {
+		m.setStatus(opts.Notice, false)
+	}
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
 	if err == tea.ErrProgramKilled && ctx.Err() != nil {
 		return nil
@@ -220,7 +226,7 @@ func (m *model) refreshTargets(ts []target) tea.Cmd {
 }
 
 func (m *model) setStatus(text string, isErr bool) {
-	m.status, m.statusErr, m.statusAt = text, isErr, time.Now()
+	m.status, m.statusErr, m.statusAt = safetext.Clean(text), isErr, time.Now()
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -259,7 +265,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		p.loading = false
 		if msg.err != nil {
-			p.err = msg.err.Error()
+			p.err = safetext.Clean(msg.err.Error())
 			if msg.res == nil && len(p.rows) == 0 {
 				p.rows = []row{{name: "..", up: true, isDir: true}}
 			}
@@ -858,7 +864,7 @@ func renderFile(res *api.ReadResult) string {
 		}
 		return b.String()
 	}
-	b.Write(data)
+	b.WriteString(strings.ReplaceAll(string(data), "\r\n", "\n")) // newTextDialog cleans the rest
 	if !res.EOF {
 		fmt.Fprintf(&b, "\n\n[… showing %d of %d bytes]", len(data), res.Size)
 	}
@@ -980,9 +986,10 @@ func jobDetails(j *api.Job) string {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%d\t%s\t%d\t%d\t%d\t%s\n",
 			p.Node, p.Role, p.State, p.Files, humanSize(p.Bytes), p.Chunks, p.Skipped, p.Errors, now)
 		if p.Error != "" {
-			untimed = append(untimed, p.Node+": error: "+p.Error)
+			untimed = append(untimed, p.Node+": error: "+safetext.Clean(p.Error))
 		}
 		for _, pr := range p.Problems {
+			pr = safetext.Clean(pr)
 			// Nodes stamp notes with the time ("15:04:05 note"); older
 			// builds did not.
 			if len(pr) > 9 && pr[2] == ':' && pr[5] == ':' && pr[8] == ' ' {
@@ -1001,7 +1008,7 @@ func jobDetails(j *api.Job) string {
 		}
 	}
 	for _, d := range j.Detached {
-		fmt.Fprintf(&b, "\ndetached %s after %d chunks: %s  (u = catch up)", d.Node, d.Chunks, d.Reason)
+		fmt.Fprintf(&b, "\ndetached %s after %d chunks: %s  (u = catch up)", d.Node, d.Chunks, safetext.Clean(d.Reason))
 	}
 	return b.String()
 }
@@ -1077,10 +1084,11 @@ func jobLine(j *api.Job, width int) string {
 	if r.SyncPlan != "" {
 		paths = r.BaseDir + " (sync)"
 	}
+	paths = safetext.Clean(paths)
 	// Progress always shows in full; paths and destination share the rest,
 	// the paths giving way first.
 	head := fmt.Sprintf("%s %-16s %s:", short(j.ID), state, r.SrcNode)
-	dst := fmt.Sprintf("%s:%s/%s", strings.Join(r.DstNodes, ","), r.DstRoot, r.DstDir)
+	dst := safetext.Clean(fmt.Sprintf("%s:%s/%s", strings.Join(r.DstNodes, ","), r.DstRoot, r.DstDir))
 	room := width - runewidth.StringWidth(head) - len(" → ") - runewidth.StringWidth("  "+progress)
 	pw, dw := runewidth.StringWidth(paths), runewidth.StringWidth(dst)
 	if pw+dw > room {
@@ -1123,7 +1131,9 @@ func (m *model) View() string {
 	}
 	out = append(out, st.Render(fit(status, m.width)))
 	out = append(out, m.keyBar())
-	return strings.Join(out, "\n")
+	// Text from elsewhere is cleaned where it is drawn; this is the net
+	// for anything missed: only colour codes reach the terminal.
+	return safetext.Screen(strings.Join(out, "\n"))
 }
 
 func (m *model) header() string {

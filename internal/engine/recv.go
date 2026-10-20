@@ -49,6 +49,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 		Chown:      e.info.ChownCapable,
 		ChownDirs:  e.info.ChownCapable && e.info.DACOverride,
 		AllowSetID: e.cfg.Transfer.AllowSetID,
+		Hide:       e.shareIn(req.DstRoot),
 	})
 	if err != nil {
 		return status.finish(ctx, api.JobFailed, err)

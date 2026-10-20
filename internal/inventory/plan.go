@@ -284,12 +284,18 @@ func (p *planner) step(path string) (err error) {
 // sec truncates an mtime to whole seconds, the precision compared.
 func sec(ns int64) int64 { return ns / 1e9 }
 
-// differs reports whether a same-typed target entry must be re-sent.
+// differs reports whether a same-typed target entry must be re-sent, within
+// what the target's filesystem can store.
 func (p *planner) differs(s, d *Entry, t Target) bool {
-	modeDiff := s.Mo&0o1777 != d.Mo&0o1777 // setuid/setgid depend on target policy
+	h := &t.Snap.Header
+	modeDiff := !h.NoModes && s.Mo&0o1777 != d.Mo&0o1777 // setuid/setgid depend on target policy
+	timeDiff := sec(s.M) != sec(d.M)
+	if h.MtimeStep > 1 {
+		timeDiff = max(s.M-d.M, d.M-s.M) >= h.MtimeStep*1e9
+	}
 	switch s.T {
 	case TypeFile:
-		if s.S != d.S || sec(s.M) != sec(d.M) || modeDiff {
+		if s.S != d.S || timeDiff || modeDiff {
 			return true
 		}
 		if p.opts.Checksum && s.H != "" && d.H != "" && s.H != d.H {
@@ -299,7 +305,7 @@ func (p *planner) differs(s, d *Entry, t Target) bool {
 	case TypeSymlink:
 		return s.L != d.L || (t.Chown && (s.U != d.U || s.G != d.G))
 	case TypeDir:
-		return modeDiff || sec(s.M) != sec(d.M) || (t.ChownDirs && (s.U != d.U || s.G != d.G))
+		return modeDiff || timeDiff || (t.ChownDirs && (s.U != d.U || s.G != d.G))
 	}
 	return false
 }

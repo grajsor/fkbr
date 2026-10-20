@@ -87,6 +87,15 @@ Safe. Every file arrives whole. If both copies have the same file, you get one o
 **Share read-only?**
 Start with `-ro`.
 
+**The share is inside the folder I share?**
+Fine (`cd ~ && fkbr ~/box`). fkbr leaves the share out.
+
+**A `?` in a file name?**
+The name holds a character your terminal could act on, like an escape or a line break. fkbr shows it as `?`. Copies keep the real name.
+
+**Copy to a USB stick (FAT)?**
+Works. Names FAT cannot hold (`a:b`, or `README` next to `readme`) are skipped and reported; the rest arrives. Sync knows FAT keeps times in 2-second steps and has no permissions.
+
 **Different users on each machine?**
 That works. fkbr opens its folders on the share to everyone, so keep the share where only your machines can reach it.
 

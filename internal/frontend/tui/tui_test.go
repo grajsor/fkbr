@@ -28,6 +28,7 @@ type fakeClient struct {
 	syncs   []api.SyncRequest
 	applied []string
 	events  chan api.Event
+	read    []byte // what Read returns, if set
 }
 
 func newFake() *fakeClient {
@@ -118,6 +119,9 @@ func (f *fakeClient) Remove(_ context.Context, r api.RemoveRequest) (*api.Remove
 }
 
 func (f *fakeClient) Read(_ context.Context, r api.ReadRequest) (*api.ReadResult, error) {
+	if f.read != nil {
+		return &api.ReadResult{Data: f.read, Size: int64(len(f.read)), EOF: true}, nil
+	}
 	return &api.ReadResult{Data: []byte("hello\x00world"), Size: 11, EOF: true}, nil
 }
 
@@ -753,4 +757,66 @@ func TestSyncSelectedFolders(t *testing.T) {
 		h.f.submits[0].Conflict != api.ConflictOverwrite {
 		t.Fatalf("files copy: %+v", h.f.submits)
 	}
+}
+
+// Names, a peer's registry fields and file contents can hold terminal
+// control sequences; the screen shows them as "?" and keeps its layout,
+// while actions still use the real names.
+func TestControlCharactersNeverReachTheTerminal(t *testing.T) {
+	h := newHarness(t)
+	evil := []string{"\x1b]0;PWNED\x07title", "\x1b[2Jclear", "\x1b]52;c;cHduZWQ=\x07clip", "cr\rback", "nl\nname"}
+	var es []api.Entry
+	for _, n := range evil {
+		es = append(es, api.Entry{Name: n, Type: api.TypeFile, Size: 1})
+	}
+	es = append(es, api.Entry{Name: "link", Type: api.TypeSymlink, LinkTarget: "\x1b]0;LINKPWN\x07"})
+	h.f.files["s1:data/."] = es
+	h.f.nodes[1].OS = "\x1b]0;OSPWN\x07Evil"
+	h.f.nodes[1].Hostname = "host\x1b[2J"
+	h.f.read = []byte("log line \x1b[31mred\x1b[0m \x1b]0;VIEWPWN\x07\r\nnext\n")
+	h.run(h.m.loadNodes())
+	check := func(what string) {
+		t.Helper()
+		v := h.m.View()
+		for _, bad := range []string{"\x1b]", "\x07", "\x1b[2J", "\r", "\x1b[31m"} {
+			if strings.Contains(v, bad) {
+				t.Errorf("%s: screen holds %q", what, bad)
+			}
+		}
+		for i, l := range strings.Split(v, "\n") {
+			if w := lipgloss.Width(l); w != 120 {
+				t.Errorf("%s: line %d is %d wide: %q", what, i, w, l)
+				break
+			}
+		}
+	}
+	check("node list")
+	h.open("s1", "data")
+	check("listing")
+	h.m.panes[h.m.active].cursorTo("link")
+	check("symlink footer")
+	if !strings.Contains(h.m.View(), "?]0;PWNED?title") {
+		t.Error("cleaned name not shown")
+	}
+	h.key("f3")
+	check("viewer")
+	h.key("esc")
+	h.m.panes[h.m.active].cursorTo(evil[0])
+	h.key("insert", "f8")
+	check("delete dialog")
+	h.key("y")
+	if len(h.f.removes) != 1 || h.f.removes[0].Paths[0] != evil[0] {
+		t.Errorf("delete used %+v, want the real name", h.f.removes)
+	}
+	h.m.panes[h.m.active].cursorTo(evil[1])
+	h.key("f5")
+	check("copy dialog")
+	h.key("esc")
+	dir := "\x1b]0;DIRPWN\x07dir"
+	h.f.files["s1:data/."] = append(h.f.files["s1:data/."], api.Entry{Name: dir, Type: api.TypeDir})
+	h.f.files["s1:data/"+dir] = nil
+	h.run(h.m.refreshPane(h.m.active))
+	h.m.panes[h.m.active].cursorTo(dir)
+	h.key("enter")
+	check("inside an evil directory")
 }

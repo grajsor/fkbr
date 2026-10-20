@@ -92,7 +92,20 @@ func (e *Engine) writablePath(rootID, rel string) (string, error) {
 	if c == receive.StagingDir || strings.HasPrefix(c, receive.StagingDir+"/") {
 		return "", fmt.Errorf("%w: %s is %s's staging area", api.ErrBadPath, receive.StagingDir, product.Name)
 	}
+	if h := e.shareIn(rootID); h != "" && (c == h || strings.HasPrefix(c, h+"/") || strings.HasPrefix(h, c+"/")) {
+		return "", fmt.Errorf("%w: %s is or holds the share (%s)", api.ErrBadPath, c, h)
+	}
 	return c, nil
+}
+
+// shareIn is the share's path inside root rootID, or "" (config.Root.Hide).
+func (e *Engine) shareIn(rootID string) string {
+	for _, r := range e.cfg.Roots {
+		if r.ID == rootID {
+			return r.Hide
+		}
+	}
+	return ""
 }
 
 func (e *Engine) mkdirLocal(req api.MkdirRequest) error {

@@ -12,6 +12,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/product"
+	"fkbr/internal/safetext"
 )
 
 const syncUsage = `usage: sync [-mirror] [-checksum] [-z] [-n] [-max-deletes N] [-force] SRC DST
@@ -139,7 +140,7 @@ func planWithProgress(ctx context.Context, c api.Client, req api.SyncRequest) (*
 						}
 						parts = append(parts, st)
 					}
-					fmt.Fprintf(os.Stderr, "\r\033[Kscanning: %.*s", termWidth()-10, strings.Join(parts, ", "))
+					fmt.Fprintf(os.Stderr, "\r\033[Kscanning: %.*s", termWidth()-10, safetext.Clean(strings.Join(parts, ", ")))
 				}
 			}()
 			defer fmt.Fprint(os.Stderr, "\r\033[K")

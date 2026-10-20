@@ -107,7 +107,22 @@ func (l *Local) lookup(rootID, rel string) (*root, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	if r.hidden(c) {
+		return nil, "", &fs.PathError{Op: "open", Path: c, Err: fs.ErrNotExist}
+	}
 	return r, c, nil
+}
+
+// Hidden reports whether rel is the share, or inside it, in a root that
+// holds the share (see config.Root.Hide).
+func (l *Local) Hidden(rootID, rel string) bool {
+	r, ok := l.roots[rootID]
+	return ok && r.hidden(rel)
+}
+
+func (r *root) hidden(rel string) bool {
+	h := r.cfg.Hide
+	return h != "" && (rel == h || strings.HasPrefix(rel, h+"/"))
 }
 
 func (l *Local) List(rootID, rel string) ([]api.Entry, error) {
@@ -124,6 +139,9 @@ func (l *Local) List(rootID, rel string) ([]api.Entry, error) {
 	for {
 		des, err := f.ReadDir(4096)
 		for _, de := range des {
+			if r.hidden(path.Join(rel, de.Name())) {
+				continue
+			}
 			e, err := r.entry(path.Join(rel, de.Name()))
 			if errors.Is(err, fs.ErrNotExist) {
 				continue // removed while listing
@@ -200,6 +218,9 @@ func (r *root) walk(rel string, e api.Entry, fn WalkFunc) error {
 	}
 	for _, name := range names {
 		child := path.Join(rel, name)
+		if r.hidden(child) {
+			continue
+		}
 		ce, err := r.entry(child)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
@@ -338,4 +359,21 @@ func ProbeChown(dir string) bool {
 	defer os.Remove(name)
 	// Giving a file to root is never allowed without CAP_CHOWN.
 	return os.Lchown(filepath.Clean(name), 0, -1) == nil
+}
+
+// Limits says what the filesystem holding path cannot store: mtimes only
+// in steps of mtimeStep seconds, or no permission bits. A sync compares
+// within these, so it does not send files again for what never sticks.
+func Limits(path string) (mtimeStep int64, noModes bool) {
+	var st syscall.Statfs_t
+	if syscall.Statfs(path, &st) != nil {
+		return 0, false
+	}
+	switch uint32(st.Type) {
+	case 0x4d44, 0x2011bab0: // vfat/msdos, exfat
+		return 2, true
+	case 0xff534d42, 0xfe534d42, 0x517b, 0x7366746e: // cifs, smb2, smbfs, ntfs3
+		return 0, true
+	}
+	return 0, false
 }

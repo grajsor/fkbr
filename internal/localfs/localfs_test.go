@@ -146,3 +146,45 @@ func TestWritableRoot(t *testing.T) {
 		t.Fatalf("want ErrReadOnly, got %v", err)
 	}
 }
+
+// A share inside a root is not part of it: not listed, walked, read.
+func TestHiddenShare(t *testing.T) {
+	base := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(base, "box", "nodes"), 0o755))
+	must(t, os.WriteFile(filepath.Join(base, "box", "nodes", "x"), []byte("x"), 0o644))
+	must(t, os.Mkdir(filepath.Join(base, "boxer"), 0o755))
+	l, err := Open([]config.Root{{ID: "files", Path: base, Hide: "box"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	es, err := l.List("files", ".")
+	if err != nil || len(es) != 1 || es[0].Name != "boxer" {
+		t.Fatalf("List: %+v %v", es, err)
+	}
+	for _, p := range []string{"box", "box/nodes", "box/nodes/x"} {
+		if _, err := l.Stat("files", p); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Stat %s: %v", p, err)
+		}
+		if f, err := l.Open("files", p); !errors.Is(err, os.ErrNotExist) {
+			if f != nil {
+				f.Close()
+			}
+			t.Errorf("Open %s: %v", p, err)
+		}
+		if !l.Hidden("files", p) {
+			t.Errorf("Hidden %s = false", p)
+		}
+	}
+	var seen []string
+	l.Walk("files", ".", func(rel string, e api.Entry, err error) error {
+		seen = append(seen, rel)
+		return nil
+	})
+	if strings.Join(seen, " ") != ". boxer" {
+		t.Errorf("Walk saw %q", seen)
+	}
+	if l.Hidden("files", "boxer") || l.Hidden("files", ".") {
+		t.Error("Hidden too wide")
+	}
+}

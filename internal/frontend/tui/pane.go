@@ -10,6 +10,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"fkbr/internal/api"
+	"fkbr/internal/safetext"
 )
 
 // level is what a pane is showing. ".." walks up: a directory, then the
@@ -58,7 +59,9 @@ type pane struct {
 func newPane() *pane { return &pane{level: levelNodes, path: ".", selected: map[string]bool{}} }
 
 // title is shown in the pane border.
-func (p *pane) title() string {
+func (p *pane) title() string { return safetext.Clean(p.rawTitle()) }
+
+func (p *pane) rawTitle() string {
 	switch p.level {
 	case levelNodes:
 		return "nodes"
@@ -270,6 +273,7 @@ func (p *pane) render(st *styles, width, height int, active bool, marquee time.D
 }
 
 func (p *pane) formatRow(r row, width int, scroll bool, marquee time.Duration) string {
+	r.name, r.info = safetext.Clean(r.name), safetext.Clean(r.info)
 	if p.level != levelDir || r.up {
 		name := r.name
 		if r.up {
@@ -325,12 +329,12 @@ func (p *pane) footer(width int) string {
 	case r == nil || r.up:
 		return strings.Repeat(" ", width)
 	case p.level != levelDir:
-		return fit(r.name+"  "+r.info, width)
+		return fit(safetext.Clean(r.name+"  "+r.info), width)
 	}
 	e := r.entry
 	s := fmt.Sprintf("%s %d:%d %s", modeString(e), e.UID, e.GID, time.Unix(0, e.MtimeNs).Format("2006-01-02 15:04:05"))
 	if e.LinkTarget != "" {
-		s += " -> " + e.LinkTarget
+		s += " -> " + safetext.Clean(e.LinkTarget)
 	}
 	return fit(s, width)
 }

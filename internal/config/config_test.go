@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -119,5 +120,33 @@ func TestDefaultNodeAndRoot(t *testing.T) {
 		if _, err := DirRoot(bad[0], bad[1], true); err == nil {
 			t.Errorf("DirRoot(%q, share %q) accepted", bad[0], bad[1])
 		}
+	}
+}
+
+// The share may sit inside a shared directory (cd ~ && fkbr ~/box): that
+// root then hides it. A root inside the share is refused, also when it is
+// reached through a symlink.
+func TestShareAndRoots(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	share := filepath.Join(home, "box")
+	if err := os.MkdirAll(filepath.Join(share, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Symlink(filepath.Join(share, "sub"), filepath.Join(base, "lnk"))
+	os.Symlink(home, filepath.Join(base, "homelink"))
+	c := &Config{NodeID: "n1", NFSRoot: share, Roots: []Root{{ID: "files", Path: filepath.Join(base, "homelink"), AllowWrite: true}}}
+	if err := c.Finish(); err != nil || c.Roots[0].Hide != "box" {
+		t.Fatalf("share inside the root: hide %q, %v", c.Roots[0].Hide, err)
+	}
+	for _, p := range []string{share, filepath.Join(share, "sub"), filepath.Join(base, "lnk")} {
+		c := &Config{NodeID: "n1", NFSRoot: share, Roots: []Root{{ID: "files", Path: p}}}
+		if err := c.Finish(); err == nil {
+			t.Errorf("root %s inside the share accepted", p)
+		}
+	}
+	c = &Config{NodeID: "n1", NFSRoot: share, Roots: []Root{{ID: "files", Path: filepath.Join(base, "elsewhere")}}}
+	if err := c.Finish(); err != nil || c.Roots[0].Hide != "" {
+		t.Fatalf("unrelated root: hide %q, %v", c.Roots[0].Hide, err)
 	}
 }

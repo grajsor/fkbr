@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -48,6 +50,16 @@ func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(i
 	}
 	defer w.Abort()
 	h := inventory.Header{Node: e.Self(), Root: req.Root, Path: req.Path}
+	for _, r := range e.fs.Roots() {
+		if r.ID == req.Root {
+			// The base, not the root: a USB stick may be mounted below it.
+			base := filepath.Join(r.Path, filepath.FromSlash(req.Path))
+			if _, err := os.Stat(base); err != nil {
+				base = r.Path
+			}
+			h.MtimeStep, h.NoModes = localfs.Limits(base)
+		}
+	}
 	st, err := inventory.Scan(e.fs, req.Root, req.Path, h, inventory.ScanOptions{
 		Checksum: req.Checksum, Exclude: receive.StagingDir,
 		Progress: progress, Interval: scanProgressInterval,

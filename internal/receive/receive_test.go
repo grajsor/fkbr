@@ -331,3 +331,65 @@ func TestNewDirMovesWhole(t *testing.T) {
 		t.Fatalf("sub: %v %v", fi, err)
 	}
 }
+
+// Nothing is written into the share when it sits inside the destination
+// root (Hide): those entries are errors, the rest installs.
+func TestHiddenShareNotWritten(t *testing.T) {
+	_, dstDir, src, dst := setup(t)
+	if err := os.MkdirAll(filepath.Join(dstDir, "tree", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(dst, "j0", "tree/sub/in", Options{Conflict: api.ConflictSkip, Hide: "tree/sub"}); err == nil {
+		t.Error("receive into the share accepted")
+	}
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictOverwrite, Hide: "tree/sub"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dstDir, "tree/a.txt")); string(b) != "alpha" {
+		t.Errorf("a.txt: %q", b)
+	}
+	if des, _ := os.ReadDir(filepath.Join(dstDir, "tree/sub")); len(des) != 0 || res.Errors == 0 {
+		t.Errorf("share written: %d entries, %d errors", len(des), res.Errors)
+	}
+}
+
+// A name the destination filesystem cannot hold (FAT refuses ':' with
+// EINVAL) is an error for that entry, its later segments included; the
+// rest arrives.
+func TestUnplaceableNameRefused(t *testing.T) {
+	_, dstDir, src, dst := setup(t)
+	orig := openStaged
+	openStaged = func(d *os.Root, name string, flag int, perm fs.FileMode) (*os.File, error) {
+		if name == "big.bin" {
+			return nil, &fs.PathError{Op: "openat", Path: name, Err: syscall.EINVAL}
+		}
+		return orig(d, name, flag, perm)
+	}
+	t.Cleanup(func() { openStaged = orig })
+	s := bundleTree(t, src, "tree", 64<<10) // big.bin spans several chunks
+	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dstDir, "tree/a.txt")); string(b) != "alpha" {
+		t.Errorf("a.txt: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "tree/sub/big.bin")); !os.IsNotExist(err) {
+		t.Errorf("big.bin: %v", err)
+	}
+	if res.Errors != 1 || len(res.Problems) != 1 || !strings.Contains(res.Problems[0], "big.bin") {
+		t.Errorf("want one error for big.bin: %+v", res)
+	}
+}

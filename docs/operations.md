@@ -84,7 +84,10 @@ fkbr /mnt/nfs/xfer
 - **Root:** the node shares the current directory and everything below it,
   writable. `-ro` makes it read-only. `-root id=/path[:ro]` (repeatable)
   shares explicit directories instead. fkbr refuses to share `/` by
-  default, or a directory inside the share.
+  default, or a directory inside the share (symlinks are followed for
+  this check). If the share is inside the shared directory (`cd ~ &&
+  fkbr ~/box`), the node leaves it out: peers do not see it, and nothing
+  is copied into or deleted from it.
 - **Peers:** paths look like `hostb:/sub/dir`. With several roots on a
   node, name the root: `hostb:logs/app.log`.
 - **Groups:** `@all` targets every other node. In the TUI, `@dest` is the
@@ -123,6 +126,11 @@ failed copy can be looked into later.
 the foreground, and logs to stderr. To keep it running after you log out, use `nohup` or a
 `tmux` or `screen` session; no service is needed. A TUI started while a
 daemon runs attaches to that daemon instead of starting a second worker.
+If that daemon shares other directories than you would from here (another
+working directory, `-ro`, `-root`), you get a note saying what it shares.
+If it runs for another share, fkbr stops and asks for another `-node`
+name. Closing the terminal (an ssh session that drops) stops a TUI's node
+cleanly, like quitting.
 
 **Config file (optional).** The same settings can live in a YAML file:
 `-config FILE`, `$FKBR_CONFIG`, or `fkbr.yaml` next to the binary. See

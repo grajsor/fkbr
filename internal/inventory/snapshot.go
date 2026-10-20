@@ -29,6 +29,11 @@ type Header struct {
 	Path     string `json:"path"`
 	Missing  bool   `json:"missing,omitempty"` // the base path does not exist
 	Checksum bool   `json:"checksum,omitempty"`
+	// What the scanned filesystem cannot store, so a planner does not send
+	// files again for it: mtimes only in steps of MtimeStep seconds (FAT:
+	// 2), no permission bits (FAT, SMB, NTFS).
+	MtimeStep int64 `json:"mtime_step,omitempty"`
+	NoModes   bool  `json:"no_modes,omitempty"`
 }
 
 // Entry types in snapshots. TypeError marks a path whose metadata or
