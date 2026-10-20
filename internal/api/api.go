@@ -10,6 +10,7 @@ package api
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -60,7 +61,16 @@ type NodeInfo struct {
 	Instance string `json:"instance,omitempty"`
 	PID      int    `json:"pid,omitempty"`
 	BootID   string `json:"boot_id,omitempty"`
+	// Features are what this build can do beyond the protocol version (a
+	// request needing one an older peer lacks is refused, not half done).
+	Features []string `json:"features,omitempty"`
 }
+
+// FeatureExclude: the node honours Exclude in transfers and sync scans.
+const FeatureExclude = "exclude"
+
+// Has reports whether the node's build has feature f.
+func (n *NodeInfo) Has(f string) bool { return slices.Contains(n.Features, f) }
 
 // HasRole reports whether the node carries a role tag.
 func (n *NodeInfo) HasRole(role string) bool {
@@ -238,6 +248,9 @@ type TransferRequest struct {
 	// NoRecurse sends each listed path as a single entry (a directory
 	// without its contents).
 	NoRecurse bool `json:"no_recurse,omitempty"`
+	// Exclude leaves entries inside the copied paths out (see package
+	// exclude); the paths named themselves are always sent.
+	Exclude []string `json:"exclude,omitempty"`
 	// SyncPlan is the plan this transfer belongs to.
 	SyncPlan string `json:"sync_plan,omitempty"`
 }
@@ -427,6 +440,9 @@ type SyncRequest struct {
 	// MaxDeletes caps deletions per target unless the apply is forced;
 	// 0 means the node's sync.max_deletes, -1 means no limit.
 	MaxDeletes int `json:"max_deletes"`
+	// Exclude leaves entries out on both sides: they are neither copied
+	// nor deleted (see package exclude).
+	Exclude []string `json:"exclude,omitempty"`
 }
 
 // SyncTarget is what a plan would do on one target.
@@ -480,6 +496,25 @@ type SyncService interface {
 	// per group. force allows exceeding the delete limit.
 	ApplySync(ctx context.Context, planID string, force bool) (*SyncPlan, error)
 	SyncPlan(ctx context.Context, planID string) (*SyncPlan, error)
+	// SyncPlanEntries lists what a plan would copy and delete, up to limit
+	// paths per list (0: all).
+	SyncPlanEntries(ctx context.Context, planID string, limit int) (*SyncEntries, error)
+}
+
+// SyncEntries is a plan entry by entry. Paths are inside what is synced
+// (relative to SrcPath for copies, to DstPath for deletions).
+type SyncEntries struct {
+	Copies  []SyncEntryList `json:"copies"`  // one per transfer group
+	Deletes []SyncEntryList `json:"deletes"` // one per target with deletions (type changes too)
+}
+
+// SyncEntryList is one list of paths; More counts those left out by the
+// limit.
+type SyncEntryList struct {
+	Node    string   `json:"node,omitempty"`    // for deletions
+	Targets []string `json:"targets,omitempty"` // for copies
+	Paths   []string `json:"paths"`
+	More    int64    `json:"more,omitempty"`
 }
 
 // ScanProgress reports a node scanning for a sync plan.

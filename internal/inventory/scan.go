@@ -28,6 +28,9 @@ type ScanOptions struct {
 	Checksum bool
 	// Exclude is a root-relative directory left out (fkbr's staging area).
 	Exclude string
+	// Skip, if set, leaves out entries by their path inside base (a
+	// directory with everything below it).
+	Skip func(rel string, dir bool) bool
 	// Progress, if set, is called about every interval.
 	Progress func(ScanStats)
 	Interval time.Duration
@@ -68,6 +71,12 @@ func Scan(fsys localfs.FS, root, base string, h Header, opts ScanOptions, out io
 			return localfs.SkipDir
 		}
 		p := relTo(base, rel)
+		if opts.Skip != nil && werr == nil && opts.Skip(p, e.Type == api.TypeDir) {
+			if e.Type == api.TypeDir {
+				return localfs.SkipDir
+			}
+			return nil
+		}
 		if werr != nil {
 			st.Errors++
 			return w.Write(&Entry{P: p, T: TypeError, E: werr.Error()})

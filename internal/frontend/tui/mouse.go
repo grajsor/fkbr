@@ -212,6 +212,7 @@ var hintKeys = map[string]tea.KeyMsg{
 	"Enter": {Type: tea.KeyEnter}, "Tab": {Type: tea.KeyTab}, "Esc": {Type: tea.KeyEsc},
 	"^A": {Type: tea.KeyCtrlA}, "^O": {Type: tea.KeyCtrlO}, "^K": {Type: tea.KeyCtrlK}, "^Z": {Type: tea.KeyCtrlZ},
 	"y": {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
+	"l": {Type: tea.KeyRunes, Runes: []rune("l")},
 }
 
 // hintKey finds the key of the hint at column col of a hint line

@@ -14,6 +14,7 @@ func TestGlobalFlagsAfterCommand(t *testing.T) {
 	fs.String("state", "", "")
 	fs.Bool("ro", false, "")
 	fs.Duration("keep", 0, "")
+	fs.Bool("v", false, "")
 	for _, tc := range []struct {
 		cmd          string
 		args         []string
@@ -26,6 +27,8 @@ func TestGlobalFlagsAfterCommand(t *testing.T) {
 		{"cp", []string{"/a", "--", "-node"}, nil, []string{"/a", "--", "-node"}},
 		{"prune", []string{"-keep", "5m", "-node", "x"}, []string{"-node", "x"}, []string{"-keep", "5m"}},
 		{"ls", []string{"-", "-json"}, nil, []string{"-", "-json"}},
+		{"sync", []string{"-n", "-v", "/a", "b:/c"}, nil, []string{"-n", "-v", "/a", "b:/c"}},
+		{"cp", []string{"-v", "/a", "b:/c"}, []string{"-v"}, []string{"/a", "b:/c"}},
 	} {
 		global, rest := globalFlags(fs, tc.cmd, tc.args)
 		if !slices.Equal(global, tc.global) || !slices.Equal(rest, tc.rest) {

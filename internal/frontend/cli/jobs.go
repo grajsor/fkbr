@@ -18,7 +18,7 @@ import (
 	"fkbr/internal/safetext"
 )
 
-var cpUsage = product.Expand(`usage: cp [-conflict skip|overwrite|overwrite-if-older] [-z] [-detach] SRC... DST
+var cpUsage = product.Expand(`usage: cp [-conflict skip|overwrite|overwrite-if-older] [-z] [-detach] [-exclude PAT]... SRC... DST
 
 SRC is [node:]/path inside the node's shared directory (or
 [node:]root/path when a node shares several roots); all sources must be
@@ -26,6 +26,9 @@ on one node. DST is node:/dir, n1,n2:/dir or @all:/dir (every other node;
 @role works too). Sources are copied into dir, created if needed, and
 sent once for all destinations. Nodes that are offline, fall behind or
 fail are detached; '{name} catchup JOB' re-sends to them later.
+-exclude PAT (repeatable) and -exclude-from FILE leave out what is inside
+the sources and matches: *.tmp or .git (a name anywhere), build/out (a
+path from the top of a source), cache/ (directories only).
 Examples:
   {name} /mnt/xfer cp /reports hostb:/incoming      # here -> hostb
   {name} /mnt/xfer cp hostb:/logs/app.log /          # hostb -> here
@@ -37,6 +40,7 @@ func cp(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	conflict := fl.String("conflict", string(api.DefaultConflictPolicy), "what to do when a destination entry exists")
 	compress := fl.Bool("z", false, "zstd-compress chunks on the share")
 	detach := fl.Bool("detach", false, "print the job ID and return immediately")
+	excludes := excludeFlags(fl)
 	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
@@ -44,7 +48,11 @@ func cp(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 		fl.Usage()
 		return errors.New("need at least one source and a destination")
 	}
-	req := api.TransferRequest{Conflict: api.ConflictPolicy(*conflict), Compress: *compress}
+	ex, err := excludes()
+	if err != nil {
+		return err
+	}
+	req := api.TransferRequest{Conflict: api.ConflictPolicy(*conflict), Compress: *compress, Exclude: ex}
 	srcs := fl.Args()[:fl.NArg()-1]
 	for i, s := range srcs {
 		node, root, p := ParseTarget(s)
@@ -66,7 +74,7 @@ func cp(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 		req.Paths = append(req.Paths, p)
 	}
 	dnodes, droot, ddir := ParseTarget(fl.Arg(fl.NArg() - 1))
-	droot, ddir, err := resolveRoot(ctx, c, dnodes, droot, ddir)
+	droot, ddir, err = resolveRoot(ctx, c, dnodes, droot, ddir)
 	if err != nil {
 		return err
 	}

@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"fkbr/internal/api"
+	"fkbr/internal/exclude"
 	"fkbr/internal/id"
 	"fkbr/internal/localfs"
+	"fkbr/internal/product"
 	"fkbr/internal/transport"
 )
 
@@ -53,6 +55,9 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 		return "", err
 	}
 	req.DstDir = dst
+	if _, err := exclude.New(req.Exclude); err != nil {
+		return "", err
+	}
 
 	nodes, err := e.tr.Nodes(ctx)
 	if err != nil {
@@ -68,6 +73,11 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	}
 	if _, ok := findRoot(src, req.SrcRoot); !ok {
 		return "", fmt.Errorf("%w: %s:%s", api.ErrUnknownRoot, req.SrcNode, req.SrcRoot)
+	}
+	if len(req.Exclude) > 0 {
+		if err := needFeature(api.FeatureExclude, "excludes", src); err != nil {
+			return "", err
+		}
 	}
 	targets, offline, err := expandTargets(byID, req.DstNodes, req.SrcNode, req.DetachOffline)
 	if err != nil {
@@ -110,6 +120,17 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 		return "", err
 	}
 	return job.ID, nil
+}
+
+// needFeature refuses a request a node's build cannot carry out (it would
+// ignore what it does not know, and do something else than asked).
+func needFeature(f, what string, nodes ...api.Node) error {
+	for _, n := range nodes {
+		if !n.Has(f) {
+			return fmt.Errorf("%s (version %s) runs an older %s without %s; update it first", n.ID, n.Version, product.Name, what)
+		}
+	}
+	return nil
 }
 
 // expandTargets resolves destination entries. A node ID must be online,

@@ -16,6 +16,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/bundle"
+	"fkbr/internal/exclude"
 	"fkbr/internal/localfs"
 	"fkbr/internal/receive"
 	"fkbr/internal/transport"
@@ -317,11 +318,15 @@ func (s *sender) walkSource(ctx context.Context, recs chan<- walkRec, stop <-cha
 			return errWalkStopped
 		}
 	}
+	ex, _ := exclude.New(req.Exclude) // checked at submit
 	visit := func(p string) error {
 		if !req.NoRecurse {
 			return e.fs.Walk(req.SrcRoot, p, func(rel string, ent api.Entry, err error) error {
 				if rel == receive.StagingDir || strings.HasPrefix(rel, receive.StagingDir+"/") {
 					return localfs.SkipDir
+				}
+				if skip := excluded(ex, p, rel, ent); skip != nil {
+					return *skip
 				}
 				return emit(walkRec{p: p, rel: rel, ent: ent, err: err})
 			})
@@ -714,3 +719,24 @@ func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
 type nopWriteCloser struct{ io.Writer }
 
 func (nopWriteCloser) Close() error { return nil }
+
+// excluded says what a walk of item p does with rel (root-relative) when
+// ex leaves it out: skip a directory's subtree, or just the entry; nil
+// when it is sent. Patterns see the path inside p; p itself is always sent.
+func excluded(ex *exclude.Set, p, rel string, ent api.Entry) *error {
+	inside := strings.TrimPrefix(rel, p+"/")
+	if ex == nil || rel == p || inside == rel && p != "." {
+		return nil
+	}
+	if p == "." {
+		inside = rel
+	}
+	if !ex.Match(inside, ent.Type == api.TypeDir) {
+		return nil
+	}
+	var skip error
+	if ent.Type == api.TypeDir {
+		skip = localfs.SkipDir
+	}
+	return &skip
+}

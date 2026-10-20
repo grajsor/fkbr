@@ -279,7 +279,7 @@ func stdout() io.Writer {
 
 // commandFlags are command flags that share a name with a global flag; after
 // that command, the command's own wins.
-var commandFlags = map[string][]string{"prune": {"keep"}}
+var commandFlags = map[string][]string{"prune": {"keep"}, "sync": {"v"}}
 
 // globalFlags takes the global flags out of a command's arguments, so they
 // work after the command too ("fkbr SHARE daemon -node a"). Everything from

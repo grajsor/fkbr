@@ -79,6 +79,8 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Type clashes (dir where the target has a file, and back) | Left as they are, reported (like `cp`, even with overwrite) | lab |
 | Spaces and unicode in the share path; root through a symlink | Work | lab |
 | Subcommand flags after the paths (`sync /a b:/c -mirror`) | Same as before the paths | auto |
+| Excludes (`*.tmp`, `.git`, `cache/`, `build/out`) on copy and mirror sync | Not sent; in a sync neither copied nor deleted on either side; a node without the feature refuses with its name | auto, Pi |
+| Dry run of a mirror | Lists what it deletes and copies (20 per list, `-v` all; TUI: first 5, `l` all) | auto, Pi |
 | TUI: 30,000 random keys and resizes down to 10x4 | No panic, no exit | lab (weird `fuzz_tui.py`) |
 
 ## 6. How fkbr is started and where

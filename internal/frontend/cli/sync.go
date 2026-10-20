@@ -15,7 +15,7 @@ import (
 	"fkbr/internal/safetext"
 )
 
-const syncUsage = `usage: sync [-mirror] [-checksum] [-z] [-n] [-max-deletes N] [-force] SRC DST
+const syncUsage = `usage: sync [-mirror] [-checksum] [-z] [-n [-v]] [-exclude PAT]... [-max-deletes N] [-force] SRC DST
        sync -plan ID [-force]
 
 Makes DST match SRC, like "rsync -a SRC/ DST/". SRC is [node:]/dir, DST
@@ -26,7 +26,11 @@ target can apply it); only differences are sent, and entries needed by
 several targets are sent once for all of them.
 
   -mirror       also delete destination entries missing from the source
-  -n            dry run: show the plan and its ID, change nothing
+  -exclude PAT  leave out matching entries on both sides: neither copied
+                nor deleted (repeatable; *.tmp, .git, build/out, cache/);
+                -exclude-from FILE reads them one per line
+  -n            dry run: show the plan and its ID, change nothing; it lists
+                the first 20 entries to delete and to copy (-v: all)
   -plan ID      apply a plan made earlier with -n
   -max-deletes  per-target deletion limit (0: node default, -1: none)
   -force        apply even if a target exceeds the deletion limit`
@@ -38,9 +42,11 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 	checksum := fl.Bool("checksum", false, "also compare file content hashes (reads every file)")
 	compress := fl.Bool("z", false, "zstd-compress chunks on the share")
 	dry := fl.Bool("n", false, "dry run")
+	verbose := fl.Bool("v", false, "with -n: list every entry, not just the first 20 of each list")
 	planID := fl.String("plan", "", "apply this plan")
 	maxDel := fl.Int("max-deletes", 0, "deletion limit per target")
 	force := fl.Bool("force", false, "allow exceeding the deletion limit")
+	excludes := excludeFlags(fl)
 	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
@@ -60,6 +66,9 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 			return errors.New("need SRC and DST")
 		}
 		req := api.SyncRequest{Mode: api.SyncIncremental, Checksum: *checksum, Compress: *compress, MaxDeletes: *maxDel}
+		if req.Exclude, err = excludes(); err != nil {
+			return err
+		}
 		if *mirror {
 			req.Mode = api.SyncMirror
 		}
@@ -84,6 +93,15 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 		}
 	}
 	printPlan(plan, out)
+	if *dry && !plan.Applied {
+		limit := 20
+		if *verbose {
+			limit = 0
+		}
+		if err := printEntries(ctx, c, plan.ID, limit, out); err != nil {
+			return err
+		}
+	}
 	if *dry || plan.Applied {
 		if plan.Applied {
 			fmt.Fprintln(out, "plan already applied")
@@ -161,6 +179,9 @@ func printPlan(p *api.SyncPlan, out io.Writer) {
 	r := p.Request
 	fmt.Fprintf(out, "sync plan %s: %s:%s/%s → %s:%s/%s (%s)\n", p.ID, r.SrcNode, r.SrcRoot, r.SrcPath,
 		strings.Join(r.DstNodes, ","), r.DstRoot, r.DstPath, r.Mode)
+	if len(r.Exclude) > 0 {
+		fmt.Fprintf(out, "excluding: %s\n", strings.Join(r.Exclude, " "))
+	}
 	fmt.Fprintf(out, "source: %d entries, %s\n", p.SrcEntries, humanBytes(p.SrcBytes))
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "  TARGET\tCOPY\tBYTES\tREPLACE\tDELETE\tUNCHANGED")
@@ -181,4 +202,29 @@ func printPlan(p *api.SyncPlan, out io.Writer) {
 	for _, pr := range p.Problems {
 		fmt.Fprintln(out, "  problem:", pr)
 	}
+}
+
+// printEntries lists what a plan deletes and copies, limit paths per list
+// (0: all).
+func printEntries(ctx context.Context, c api.Client, planID string, limit int, out io.Writer) error {
+	l, err := c.SyncPlanEntries(ctx, planID, limit)
+	if err != nil {
+		return err
+	}
+	show := func(title string, e api.SyncEntryList) {
+		fmt.Fprintf(out, "  %s (%d):\n", title, int64(len(e.Paths))+e.More)
+		for _, p := range e.Paths {
+			fmt.Fprintf(out, "    %s\n", p)
+		}
+		if e.More > 0 {
+			fmt.Fprintf(out, "    … and %d more (-v lists all)\n", e.More)
+		}
+	}
+	for _, d := range l.Deletes {
+		show("delete on "+d.Node, d)
+	}
+	for _, g := range l.Copies {
+		show("copy to "+strings.Join(g.Targets, ","), g)
+	}
+	return nil
 }

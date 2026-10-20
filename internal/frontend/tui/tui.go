@@ -85,6 +85,8 @@ type model struct {
 	st     *styles
 	panes  [2]*pane
 	active int
+	// lastExclude prefills the next copy or sync dialog's exclude field.
+	lastExclude string
 	// lastClick, dlgBox and drag serve the mouse (mouse.go, scrollbar.go).
 	lastClick click
 	dlgBox    box
@@ -159,8 +161,12 @@ type (
 	syncPlannedMsg struct {
 		plans []*api.SyncPlan
 		files *api.TransferRequest
-		err   error
+		// entries are the first few paths of each plan's lists, by plan ID.
+		entries map[string]*api.SyncEntries
+		err     error
 	}
+	// openMsg shows a dialog that a command prepared.
+	openMsg struct{ dlg dialog }
 )
 
 // target is a node:root location; panes inside it reload after changes.
@@ -256,9 +262,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.dlg != nil {
-			done, cmd := m.dlg.update(m, msg)
-			if done {
+			d := m.dlg
+			done, cmd := d.update(m, msg)
+			if done && m.dlg == d {
 				m.dlg = nil
+				if t, ok := d.(*textDialog); ok && t.back != nil {
+					m.dlg = t.back // a list opened from a dialog returns to it
+				}
 			}
 			return m, cmd
 		}
@@ -344,7 +354,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.setStatus("", false)
-		m.dlg = syncConfirm(m, msg.plans, msg.files)
+		m.dlg = syncConfirm(m, msg.plans, msg.files, msg.entries)
+		return m, nil
+
+	case openMsg:
+		m.dlg = msg.dlg
 		return m, nil
 
 	case animMsg:
@@ -692,7 +706,7 @@ func (m *model) openTransfer(move bool) {
 		dNodes = dst.node
 	}
 	dNodes, dRoot = m.destDefault(dNodes, dRoot)
-	d := newTransferDialog(move, src, names, dNodes, dRoot, dDir)
+	d := newTransferDialog(move, src, names, dNodes, dRoot, dDir, m.lastExclude)
 	d.dest = m.destList()
 	m.dlg = d
 }
@@ -708,7 +722,7 @@ func (m *model) openSync() {
 		dNodes, dRoot, dDir = dst.node, dst.root, dst.path
 	}
 	dNodes, dRoot = m.destDefault(dNodes, dRoot)
-	d := newSyncDialog(src, dNodes, dRoot, dDir)
+	d := newSyncDialog(src, dNodes, dRoot, dDir, m.lastExclude)
 	d.dest = m.destList()
 	// Only an explicit selection counts: with none, the whole directory.
 	for _, r := range src.rows {
@@ -780,14 +794,18 @@ func (m *model) planSync(reqs []api.SyncRequest, files *api.TransferRequest) tea
 	m.setStatus("planning sync: scanning source and targets…", false)
 	return func() tea.Msg {
 		var plans []*api.SyncPlan
+		entries := map[string]*api.SyncEntries{}
 		for _, r := range reqs {
 			p, err := m.c.PlanSync(m.ctx, r)
 			if err != nil {
 				return syncPlannedMsg{err: fmt.Errorf("%s: %w", r.SrcPath, err)}
 			}
 			plans = append(plans, p)
+			if e, err := m.c.SyncPlanEntries(m.ctx, p.ID, planPreview); err == nil {
+				entries[p.ID] = e
+			}
 		}
-		return syncPlannedMsg{plans: plans, files: files}
+		return syncPlannedMsg{plans: plans, files: files, entries: entries}
 	}
 }
 

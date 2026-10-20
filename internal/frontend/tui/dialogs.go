@@ -12,6 +12,7 @@ import (
 	"github.com/mattn/go-runewidth"
 
 	"fkbr/internal/api"
+	"fkbr/internal/exclude"
 	"fkbr/internal/product"
 	"fkbr/internal/safetext"
 )
@@ -31,7 +32,7 @@ type transferDialog struct {
 	srcNode  string
 	srcRoot  string
 	paths    []string
-	inputs   [3]textinput.Model // nodes, root, dir
+	inputs   [4]textinput.Model // nodes, root, dir, exclude
 	focus    int
 	conflict int
 	compress bool
@@ -39,13 +40,15 @@ type transferDialog struct {
 	dest     []string // the marked nodes, for @dest
 }
 
-func newTransferDialog(move bool, src *pane, names []string, dstNodes, dstRoot, dstDir string) *transferDialog {
+// excl prefills the exclude field (space-separated patterns, see package
+// exclude); the TUI keeps the last one used.
+func newTransferDialog(move bool, src *pane, names []string, dstNodes, dstRoot, dstDir, excl string) *transferDialog {
 	d := &transferDialog{move: move, srcNode: src.node, srcRoot: src.root}
 	for _, n := range names {
 		d.paths = append(d.paths, src.relPath(n))
 	}
-	labels := []string{"to node(s): ", "root:       ", "directory:  "}
-	values := []string{dstNodes, dstRoot, dstDir}
+	labels := []string{"to node(s): ", "root:       ", "directory:  ", "exclude:    "}
+	values := []string{dstNodes, dstRoot, dstDir, excl}
 	for i := range d.inputs {
 		ti := textinput.New()
 		ti.Prompt = labels[i]
@@ -73,11 +76,22 @@ func (d *transferDialog) request() (api.TransferRequest, error) {
 	if dir == "" {
 		dir = "."
 	}
+	ex, err := excludes(d.inputs[3].Value())
+	if err != nil {
+		return api.TransferRequest{}, err
+	}
 	return api.TransferRequest{
 		SrcNode: d.srcNode, SrcRoot: d.srcRoot, Paths: d.paths,
 		DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstDir: dir,
-		Conflict: conflictPolicies[d.conflict], Compress: d.compress,
+		Conflict: conflictPolicies[d.conflict], Compress: d.compress, Exclude: ex,
 	}, nil
+}
+
+// excludes splits the exclude field into patterns and checks them.
+func excludes(field string) ([]string, error) {
+	pats := strings.Fields(field)
+	_, err := exclude.New(pats)
+	return pats, err
 }
 
 // expandDest splits the node field and replaces @dest by the marked nodes.
@@ -130,6 +144,7 @@ func (d *transferDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 			d.err = err.Error()
 			return false, nil
 		}
+		m.lastExclude = d.inputs[3].Value()
 		return true, m.submit(req, d.move)
 	}
 	var cmd tea.Cmd
@@ -170,7 +185,7 @@ func (d *transferDialog) view(st *styles, width, _ int) string {
 	}
 	var b strings.Builder
 	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("%s %s from %s:%s", verb, clip(safetext.Clean(what), w-20), d.srcNode, d.srcRoot)) + "\n\n")
-	st.styleInputs(d.focus, &d.inputs[0], &d.inputs[1], &d.inputs[2])
+	st.styleInputs(d.focus, &d.inputs[0], &d.inputs[1], &d.inputs[2], &d.inputs[3])
 	for i := range d.inputs {
 		d.inputs[i].Width = w - 14
 		b.WriteString(d.inputs[i].View() + "\n")
@@ -232,12 +247,18 @@ type confirmDialog struct {
 	title string
 	lines []string
 	onYes func() tea.Cmd
+	// onList, if set, offers "l = list all" (a sync plan's entries).
+	onList func() tea.Cmd
 }
 
 func (d *confirmDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y":
 		return true, d.onYes()
+	case "l", "L":
+		if d.onList != nil {
+			return false, d.onList()
+		}
 	case "n", "N", "esc", "enter":
 		return true, nil
 	}
@@ -257,6 +278,9 @@ func (d *confirmDialog) view(st *styles, width, height int) string {
 		b.WriteString("  " + fit(l, w-2) + "\n")
 	}
 	b.WriteString("\n" + confirmHint)
+	if d.onList != nil {
+		b.WriteString(" · l = list all")
+	}
 	return b.String()
 }
 
@@ -275,6 +299,8 @@ type textDialog struct {
 	lang string
 	// flow word-wraps to the width (the help) instead of cutting lines.
 	flow bool
+	// back is the dialog to return to on close (a list opened from it).
+	back dialog
 	st   *styles
 }
 
@@ -436,7 +462,7 @@ FILES
   F7             new folder
   F8             delete (asks first)
 
-  In the F5/F6 dialog, "to" is the other pane, a node, n1,n2, @dest, @all or @role.
+  In the F5/F6 dialog, "to" is the other pane, a node, n1,n2, @dest, @all or @role. "exclude" leaves out what matches, patterns separated by spaces: *.tmp or .git (a name anywhere), build/out (a path from the top of what you copy), cache/ (folders only). The last ones you used are offered again.
   Ctrl+A         to every node (@all)
   Ctrl+O         if a file exists: skip, overwrite if older, overwrite
   Ctrl+Z         compress on the way (zstd)
@@ -445,6 +471,9 @@ SYNC (F4)
   Makes the other side match this pane. With nothing marked, the whole folder is synced; marked folders each go to a folder of the same name, marked files are copied. Incremental (the default) sends new and changed files and keeps extra ones; mirror (Ctrl+O) also deletes what the source does not have, but only inside what you sync. You always see a dry run first and confirm it.
   Ctrl+O         incremental or mirror
   Ctrl+K         compare by checksum, not size and time
+  l              in the plan: list everything it copies and deletes
+
+  Excluded entries are neither copied nor deleted, on either side.
 
 JOBS (F9)
   ↑ ↓            choose a job
@@ -467,7 +496,7 @@ QUIT AND HELP
 // syncDialog sets up a sync of the active pane's directory.
 type syncDialog struct {
 	srcNode, srcRoot, srcPath  string
-	inputs                     [3]textinput.Model // nodes, root, dir
+	inputs                     [4]textinput.Model // nodes, root, dir, exclude
 	focus                      int
 	mirror, checksum, compress bool
 	err                        string
@@ -477,10 +506,10 @@ type syncDialog struct {
 	dirs, files []string
 }
 
-func newSyncDialog(src *pane, dstNodes, dstRoot, dstDir string) *syncDialog {
+func newSyncDialog(src *pane, dstNodes, dstRoot, dstDir, excl string) *syncDialog {
 	d := &syncDialog{srcNode: src.node, srcRoot: src.root, srcPath: src.path}
-	labels := []string{"to node(s): ", "root:       ", "directory:  "}
-	values := []string{dstNodes, dstRoot, dstDir}
+	labels := []string{"to node(s): ", "root:       ", "directory:  ", "exclude:    "}
+	values := []string{dstNodes, dstRoot, dstDir, excl}
 	for i := range d.inputs {
 		ti := textinput.New()
 		ti.Prompt = labels[i]
@@ -522,8 +551,13 @@ func (d *syncDialog) requests() ([]api.SyncRequest, *api.TransferRequest, error)
 	if d.mirror {
 		mode = api.SyncMirror
 	}
+	ex, err := excludes(d.inputs[3].Value())
+	if err != nil {
+		return nil, nil, err
+	}
 	base := api.SyncRequest{SrcNode: d.srcNode, SrcRoot: d.srcRoot, SrcPath: d.srcPath,
-		DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstPath: dir, Mode: mode, Checksum: d.checksum, Compress: d.compress}
+		DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstPath: dir, Mode: mode, Checksum: d.checksum, Compress: d.compress,
+		Exclude: ex}
 	if len(d.dirs) == 0 && len(d.files) == 0 {
 		return []api.SyncRequest{base}, nil, nil
 	}
@@ -573,6 +607,7 @@ func (d *syncDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 			d.err = err.Error()
 			return false, nil
 		}
+		m.lastExclude = d.inputs[3].Value()
 		return true, m.planSync(reqs, files)
 	}
 	var cmd tea.Cmd
@@ -584,7 +619,7 @@ func (d *syncDialog) view(st *styles, width, _ int) string {
 	w := min(width-6, 76)
 	var b strings.Builder
 	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("Sync %s → (make the destination match it)", clip(safetext.Clean(d.what()), w-40))) + "\n\n")
-	st.styleInputs(d.focus, &d.inputs[0], &d.inputs[1], &d.inputs[2])
+	st.styleInputs(d.focus, &d.inputs[0], &d.inputs[1], &d.inputs[2], &d.inputs[3])
 	for i := range d.inputs {
 		d.inputs[i].Width = w - 14
 		b.WriteString(d.inputs[i].View() + "\n")
@@ -641,7 +676,10 @@ func planWork(p *api.SyncPlan) int64 {
 
 // syncConfirm shows the dry-run plans (one per selected folder, or one for
 // the whole directory) and the files to copy, and applies them all on yes.
-func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest) dialog {
+// planPreview is how many entries of each list a sync's confirm shows.
+const planPreview = 5
+
+func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest, previews map[string]*api.SyncEntries) dialog {
 	var lines []string
 	over := false
 	var entries int64
@@ -654,6 +692,9 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest) di
 			lines = append(lines, path.Base(p.Request.SrcPath)+"/")
 			indent = "  "
 		}
+		if len(p.Request.Exclude) > 0 {
+			lines = append(lines, indent+"excluding: "+strings.Join(p.Request.Exclude, " "))
+		}
 		for _, t := range p.Targets {
 			l := fmt.Sprintf("%s%-12s copy %d (%s)  replace %d  delete %d  unchanged %d",
 				indent, t.Node, t.Copy, humanSize(t.CopyBytes), t.Replace, t.Delete, t.Unchanged)
@@ -662,6 +703,17 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest) di
 				over = true
 			}
 			lines = append(lines, l)
+			if e := previews[p.ID]; e != nil {
+				for _, d := range e.Deletes {
+					if d.Node == t.Node && len(d.Paths) > 0 {
+						l := indent + "  delete: " + strings.Join(d.Paths, ", ")
+						if d.More > 0 {
+							l += fmt.Sprintf(" … and %d more", d.More)
+						}
+						lines = append(lines, l)
+					}
+				}
+			}
 		}
 		for _, s := range p.Skipped {
 			lines = append(lines, indent+"skipped "+s+" (offline)")
@@ -677,7 +729,26 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest) di
 	if over {
 		title += " Deletions exceed the limit; y applies anyway."
 	}
-	return &confirmDialog{title: title, lines: lines, onYes: func() tea.Cmd {
+	c := &confirmDialog{title: title, lines: lines}
+	c.onList = func() tea.Cmd {
+		return func() tea.Msg {
+			var b strings.Builder
+			for _, p := range plans {
+				e, err := m.c.SyncPlanEntries(m.ctx, p.ID, 0)
+				if err != nil {
+					return statusMsg{text: "sync plan: " + err.Error(), err: true}
+				}
+				if len(plans) > 1 {
+					b.WriteString(path.Base(p.Request.SrcPath) + "/\n")
+				}
+				writeEntries(&b, e)
+			}
+			t := newTextDialog("What the sync does (Esc: back to the plan)", b.String())
+			t.back = c
+			return openMsg{t}
+		}
+	}
+	c.onYes = func() tea.Cmd {
 		return func() tea.Msg {
 			jobs := 0
 			var ts []target
@@ -708,5 +779,23 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest) di
 			}
 			return statusMsg{text: text, refresh: ts}
 		}
-	}}
+	}
+	return c
+}
+
+// writeEntries writes a plan's lists, one path per line.
+func writeEntries(b *strings.Builder, e *api.SyncEntries) {
+	show := func(title string, l api.SyncEntryList) {
+		fmt.Fprintf(b, "%s (%d):\n", title, int64(len(l.Paths))+l.More)
+		for _, p := range l.Paths {
+			b.WriteString("  " + p + "\n")
+		}
+		b.WriteString("\n")
+	}
+	for _, d := range e.Deletes {
+		show("delete on "+d.Node, d)
+	}
+	for _, g := range e.Copies {
+		show("copy to "+strings.Join(g.Targets, ","), g)
+	}
 }

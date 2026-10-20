@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -352,4 +353,30 @@ func parseFlags(fl *flag.FlagSet, args []string) error {
 		pos, args = append(pos, rest[0]), rest[1:]
 	}
 	return fl.Parse(append([]string{"--"}, pos...))
+}
+
+// excludeFlags adds -exclude PAT (repeatable) and -exclude-from FILE to
+// fl; the function it returns gives all patterns after parsing.
+func excludeFlags(fl *flag.FlagSet) func() ([]string, error) {
+	var pats []string
+	fl.Func("exclude", "leave out entries matching `PAT` (repeatable)", func(s string) error {
+		pats = append(pats, s)
+		return nil
+	})
+	from := fl.String("exclude-from", "", "read exclude patterns from `FILE`, one per line (# starts a comment)")
+	return func() ([]string, error) {
+		if *from == "" {
+			return pats, nil
+		}
+		b, err := os.ReadFile(*from)
+		if err != nil {
+			return nil, err
+		}
+		for _, l := range strings.Split(string(b), "\n") {
+			if l = strings.TrimSpace(l); l != "" && !strings.HasPrefix(l, "#") {
+				pats = append(pats, l)
+			}
+		}
+		return pats, nil
+	}
 }

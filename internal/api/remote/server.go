@@ -18,6 +18,7 @@
 //	POST /v1/sync                 api.SyncRequest -> api.SyncPlan (dry run)
 //	GET  /v1/sync/{id}            api.SyncPlan
 //	POST /v1/sync/{id}/apply      ?force=1 -> api.SyncPlan
+//	GET  /v1/sync/{id}/entries    ?limit=N -> api.SyncEntries
 //	GET  /v1/events               text/event-stream of api.Event
 //
 // Errors are {"error": msg, "code": code} with a matching HTTP status.
@@ -33,6 +34,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -134,6 +136,11 @@ func Handler(svc api.Service) http.Handler {
 	})
 	mux.HandleFunc("GET /v1/sync/{id}", func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.SyncPlan(r.Context(), r.PathValue("id"))
+		reply(w, v, err)
+	})
+	mux.HandleFunc("GET /v1/sync/{id}/entries", func(w http.ResponseWriter, r *http.Request) {
+		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		v, err := svc.SyncPlanEntries(r.Context(), r.PathValue("id"), limit)
 		reply(w, v, err)
 	})
 	mux.HandleFunc("POST /v1/sync/{id}/apply", func(w http.ResponseWriter, r *http.Request) {

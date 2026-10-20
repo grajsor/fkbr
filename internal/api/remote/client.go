@@ -181,6 +181,14 @@ func (c *Client) SyncPlan(ctx context.Context, id string) (*api.SyncPlan, error)
 	return &v, nil
 }
 
+func (c *Client) SyncPlanEntries(ctx context.Context, id string, limit int) (*api.SyncEntries, error) {
+	var v api.SyncEntries
+	if err := c.call(ctx, http.MethodGet, fmt.Sprintf("/v1/sync/%s/entries?limit=%d", url.PathEscape(id), limit), nil, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
 func (c *Client) ApplySync(ctx context.Context, id string, force bool) (*api.SyncPlan, error) {
 	q := ""
 	if force {

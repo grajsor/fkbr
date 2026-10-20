@@ -35,6 +35,12 @@ In the TUI's node list, mark them with Insert. F5 then copies to them (`@dest`).
 Add `-n` to preview first. Add `-mirror` to also delete extra files.
 In the TUI: F4. It syncs the folder you are in, or only the folders you marked, and always shows what it will do first.
 
+**Leave some files out?**
+`-exclude '*.tmp' -exclude .git` on `cp` or `sync`, or the "exclude" field in the TUI. In a sync, excluded files are never copied and never deleted. Details: `docs/operations.md`.
+
+**See what a sync will delete?**
+`fkbr /mnt/nfs/xfer sync -n -mirror /src hostb:/dst` lists it (add `-v` for everything). In the TUI, F4 shows the first ones; press `l` for all.
+
 **A machine was offline during a copy?**
 It gets nothing; the others get everything. Catch it up later: F9, pick the job, press `u` (or `./fkbr /mnt/nfs/somedir catchup JOB`). A sync works too.
 
@@ -43,6 +49,9 @@ Nothing half-copied ever appears: files are put in place only when all of them h
 
 **How fast is it?**
 About as fast as tar through the same share, and faster when copying to several machines at once. The NFS server's network sets the pace; a bigger `job_quota` does not help. Numbers: `docs/benchmarks.md`.
+
+**Why so much faster than rsync for many small files?**
+rsync through the share makes every file on the NFS server one at a time. Each file costs several trips to the server (create, write, set the time, rename), and each trip waits for an answer. 20,000 files means about 100,000 waits. fkbr packs many small files into a few big chunks, like sending one parcel instead of 20,000 letters. The server sees a few big writes, and each machine unpacks onto its own disk. All targets read the same chunks, too. In the lab, 20,000 small files took fkbr 7 s and rsync 2 min 33 s.
 
 **Compress?**
 Add `-z` to `cp` or `sync` (Ctrl+Z in the dialogs). It helps with text, logs and programs, and costs almost nothing for files that are already compressed.

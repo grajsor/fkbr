@@ -195,7 +195,7 @@ in-process mode.
 | `nodes` | registered nodes, online state, roots, chown level, write policy |
 | `forget NODE...` | remove offline nodes from the share (they re-register if started again) |
 | `ls [node:]/path` | list a directory on any node |
-| `cp [node:]/path... node\|n1,n2\|@all:/dir` | copy; `-conflict`, `-z`, `-detach` |
+| `cp [node:]/path... node\|n1,n2\|@all:/dir` | copy; `-conflict`, `-z`, `-detach`, `-exclude` |
 | `sync [-mirror] [-n] SRC DST` | make DST match SRC (see below) |
 | `jobs`, `job [-f] ID`, `cancel ID`, `catchup ID` | follow and control jobs |
 | `events` | live change stream as JSON lines |
@@ -273,14 +273,36 @@ the job finishes.
 plan and applies it. Only differences are transferred.
 
 - `-n` stops after the plan and prints its ID; `fkbr sync -plan ID` applies
-  that plan later.
+  that plan later. It also lists the first 20 entries it would delete and
+  copy on each target; add `-v` for all of them.
 - `-mirror` also deletes extra entries on the targets. If any target would
   lose more than `sync.max_deletes` entries (default 1000), the apply is
   refused unless you pass `-force`. `-max-deletes N` changes the limit for
   one run.
 - DST may name several nodes, `@all` or `@role`. Each entry is sent once for all
   the targets that need it.
-- In the TUI, F4 always shows the plan for confirmation first.
+- In the TUI, F4 always shows the plan for confirmation first, with the
+  first deletions per target; `l` there lists everything.
+
+## Excludes
+
+`-exclude PAT` (repeatable) and `-exclude-from FILE` (one pattern per line,
+`#` comments) work with `cp` and `sync`; in the TUI, the copy and sync
+dialogs have an `exclude:` field (patterns separated by spaces).
+
+| Pattern | Leaves out |
+|---|---|
+| `*.tmp`, `.git` | that name anywhere |
+| `build/out`, `logs/*.gz` | that path, from the top of what you copy or sync |
+| `/notes.txt` | that name at the top only |
+| `cache/` | directories only |
+
+`*` and `?` never match across a `/`. An excluded folder leaves out
+everything in it. What you name yourself (`cp a.tmp ...`) is always
+copied; patterns apply inside it. In a sync, excluded entries are skipped
+on both sides: they are never copied, and never deleted on the targets.
+Every node involved needs this version: an older one would ignore the
+patterns, so fkbr refuses and names it.
 
 Measured performance is in `benchmarks.md`.
 

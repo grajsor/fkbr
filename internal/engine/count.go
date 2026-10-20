@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"fkbr/internal/api"
+	"fkbr/internal/exclude"
 	"fkbr/internal/localfs"
 	"fkbr/internal/receive"
 )
@@ -57,6 +58,7 @@ func (t *totals) apply(st *api.JobStatus) {
 // count walks what the job sends, as produce does, without reading data.
 func (s *sender) count(ctx context.Context) {
 	e, req := s.e, s.job.Request
+	ex, _ := exclude.New(req.Exclude)
 	visit := func(p string) error {
 		if !req.NoRecurse {
 			return e.fs.Walk(req.SrcRoot, p, func(rel string, ent api.Entry, err error) error {
@@ -65,6 +67,9 @@ func (s *sender) count(ctx context.Context) {
 				}
 				if rel == receive.StagingDir || strings.HasPrefix(rel, receive.StagingDir+"/") {
 					return localfs.SkipDir
+				}
+				if skip := excluded(ex, p, rel, ent); skip != nil {
+					return *skip
 				}
 				if err == nil {
 					s.totals.add(ent)

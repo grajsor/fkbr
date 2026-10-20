@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"fkbr/internal/api"
+	"fkbr/internal/exclude"
 	"fkbr/internal/id"
 	"fkbr/internal/inventory"
 	"fkbr/internal/localfs"
@@ -33,10 +34,11 @@ const (
 )
 
 type scanRequest struct {
-	PlanID   string `json:"plan_id"`
-	Root     string `json:"root"`
-	Path     string `json:"path"`
-	Checksum bool   `json:"checksum"`
+	PlanID   string   `json:"plan_id"`
+	Root     string   `json:"root"`
+	Path     string   `json:"path"`
+	Checksum bool     `json:"checksum"`
+	Exclude  []string `json:"exclude,omitempty"`
 }
 
 func snapshotBlob(planID, node string) string { return "scans/" + planID + "/" + node + ".snap" }
@@ -60,8 +62,12 @@ func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(i
 			h.MtimeStep, h.NoModes = localfs.Limits(base)
 		}
 	}
+	ex, err := exclude.New(req.Exclude)
+	if err != nil {
+		return nil, err
+	}
 	st, err := inventory.Scan(e.fs, req.Root, req.Path, h, inventory.ScanOptions{
-		Checksum: req.Checksum, Exclude: receive.StagingDir,
+		Checksum: req.Checksum, Exclude: receive.StagingDir, Skip: ex.Match,
 		Progress: progress, Interval: scanProgressInterval,
 	}, w)
 	if err != nil {
@@ -157,6 +163,9 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 	if req.DstPath, err = localfs.CleanRel(req.DstPath); err != nil {
 		return nil, err
 	}
+	if _, err := exclude.New(req.Exclude); err != nil {
+		return nil, err
+	}
 	nodes, err := e.tr.Nodes(ctx)
 	if err != nil {
 		return nil, err
@@ -178,6 +187,15 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 	}
 	if err := e.checkTargets(byID, targets, req.DstRoot); err != nil {
 		return nil, err
+	}
+	if len(req.Exclude) > 0 { // every side scans with them
+		scanned := []api.Node{src}
+		for _, t := range targets {
+			scanned = append(scanned, byID[t])
+		}
+		if err := needFeature(api.FeatureExclude, "excludes", scanned...); err != nil {
+			return nil, err
+		}
 	}
 	for _, t := range targets {
 		if t == req.SrcNode && req.DstRoot == req.SrcRoot && overlaps(req.SrcPath, req.DstPath) {
@@ -206,7 +224,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			stats[i], errs[i] = e.scan(ctx, n, scanRequest{PlanID: plan.ID, Root: root, Path: path, Checksum: req.Checksum})
+			stats[i], errs[i] = e.scan(ctx, n, scanRequest{PlanID: plan.ID, Root: root, Path: path, Checksum: req.Checksum, Exclude: req.Exclude})
 		}()
 	}
 	wg.Wait()
@@ -527,4 +545,59 @@ func (s *planSink) all() []*listWriter {
 		out = append(out, d)
 	}
 	return out
+}
+
+// SyncPlanEntries reads a plan's path lists back from the share.
+func (e *Engine) SyncPlanEntries(ctx context.Context, planID string, limit int) (*api.SyncEntries, error) {
+	plan, err := e.SyncPlan(ctx, planID)
+	if err != nil {
+		return nil, err
+	}
+	read := func(blob, base string, l *api.SyncEntryList) error {
+		rc, err := e.st.OpenBlob(ctx, blob)
+		if err != nil {
+			return err
+		}
+		defer rc.Close()
+		return readPathList(rc, func(p string) error {
+			if limit > 0 && len(l.Paths) >= limit {
+				l.More++
+				return nil
+			}
+			if rel := inventoryRel(base, p); rel != "." { // the top itself is not news
+				l.Paths = append(l.Paths, rel)
+			}
+			return nil
+		})
+	}
+	out := &api.SyncEntries{}
+	for _, g := range plan.Groups {
+		l := api.SyncEntryList{Targets: g.Targets}
+		if err := read(g.Blob, plan.Request.SrcPath, &l); err != nil {
+			return nil, err
+		}
+		out.Copies = append(out.Copies, l)
+	}
+	for _, t := range plan.Targets {
+		if t.Delete+t.Replace == 0 {
+			continue
+		}
+		l := api.SyncEntryList{Node: t.Node}
+		if err := read("plans/"+planID+"/delete-"+t.Node, plan.Request.DstPath, &l); err != nil {
+			return nil, err
+		}
+		out.Deletes = append(out.Deletes, l)
+	}
+	return out, nil
+}
+
+// inventoryRel makes a root-relative path relative to base.
+func inventoryRel(base, p string) string {
+	switch {
+	case base == "." || base == "":
+		return p
+	case p == base:
+		return "."
+	}
+	return strings.TrimPrefix(p, base+"/")
 }

@@ -72,6 +72,11 @@ func (f *fakeClient) PlanSync(_ context.Context, r api.SyncRequest) (*api.SyncPl
 		Targets: []api.SyncTarget{{Node: "s1", Copy: 2, Delete: 3, OverLimit: true}}}, nil
 }
 
+func (f *fakeClient) SyncPlanEntries(_ context.Context, id string, limit int) (*api.SyncEntries, error) {
+	return &api.SyncEntries{Deletes: []api.SyncEntryList{{Node: "s1", Paths: []string{"old/a", "old/b", "stale.txt"}}},
+		Copies: []api.SyncEntryList{{Targets: []string{"s1"}, Paths: []string{"a.txt", "b.txt"}}}}, nil
+}
+
 func (f *fakeClient) SyncPlan(context.Context, string) (*api.SyncPlan, error) {
 	return nil, api.ErrUnknownJob
 }
@@ -868,5 +873,51 @@ func TestHelpFlows(t *testing.T) {
 		if runewidth.StringWidth(l) > 80-7 {
 			t.Errorf("help line too wide: %q", l)
 		}
+	}
+}
+
+// The exclude field goes into the request and is offered again next time;
+// a sync's confirm shows what it deletes and lists everything on l.
+func TestExcludeAndPlanList(t *testing.T) {
+	h := newHarness(t)
+	h.open("master", "data")
+	h.m.panes[0].cursorTo("proj")
+	h.key("enter", "tab")
+	h.open("s1", "data")
+	h.key("tab", "f4")
+	d, ok := h.m.dlg.(*syncDialog)
+	if !ok {
+		t.Fatalf("no sync dialog: %T", h.m.dlg)
+	}
+	d.setFocus(3)
+	h.key("*.tmp .git")
+	h.key("enter")
+	if len(h.f.syncs) != 1 || strings.Join(h.f.syncs[0].Exclude, " ") != "*.tmp .git" {
+		t.Fatalf("plan request exclude: %+v", h.f.syncs)
+	}
+	c, ok := h.m.dlg.(*confirmDialog)
+	if !ok {
+		t.Fatalf("confirm: %T", h.m.dlg)
+	}
+	text := strings.Join(c.lines, "\n")
+	if !strings.Contains(text, "delete: old/a, old/b, stale.txt") || !strings.Contains(text, "excluding: *.tmp .git") {
+		t.Errorf("confirm lines:\n%s", text)
+	}
+	h.key("l")
+	td, ok := h.m.dlg.(*textDialog)
+	if !ok || !strings.Contains(td.text, "delete on s1 (3)") || !strings.Contains(td.text, "copy to s1 (2)") || !strings.Contains(td.text, "stale.txt") {
+		t.Fatalf("list: %T %+v", h.m.dlg, td)
+	}
+	h.key("esc")
+	if h.m.dlg != c {
+		t.Fatalf("Esc in the list should go back to the plan: %T", h.m.dlg)
+	}
+	h.key("y")
+	if len(h.f.applied) != 1 {
+		t.Fatalf("applied: %v", h.f.applied)
+	}
+	h.key("f4")
+	if d, ok := h.m.dlg.(*syncDialog); !ok || d.inputs[3].Value() != "*.tmp .git" {
+		t.Errorf("exclude not offered again: %T", h.m.dlg)
 	}
 }
