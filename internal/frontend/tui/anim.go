@@ -6,29 +6,34 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
+
+	"fkbr/internal/product"
 )
 
-// The name in the header slides out to the left every animEvery and back
-// in from the right two seconds later, within its own " fkbr " frame, so a
-// glance shows the TUI is alive.
+// The name in the header slides out to the left every animEvery, the
+// version ("v1.0 5cc1bcd") runs through like a ticker, and the name slides
+// back in from the right, all within its own " fkbr " frame, so a glance
+// shows the TUI is alive and which build it is.
 // It needs no goroutine of its own: one timer message between runs, and
-// about 30 header redraws a second during the two seconds of motion.
+// about 30 header redraws a second while anything moves.
 
 type animPhase int
 
 const (
-	animIdle animPhase = iota
-	animOut            // leaving to the left: slow start, fast end
-	animGap            // off screen
-	animIn             // entering from the right: fast start, slow stop
+	animIdle   animPhase = iota
+	animOut              // leaving to the left: slow start, fast end
+	animTicker           // the version runs through, right to left
+	animIn               // entering from the right: fast start, slow stop
 )
 
 var (
 	animEvery  = 30 * time.Second
 	animOutDur = 800 * time.Millisecond
-	animGapDur = 2 * time.Second
 	animInDur  = 1200 * time.Millisecond
 	animFrame  = 33 * time.Millisecond
+	// tickerSpeed is in cells per second: slow enough to read through a
+	// six-cell window.
+	tickerSpeed = 6.0
 )
 
 type animMsg struct{}
@@ -46,11 +51,12 @@ func (m *model) animate() tea.Cmd {
 		m.anim, m.animAt = animOut, now
 	case animOut:
 		if elapsed >= animOutDur {
-			m.anim, m.animAt = animGap, now
-			return animTick(animGapDur)
+			m.anim, m.animAt = animTicker, now
 		}
-	case animGap:
-		m.anim, m.animAt = animIn, now
+	case animTicker:
+		if elapsed >= m.tickerDur() {
+			m.anim, m.animAt = animIn, now
+		}
 	case animIn:
 		if elapsed >= animInDur {
 			m.anim = animIdle
@@ -68,7 +74,7 @@ func nameX(phase animPhase, elapsed time.Duration, home, width, n int) int {
 	case animOut:
 		t := min(1, float64(elapsed)/float64(animOutDur))
 		return home - int(math.Round(float64(home+n)*t*t*t)) // ease in
-	case animGap:
+	case animTicker:
 		return width
 	case animIn:
 		t := min(1, float64(elapsed)/float64(animInDur))
@@ -76,6 +82,19 @@ func nameX(phase animPhase, elapsed time.Duration, home, width, n int) int {
 		return home + int(math.Round(float64(width-home)*u*u*u)) // ease out
 	}
 	return home
+}
+
+// tickerDur is how long the version takes to run through the frame of
+// " fkbr ": in at the right edge, out at the left.
+func (m *model) tickerDur() time.Duration {
+	cells := len(" "+product.Name+" ") + runewidth.StringWidth(m.version)
+	return time.Duration(float64(cells) / tickerSpeed * float64(time.Second))
+}
+
+// tickerX is the column of the ticker text at elapsed time into its run
+// through a frame of width cells.
+func tickerX(elapsed time.Duration, width int) int {
+	return width - int(elapsed.Seconds()*tickerSpeed)
 }
 
 // A small spinner replaces the bottom-right corner of the jobs panel (of

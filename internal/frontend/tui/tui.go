@@ -31,6 +31,8 @@ type Options struct {
 	Colors string
 	// LogPath is where this node logs, shown in the help.
 	LogPath string
+	// Version scrolls through the header now and then (anim.go).
+	Version string
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -41,6 +43,7 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 	m := newModel(ctx, c)
 	m.runsNode = opts.RunsNode
 	m.logPath = opts.LogPath
+	m.version = opts.Version
 	_, err := tea.NewProgram(m, tea.WithAltScreen(), tea.WithContext(ctx)).Run()
 	if err == tea.ErrProgramKilled && ctx.Err() != nil {
 		return nil
@@ -79,6 +82,7 @@ type model struct {
 
 	runsNode bool
 	logPath  string
+	version  string
 	// Header animation, spinner and marquee (anim.go).
 	spin       int
 	anim       animPhase
@@ -1069,8 +1073,11 @@ func (m *model) header() string {
 	line := []rune(fit(strings.Repeat(" ", slot)+left+strings.Repeat(" ", gap)+right, m.width))
 	isName := make([]bool, len(line))
 	frame := min(slot+1, len(line))
-	x := nameX(m.anim, time.Since(m.animAt), home, frame, len(name))
-	for i, r := range name {
+	text, x := name, nameX(m.anim, time.Since(m.animAt), home, frame, len(name))
+	if m.anim == animTicker {
+		text, x = m.version, tickerX(time.Since(m.animAt), frame)
+	}
+	for i, r := range []rune(text) {
 		if c := x + i; c >= 0 && c < frame {
 			line[c], isName[c] = r, true
 		}

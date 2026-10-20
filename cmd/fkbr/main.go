@@ -27,8 +27,11 @@ import (
 	"fkbr/internal/product"
 )
 
-// version is set at build time with -ldflags "-X main.version=...".
-var version = "dev"
+// commit is set at build time with -ldflags "-X main.commit=...".
+var commit = "dev"
+
+// version is the release and commit, e.g. "v1.0 5cc1bcd".
+var version = product.Version(commit)
 
 func main() {
 	if err := run(); err != nil {
@@ -232,7 +235,7 @@ func connect(ctx context.Context, cfg *config.Config, forceLocal bool, log *slog
 			return c, nil
 		}
 	}
-	return local.Open(cfg, version, log)
+	return local.Open(cfg, commit, log) // the registry shows just the commit
 }
 
 // node is this host's worker plus its API socket, running in the background.
@@ -244,7 +247,7 @@ type node struct {
 
 // startNode runs the worker and serves the socket until stop is called.
 func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger) (*node, error) {
-	c, err := local.Open(cfg, version, log)
+	c, err := local.Open(cfg, commit, log)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +311,7 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors str
 	if !forceLocal {
 		if c, err := remote.Dial(ctx, cfg.Socket); err == nil {
 			defer c.Close()
-			return tui.Run(ctx, c, tui.Options{Colors: colors})
+			return tui.Run(ctx, c, tui.Options{Colors: colors, Version: version})
 		}
 	}
 	// Log lines would draw over the UI, so the node logs to a file beside
@@ -328,7 +331,7 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, colors str
 	log.Info("TUI runs this node", "node", cfg.NodeID, "version", version)
 	// A node that only lives while the TUI is open leaves the share on quit.
 	n.c.LeaveOnStop()
-	terr := tui.Run(ctx, n.c, tui.Options{RunsNode: true, Colors: colors, LogPath: logPath})
+	terr := tui.Run(ctx, n.c, tui.Options{RunsNode: true, Colors: colors, LogPath: logPath, Version: version})
 	if err := n.stop(); err != nil && terr == nil {
 		terr = err
 	}

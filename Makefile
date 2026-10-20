@@ -1,7 +1,9 @@
 # NAME must match product.Name in internal/product and the cmd/ directory.
 NAME    ?= fkbr
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X main.version=$(VERSION)
+# The release number lives in internal/product (Release); builds add the
+# commit they were made from.
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
+LDFLAGS := -s -w -X main.commit=$(COMMIT)
 # Static, glibc-independent builds: run unchanged on any Linux with kernel
 # 3.10 or newer, on x86-64 and on ARM64.
 STATIC  := CGO_ENABLED=0 GOOS=linux

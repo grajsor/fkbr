@@ -9,6 +9,18 @@ import "strings"
 // Name is the binary and product name.
 const Name = "fkbr"
 
+// Release is the version number; raise it for a release.
+const Release = "1.0"
+
+// Version is what a build calls itself: the release and the commit it was
+// built from, e.g. "v1.0 5cc1bcd" (just "v1.0" without a commit).
+func Version(commit string) string {
+	if commit == "" || commit == "dev" {
+		return "v" + Release
+	}
+	return "v" + Release + " " + commit
+}
+
 // EnvPrefix starts the environment variables: EnvPrefix+"CONFIG" etc.
 const EnvPrefix = "FKBR_"
 

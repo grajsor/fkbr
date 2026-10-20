@@ -55,10 +55,11 @@ func TestHeaderAnimationFrames(t *testing.T) {
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(prev)
 	h := newHarness(t)
+	h.m.version = "v1.0 5cc1bcd"
 	for _, ph := range []struct {
 		phase animPhase
 		dur   time.Duration
-	}{{animOut, animOutDur}, {animGap, animGapDur}, {animIn, animInDur}} {
+	}{{animOut, animOutDur}, {animTicker, h.m.tickerDur()}, {animIn, animInDur}} {
 		for i := 0; i <= 10; i++ {
 			h.m.anim, h.m.animAt = ph.phase, time.Now().Add(-ph.dur*time.Duration(i)/10)
 			l := h.m.header()
@@ -78,7 +79,7 @@ func TestHeaderAnimationFrames(t *testing.T) {
 	for _, ph := range []struct {
 		phase animPhase
 		dur   time.Duration
-	}{{animOut, animOutDur}, {animGap, animGapDur}, {animIn, animInDur}} {
+	}{{animOut, animOutDur}, {animTicker, h.m.tickerDur()}, {animIn, animInDur}} {
 		for i := 0; i <= 10; i++ {
 			h.m.anim, h.m.animAt = ph.phase, time.Now().Add(-ph.dur*time.Duration(i)/10)
 			if got := stripANSI(h.m.header()); got[frame:] != idle[frame:] {
@@ -86,9 +87,9 @@ func TestHeaderAnimationFrames(t *testing.T) {
 			}
 		}
 	}
-	h.m.anim = animGap
+	h.m.anim, h.m.animAt = animTicker, time.Now()
 	if strings.Contains(h.m.header(), "fkbr") {
-		t.Error("name shown during the gap")
+		t.Error("name shown during the ticker")
 	}
 	h.m.anim = animIdle
 	if !strings.Contains(h.m.header(), "fkbr") {
@@ -105,17 +106,44 @@ func TestAnimationCycle(t *testing.T) {
 	}
 	h.m.animAt = time.Now().Add(-animOutDur)
 	h.m.Update(animMsg{})
-	if h.m.anim != animGap {
-		t.Fatalf("out did not end in the gap: %d", h.m.anim)
+	if h.m.anim != animTicker {
+		t.Fatalf("out did not lead to the ticker: %d", h.m.anim)
 	}
 	h.m.Update(animMsg{})
+	if h.m.anim != animTicker {
+		t.Fatalf("ticker ended at once: %d", h.m.anim)
+	}
+	h.m.animAt = time.Now().Add(-h.m.tickerDur())
+	h.m.Update(animMsg{})
 	if h.m.anim != animIn {
-		t.Fatalf("gap did not lead to in: %d", h.m.anim)
+		t.Fatalf("ticker did not lead to in: %d", h.m.anim)
 	}
 	h.m.animAt = time.Now().Add(-animInDur)
 	h.m.Update(animMsg{})
 	if h.m.anim != animIdle {
 		t.Fatalf("in did not end idle: %d", h.m.anim)
+	}
+}
+
+// The version runs through the " fkbr " frame from right to left: every
+// part of it shows at some point, in order, and it ends off screen.
+func TestVersionTicker(t *testing.T) {
+	h := newHarness(t)
+	h.m.version = "v1.0 5cc1bcd"
+	frame := len(" fkbr ")
+	h.m.anim = animTicker
+	var seen []string
+	for d := time.Duration(0); d <= h.m.tickerDur(); d += 10 * time.Millisecond {
+		h.m.animAt = time.Now().Add(-d)
+		w := stripANSI(h.m.header())[:frame]
+		if len(seen) == 0 || seen[len(seen)-1] != w {
+			seen = append(seen, w)
+		}
+	}
+	want := []string{"      ", "     v", "    v1", "   v1.", "  v1.0", " v1.0 ", "v1.0 5", "1.0 5c", ".0 5cc",
+		"0 5cc1", " 5cc1b", "5cc1bc", "cc1bcd", "c1bcd ", "1bcd  ", "bcd   ", "cd    ", "d     ", "      "}
+	if strings.Join(seen, "|") != strings.Join(want, "|") {
+		t.Fatalf("ticker frames:\n got %q\nwant %q", seen, want)
 	}
 }
 
