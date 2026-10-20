@@ -13,6 +13,8 @@ data through a directory on the shared mount.
   joins. Copies go to one node, a list, or every node (`@all`). Data is
   staged once and every target reads it. Slow or offline targets are
   detached and can catch up later.
+- About as fast as tar through the same share, and faster when copying to
+  several machines at once (`docs/benchmarks.md`).
 - Sync of millions of files: streaming scans with flat memory, incremental
   or mirror mode, dry-run plans, and a delete limit.
 - Crash-safe: atomic publication on the share, chunk checksums, and

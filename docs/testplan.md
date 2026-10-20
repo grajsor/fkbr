@@ -20,12 +20,14 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Mirror a folder while another job reads it | Readers get whole files; vanished files reported | lab |
 | Two mirrors into one folder at once | Whole files; the folder matches one source (a race, like two rsyncs) | lab |
 | Metadata: modes, mtimes, setuid without privileges, ownership with CAP_CHOWN only | As documented in protocol.md | auto |
+| Hostile chunk on the share: escaping or overlong names, bad lengths and offsets, truncation, unknown kinds | Rejected before anything is written | auto, fuzzed (`FuzzReadNative`, 6 million inputs) |
+| Resume after a crash with ramped chunk sizes and read-ahead | The source regenerates identical chunks | auto, lab (torture) |
 
 ## 2. Process failures
 
 | Case | Expected | Status |
 |---|---|---|
-| kill -9, SIGSTOP (longer than `offline_after`), SIGTERM of source or target mid-transfer | Resume, or detach and catch up; never a partial install | lab (torture, 62 events) |
+| kill -9, SIGSTOP (longer than `offline_after`), SIGTERM of source or target mid-transfer | Resume, or detach and catch up; never a partial install | lab (torture: 92 events in four runs, the last on protocol 2) |
 | Target restarted after its last ack, before installing | Installs (the source is done and has removed the acks) | auto, found by torture |
 | Request lost or unreadable in an inbox | Retried, parked after 20 tries; the source re-sends `receive` | auto |
 | Source or target forgotten mid-job | Job fails, no endless wait | auto |
@@ -53,9 +55,11 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Independent jobs at once (1→2,3 while 5→4) | All verify; total NAS throughput is shared | lab: ~100 MB/s total either way |
 | More jobs than `max_jobs` on one node | Extra jobs show `queued`; a fan-out drops a queued target after `detach_after` with a clear reason | auto, lab |
 | `job_quota` 256 MiB / 1 GiB / 4 GiB | 1 and 4 GiB equal, 256 MiB slower | lab |
-| 1 million small files, one sync | Memory bounded, plan streams | **todo** |
+| 1 million small files, one sync | Memory bounded, plan streams | lab (one Pi, 2026-10-19; `benchmarks.md`) |
+| 1,000,000 entries copied to 1 and 3 targets | All verified; 3 min 38 s and 5 min 38 s | lab (compare) |
+| fkbr against tar, rsync and borg through the share | See `benchmarks.md` | lab (compare) |
 | Files bigger than `job_quota` (e.g. 20 GiB) | Segments flow through the window | **todo** on the lab (auto for 3 MiB through 256 KiB) |
-| 200 copies submitted at once; 100,000 files in one folder | All done (27 s); `jobs` 0.03 s; 100k files in 46 s, target RSS 18 MiB | lab (weird `flood`, `bigdir`) |
+| 200 copies submitted at once; 100,000 files in one folder | All done (27 s); `jobs` 0.03 s; 100k files in 12 s, target RSS 55 MiB | lab (weird `flood`, `bigdir`) |
 | Target disk full during receive (40 MiB tmpfs) | Target fails cleanly, staging removed, the other target completes | lab (weird `diskfull`) |
 | Destination folder not writable for some entries | Those entries are errors; the rest installs; staging removed | auto |
 
@@ -75,14 +79,15 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Type clashes (dir where the target has a file, and back) | Left as they are, reported (like `cp`, even with overwrite) | lab |
 | Spaces and unicode in the share path; root through a symlink | Work | lab |
 | Subcommand flags after the paths (`sync /a b:/c -mirror`) | Same as before the paths | auto |
-| TUI: 21,000+ random keys and resizes down to 10x4 | No panic, no exit | lab (weird `fuzz_tui.py`) |
+| TUI: 30,000 random keys and resizes down to 10x4 | No panic, no exit | lab (weird `fuzz_tui.py`) |
 
 ## 6. Mixed fleet
 
 | Case | Expected | Status |
 |---|---|---|
 | CentOS 7 (kernel 3.10) to Rocky 10, x86-64 and ARM64 | Same results everywhere | lab |
-| Mixed fkbr versions on one share | Same protocol works; older nodes lack newer checks | **todo** |
+| Nodes on another protocol version on the same share | Refused, with what to do | auto |
+| Mixed builds of the same protocol | Work together; older builds lack newer checks | **todo** |
 
 ## How to run the lab tests
 
@@ -93,6 +98,9 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
   several nodes on one machine; `nfscut.py target|source` cuts a lab node
   off the NAS mid-transfer; `fuzz_tui.py SECONDS SEED` (with pyte) throws
   random keys and resizes at the TUI.
+- **Compare** (`~/fkbr-lab/compare`): `compare.py setup | setup_big |
+  run N | runbig | clean` times fkbr, tar, rsync and borg through the
+  share and verifies every copy; results go to `docs/benchmarks.md`.
 - **Explore** (`~/fkbr-lab/explore`): `explore.py quota | quota2 |
   concurrent | same | dup | queued | clean`, each a focused experiment;
   results append to `results.log`.

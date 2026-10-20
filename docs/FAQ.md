@@ -12,12 +12,15 @@ On every machine:
 cd /dir/to/share
 ./fkbr /mnt/nfs/somedir
 ```
+This opens the TUI. The machine joins under its hostname and shares the folder you are in.
 
 **How do I copy?**
-In the TUI, select files and press F5. In a shell:
+In the TUI, mark files with Insert and press F5. F6 moves instead. In a shell:
 ```
 ./fkbr /mnt/nfs/somedir cp /file othermachine:/
+./fkbr /mnt/nfs/somedir cp othermachine:/logs/app.log /
 ```
+`othermachine:/logs` means the `logs` folder in what that machine shares.
 
 **To every machine?**
 Use `@all` as the destination, or press Ctrl+A in the F5 dialog.
@@ -32,26 +35,42 @@ In the TUI's node list, mark them with Insert. F5 then copies to them (`@dest`).
 Add `-n` to preview first. Add `-mirror` to also delete extra files.
 In the TUI: F4. It syncs the folder you are in, or only the folders you marked, and always shows what it will do first.
 
-**Compress?**
-Add `-z` to `cp` or `sync` (Ctrl+Z in the dialogs). It uses zstd. It helps with text, logs and programs, and costs nothing for files that are already compressed.
+**A machine was offline during a copy?**
+It gets nothing; the others get everything. Catch it up later: F9, pick the job, press `u` (or `./fkbr /mnt/nfs/somedir catchup JOB`). A sync works too.
 
-**Which version?**
-`./fkbr version`, or watch the top-left corner of the TUI: every 30 seconds the version scrolls by.
+**Something broke halfway?**
+Nothing half-copied ever appears: files are put in place only when all of them have arrived and been checked. Restart fkbr and the copy goes on where it stopped.
+
+**How fast is it?**
+About as fast as tar through the same share, and faster when copying to several machines at once. The NFS server's network sets the pace; a bigger `job_quota` does not help. Numbers: `docs/benchmarks.md`.
+
+**Compress?**
+Add `-z` to `cp` or `sync` (Ctrl+Z in the dialogs). It helps with text, logs and programs, and costs almost nothing for files that are already compressed.
 
 **Who's online?**
 `./fkbr /mnt/nfs/somedir nodes`
 
-**Something failed in the TUI?**
-Look in `/tmp/fkbr-<your uid>-<machine>/node.log`. F1 shows the exact path.
+**Something failed?**
+In the TUI: F9, pick the job, Enter. Every machine's problems are listed there. More detail is in the log: F1 shows where it is, or for a daemon, the file you sent its output to.
 
 **Is my setup OK?**
 `./fkbr /mnt/nfs/somedir check`
 
 **Keep it running after logout?**
-`nohup ./fkbr /mnt/nfs/somedir daemon &`
+```
+cd /dir/to/share
+nohup ./fkbr /mnt/nfs/somedir daemon > /tmp/fkbr.log 2>&1 &
+```
+The log goes to `/tmp`, not into the folder you share.
 
 **Stop it?**
-F10 in the TUI, or kill it. Unfinished jobs resume next time.
+F10 or `q` in the TUI; `kill` for a daemon. Unfinished copies go on next time.
+
+**Which version?**
+`./fkbr version`, or watch the top-left corner of the TUI: every 30 seconds the version scrolls by.
+
+**Upgrading?**
+Run the same version on every machine. If the versions do not fit together, fkbr says so and tells you what to do.
 
 **Remove a machine that's gone?**
 `./fkbr /mnt/nfs/somedir forget NAME`. You rarely need to: quitting the TUI removes the machine, and machines gone for 7 days are removed by themselves. A stopped daemon stays, so it can catch up on `@all` copies later.
@@ -65,27 +84,24 @@ Another user (or `sudo`) already runs fkbr here under that name. Use that one, o
 **Two copies into the same folder at once?**
 Safe. Every file arrives whole. If both copies have the same file, you get one of them; which one is not defined.
 
-**Would a bigger `job_quota` make copies faster?**
-No. The share only holds a moving window of a copy. 1 GiB (the default) was as fast as 4 GiB in our lab; 256 MiB was slower. The network to the NFS server sets the speed.
-
 **Share read-only?**
 Start with `-ro`.
 
 **Different users on each machine?**
-That works. fkbr opens its folders on the share to everyone, so keep the share where only your machines can reach it. If a node says "no answer within 30s" after an update from an older version, run `./fkbr /mnt/nfs/somedir check` on each machine.
+That works. fkbr opens its folders on the share to everyone, so keep the share where only your machines can reach it.
 
 **Does it clean up after itself?**
 Yes, but only while it runs. Think of fkbr as a mail carrier who tidies the mailbox while on duty. Letters are thrown away once delivered. Small notes about finished jobs stay for an hour, then the carrier throws those away too. If no carrier is on duty, nothing gets tidied until one shows up. There is no cron job or service doing it for you.
 
 **Someone deleted things in the share?**
-Running nodes put back what they need within seconds. Jobs that were running may need to be started again.
+Running machines put back what they need within seconds. Copies that were running may need to be started again.
 
 **Tidy up right now?**
 `./fkbr /mnt/nfs/somedir prune -keep 0`
-Removes everything finished. Jobs still running are left alone.
+Removes everything finished. Copies still running are left alone.
 
 **Uninstall?**
-Delete the file and `/mnt/nfs/somedir`.
+Delete the file, `/mnt/nfs/somedir`, and fkbr's files in `/tmp` (`/tmp/fkbr*`).
 
 **More?**
 `docs/operations.md`

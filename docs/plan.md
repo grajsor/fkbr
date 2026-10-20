@@ -222,4 +222,9 @@ Found by lab torture and exploratory tests; details in `testplan.md`.
 - TUI: `@dest` (nodes marked in a node list), F4 on marked folders, a
   `queued` state for jobs waiting for a slot, and a version ticker.
 - Releases: `product.Release` plus the commit (`fkbr v1.0 <commit>`).
+- Protocol 2: chunks in fkbr's own compact format instead of tar (about
+  10 bytes per entry instead of 1.5 KiB), chunk sizes ramping up from
+  4 MiB, read-ahead on source and target, and cheaper installs. Small
+  files now copy about as fast as with tar, and faster to several
+  targets (`benchmarks.md`).
 - License: Apache 2.0.
