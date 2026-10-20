@@ -17,6 +17,9 @@ data through a directory on the shared mount.
   or mirror mode, dry-run plans, and a delete limit.
 - Crash-safe: atomic publication on the share, chunk checksums, and
   resumable jobs. Transfers are staged and installed only when complete.
+  Tested on a lab of five hosts by killing, freezing and restarting nodes
+  mid-transfer, cutting hosts off the NFS server, and deleting parts of
+  the share under running nodes (`docs/testplan.md`).
 
 ## What it looks like
 
@@ -25,8 +28,9 @@ the right is backup01, where an earlier copy of web01's site arrived:
 
 ![Two panes: web01 and backup01, with the jobs panel below](docs/screenshots/fkbr-main.png)
 
-F5 copies the selection. The destination defaults to the other pane, and
-you can type `n1,n2` or press Ctrl+A for every node:
+F5 copies the selection. The destination defaults to the other pane, or
+to the nodes marked with Insert in a node list (`@dest`); you can also
+type `n1,n2` or press Ctrl+A for every node:
 
 ![The copy dialog](docs/screenshots/fkbr-copy.png)
 
@@ -38,6 +42,9 @@ Enter on a job shows its details while it runs: progress, rate and ETA,
 and what each node is doing:
 
 ![Details of a running copy of three database dumps to four nodes](docs/screenshots/fkbr-progress.png)
+
+F4 syncs: the other side is made to match this pane, the whole folder or
+just the marked folders, after a dry run you confirm. F1 explains every key.
 
 F3 shows a file from any node, with XML and JSON highlighted:
 
@@ -81,7 +88,8 @@ fkbr /mnt/nfs/xfer sync -mirror -n /site hostb,hostc:/site
 Run `fkbr /mnt/nfs/xfer check` on each host first. It checks the NFS mount
 options, atomic rename on the share, clock skew and node-name uniqueness.
 Options such as `-node`, `-ro`, `-root id=/path` and `-roles` are covered
-in `docs/operations.md`.
+in `docs/operations.md`. `fkbr version` prints the release and commit
+(`fkbr v1.0 f0c0e0b`).
 
 ## Documentation
 
@@ -91,6 +99,7 @@ in `docs/operations.md`.
 - `docs/protocol.md`: the on-share protocol (mailboxes, chunks, fan-out,
   sync)
 - `docs/benchmarks.md`: measured performance
+- `docs/testplan.md`: what could break, how it is tested, and the results
 - `examples/config.yaml`: every option, if you prefer a config file to flags
 
 ## Development

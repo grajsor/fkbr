@@ -204,3 +204,22 @@ fkbr/
 - **API contract:** run the same test suite against `api/local` and against `api/remote` over a socket.
 - **Real environment:** the binary on RHEL 7 and RHEL 9 against the real NFS mount. `ldd` should report not dynamic. Benchmark few large files, 50k small files and 2M files in deep trees, then tune chunk size, concurrency and polling.
 - Run `go vet`, `staticcheck` and `go test -race ./...`.
+
+## Added after the first release (2026-10-19/20)
+
+Found by lab torture and exploratory tests; details in `testplan.md`.
+
+- One worker per node ID, enforced with instance tokens, PIDs and boot IDs:
+  a second user or `-state` on the same host used to steal transfers.
+- Requests are never dropped on inbox errors; the heartbeat has its own
+  goroutine; pruning compares against the server clock; a target that
+  never started gets its receive request again; forgotten peers fail a job
+  instead of hanging it; a target restarted after its last ack installs.
+- The share heals: missing `tmp/`, registry entries and inboxes are
+  recreated by the running nodes; unreadable registry entries are skipped.
+- Receive keeps sparse files sparse, works through read-only directories
+  like rsync, and installs past entries it cannot place.
+- TUI: `@dest` (nodes marked in a node list), F4 on marked folders, a
+  `queued` state for jobs waiting for a slot, and a version ticker.
+- Releases: `product.Release` plus the commit (`fkbr v1.0 <commit>`).
+- License: Apache 2.0.

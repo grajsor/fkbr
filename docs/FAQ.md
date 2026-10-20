@@ -30,9 +30,13 @@ In the TUI's node list, mark them with Insert. F5 then copies to them (`@dest`).
 ./fkbr /mnt/nfs/somedir sync /dir othermachine:/dir
 ```
 Add `-n` to preview first. Add `-mirror` to also delete extra files.
+In the TUI: F4. It syncs the folder you are in, or only the folders you marked, and always shows what it will do first.
 
 **Compress?**
 Add `-z` to `cp` or `sync` (Ctrl+Z in the dialogs). It uses zstd. It helps with text, logs and programs, and costs nothing for files that are already compressed.
+
+**Which version?**
+`./fkbr version`, or watch the top-left corner of the TUI: every 30 seconds the version scrolls by.
 
 **Who's online?**
 `./fkbr /mnt/nfs/somedir nodes`

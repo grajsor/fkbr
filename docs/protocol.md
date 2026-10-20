@@ -12,7 +12,7 @@ on the share and the rules every node follows. The implementation is
 ├── protocol-version                 "1\n"; a node refuses to start on a mismatch
 ├── tmp/                             every file is written here first
 ├── nodes/<id>/info.json             registry entry (api.NodeInfo)
-├── nodes/<id>/heartbeat             rewritten every heartbeat_interval
+├── nodes/<id>/heartbeat             rewritten every heartbeat_interval; holds the worker's instance token
 ├── inbox/<id>/new/<req>.json        requests waiting for node <id>
 ├── inbox/<id>/cur/<req>.json        claimed, being processed
 ├── inbox/<id>/failed/<req>.json     failed or unreadable
@@ -24,7 +24,8 @@ on the share and the rules every node follows. The implementation is
 ├── jobs/<job>/detached/<node>.json  target dropped from the job (source, or initiator at submit)
 ├── data/<src>/<job>/<seq>.chunk     staged chunk (source)
 ├── data/<src>/<job>/<seq>.json      chunk meta; written after the chunk = published
-└── data/<src>/<job>/acks/<node>     number of chunks <node> has consumed
+├── data/<src>/<job>/acks/<node>     number of chunks <node> has consumed
+└── blobs/{plans,scans}/<id>/        sync plans and scan snapshots (see Sync)
 ```
 
 Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.

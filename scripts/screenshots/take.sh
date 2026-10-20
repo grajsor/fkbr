@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # take.sh: rebuild the demo swarm and retake the README screenshots into
-# docs/screenshots. Needs python3 with pyte and pillow, and DejaVu fonts:
-#   python3 -m venv /tmp/shots-venv && /tmp/shots-venv/bin/pip install pyte pillow
-#   PY=/tmp/shots-venv/bin/python scripts/screenshots/take.sh
+# docs/screenshots at 2x (SCALE=1 for the old size). Needs pyte and pillow,
+# and DejaVu fonts. With uv installed nothing else is needed (uv fetches
+# them into its cache); otherwise PY=/path/to/python with both installed.
 # Run `make` first; it uses bin/fkbr. The demo lives in /tmp/fkbr-demo.
 set -u
 cd "$(dirname "$0")/../.."
 H=$PWD/scripts/screenshots
 BIN=$PWD/bin/fkbr
 OUT=$PWD/docs/screenshots
-PY=${PY:-python3}
+if [ -z "${PY:-}" ] && command -v uv > /dev/null; then
+	py() { uv run -q --with pyte --with pillow python -I "$@"; }
+else
+	py() { "${PY:-python3}" -I "$@"; }
+fi
 stop() { pkill -TERM -f '[f]kbr-demo/share daemon'; sleep 1; }
 stage() {
 	stop
@@ -19,8 +23,8 @@ stage() {
 	touch -d "2026-10-19 10:02" /tmp/fkbr-demo/backup01/incoming
 }
 run() { # steps file; screens.txt shows the text of each shot
-	(cd /tmp/fkbr-demo/ops01 && env COLORTERM=truecolor TERM=xterm-256color \
-		"$PY" -I "$H/shoot.py" "$OUT" "$1" "$BIN" -node ops01 /tmp/fkbr-demo/share) > /tmp/fkbr-demo-screens.txt 2>&1
+	(cd /tmp/fkbr-demo/ops01 && export COLORTERM=truecolor TERM=xterm-256color &&
+		py "$H/shoot.py" "$OUT" "$1" "$BIN" -node ops01 /tmp/fkbr-demo/share) > /tmp/fkbr-demo-screens.txt 2>&1
 }
 stage; run "$H/readme.steps"
 stage; run "$H/progress.steps"   # a fresh demo, so the copy is the only running job

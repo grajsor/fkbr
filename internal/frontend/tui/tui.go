@@ -521,11 +521,11 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case "ctrl+r":
 		return m.refreshPane(m.active)
 	case "f1", "?":
-		text := helpText
-		if m.logPath != "" {
-			text += "\n\nThis node's log: " + m.logPath
+		title := product.Name + " help"
+		if m.version != "" {
+			title = product.Name + " " + m.version + " · help"
 		}
-		m.dlg = newTextDialog("Help", text)
+		m.dlg = newTextDialog(title, m.helpText())
 	case "f2":
 		p.level, p.node, p.root, p.path, p.err = levelNodes, "", "", ".", ""
 		p.clearSelection()

@@ -309,50 +309,75 @@ func wrapText(s string, w int) string {
 	return strings.TrimSuffix(out.String(), "\n")
 }
 
-var helpText = product.Expand(`{name} — keys
+// helpText is the F1 screen. Lines stay under 72 columns so it reads well
+// in an 80-column terminal.
+func (m *model) helpText() string {
+	jobs := `  Copies run on the nodes, not in this window. A daemon keeps going
+  after you quit.`
+	if m.runsNode {
+		jobs = `  This window is node ` + m.c.Self() + ` (no daemon runs it). Quitting asks
+  first if it has running jobs; its part pauses and resumes the next
+  time ` + product.Name + ` runs here. Nothing is lost.`
+	}
+	text := product.Expand(`
+MOVING AROUND
+  ↑ ↓  k j       move
+  PgUp PgDn      a page up or down
+  Home End       first or last entry
+  Enter          open a folder, node or root; on a file: view it
+  Backspace      up: folder, root, then the node list
+  Tab            switch pane
+  F2             go to the node list
+  Ctrl+R         reload this pane
 
-Navigation
-  ↑ ↓ PgUp PgDn Home End   move
-  Enter                    open directory / node / root
-  Backspace                up (directory → nodes)
-  Tab                      switch pane
-  F2                       pick node (go to the node list)
-  Ctrl+R                   refresh pane
+  Names end in / for a folder and @ for a link; ../ is one up.
 
-Selection
-  Insert / Space           toggle and move down
-  +  -  *                  select all, none, invert
-  In the node list, marked nodes are @dest: the default
-  destination of F5 and F4 until you unmark them (-).
+MARKING
+  Insert, Space  mark and move down
+  + - *          mark all, none, invert
+  In a node list, the marked nodes are @dest: the destination
+  that F5 and F4 offer until you unmark them.
 
-Names end in / for a directory and @ for a symlink.
+FILES
+  F3             view (first 64 KiB; XML and JSON coloured)
+  F5             copy the marked entries, or the one under the cursor
+  F6             move: copy, then delete here once every copy succeeded
+  F7             new folder
+  F8             delete (asks first)
 
-Files
-  F3   view file (first 64 KiB; XML and JSON highlighted)
-  F4   sync: make the other side match this one (see Sync below)
-  F5   copy selection to the other pane, or to n1,n2 or every node
-       (Ctrl+A in the dialog = @all)
-  F6   move: copy, then delete the source if the copy fully succeeded
-  F7   make directory
-  F8   delete selection (asks first)
+  In the F5/F6 dialog, "to" is the other pane, a node, n1,n2,
+  @dest, @all or @role.
+  Ctrl+A         to every node (@all)
+  Ctrl+O         if a file exists: skip, overwrite if older, overwrite
+  Ctrl+Z         compress on the way (zstd)
 
-Sync (F4)
-  This pane is the source; the other pane's directory (or @dest,
-  n1,n2, @all) is the destination. With nothing selected, the whole
-  directory is synced. With folders selected, each one is synced into
-  a folder of the same name on the other side; selected files are
-  copied over. Incremental (the default) sends new and changed files
-  and keeps extra ones; mirror (Ctrl+O) also deletes files the source
-  does not have, but only inside what you sync. You always see a dry
-  run first (what would be copied and deleted) and confirm it.
+SYNC (F4)
+  Makes the other side match this pane. With nothing marked, the
+  whole folder is synced; marked folders each go to a folder of the
+  same name, marked files are copied. Incremental (the default) sends
+  new and changed files and keeps extra ones; mirror (Ctrl+O) also
+  deletes what the source does not have, but only inside what you
+  sync. You always see a dry run first and confirm it.
+  Ctrl+O         incremental or mirror
+  Ctrl+K         compare by checksum, not size and time
 
-Jobs
-  F9   focus the jobs panel: ↑↓ select, Enter details,
-       c cancel, u catch up detached targets, Esc back
+JOBS (F9)
+  ↑ ↓            choose a job
+  Enter          details: progress and ETA, every node, notes
+  c              cancel
+  u              catch up nodes that were offline
+  Esc            back
 
-  F1 help · F10, q or Ctrl+C quit
+`) + jobs + `
 
-Jobs run in the node daemons and keep running after you quit.`)
+QUIT AND HELP
+  F1, ?          this help
+  F10, q, Ctrl+C quit`
+	if m.logPath != "" {
+		text += "\n\nThis node's log: " + m.logPath
+	}
+	return text
+}
 
 // syncDialog sets up a sync of the active pane's directory.
 type syncDialog struct {

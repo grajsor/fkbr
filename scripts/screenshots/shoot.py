@@ -68,7 +68,10 @@ def color(c, default):
         return default
 
 
-SIZE = 18
+# SCALE 2 renders at twice the size (36 px font, 2640x1496) so text and
+# borders stay sharp on HiDPI screens and when zoomed.
+SCALE = int(os.environ.get("SCALE", "2"))
+SIZE = 18 * SCALE
 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf", SIZE)
 bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", SIZE)
 asc, desc = font.getmetrics()
@@ -85,17 +88,18 @@ BOX = {
 def box(d, ch, x0, y0, fg):
     left, right, up, down = BOX[ch]
     cx, cy = x0 + CW // 2, y0 + CH // 2
-    gap = 3  # distance between the two lines of a double stroke
+    gap = 3 * SCALE  # distance between the two lines of a double stroke
+    w = SCALE  # stroke width
 
     def hline(xa, xb, n):
         offs = [0] if n == 1 else [-gap // 2 - 1, gap // 2 + 1]
         for o in offs:
-            d.line([(xa, cy + o), (xb, cy + o)], fill=fg, width=1)
+            d.line([(xa, cy + o), (xb, cy + o)], fill=fg, width=w)
 
     def vline(ya, yb, n):
         offs = [0] if n == 1 else [-gap // 2 - 1, gap // 2 + 1]
         for o in offs:
-            d.line([(cx + o, ya), (cx + o, yb)], fill=fg, width=1)
+            d.line([(cx + o, ya), (cx + o, yb)], fill=fg, width=w)
 
     # Corners of double boxes: draw each arm to the matching inner/outer line.
     if left:

@@ -59,6 +59,10 @@ only while it runs:
 - Machines offline for more than `forget_after` (default 7 days;
   `forget_after: -1` turns it off) are removed by a running node. `forget`
   removes one right away.
+- If someone deletes parts of the share while nodes run (`tmp/`, a node's
+  entry or inbox, `jobs/`, `data/`), the running nodes recreate what they
+  need within seconds and register again. Entries in `nodes/` that cannot
+  be read are ignored; delete such a directory by hand.
 
 ## Starting a node
 
@@ -180,6 +184,10 @@ in-process mode.
 | `jobs`, `job [-f] ID`, `cancel ID`, `catchup ID` | follow and control jobs |
 | `events` | live change stream as JSON lines |
 | `check` | validate the host (see above) |
+| `version` | the release and the commit it was built from, e.g. `fkbr v1.0 f0c0e0b` |
+
+A command's own flags may come before or after its paths
+(`sync /a hostb:/a -mirror` works); after `--` everything is a path.
 
 The API is HTTP+JSON on the socket (see `internal/api/remote/server.go`),
 for example `curl --unix-socket /tmp/fkbr-$(id -u)-$(hostname -s)/fkbr.sock http://fkbr/v1/jobs`.
@@ -220,7 +228,8 @@ keys.
 | F5 / F6 | copy / move the selection. The destination defaults to `@dest` while nodes are marked, else to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`). Marked nodes that are offline are detached, to catch up later, as with `@all` |
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
 | F9 | jobs panel with progress and ETA: Enter for details (each node's state, time-stamped notes), `c` cancel, `u` catch up |
-| F10 | quit |
+| F10, `q` | quit; if this TUI is the node and it has running jobs, it asks first (its part pauses and resumes the next time) |
+| F1, `?` | help: every key, how sync works, and this node's log file |
 
 The colours fill the screen in dark green, like Norton Commander's blue.
 They need 256 colours or more; xterm-like terminals that report only 16
@@ -228,6 +237,10 @@ They need 256 colours or more; xterm-like terminals that report only 16
 With only 16 colours the panels turn black with green text. `-colors
 true|256|16|none` overrides the detection, and `NO_COLOR=1` turns colours
 off (the cursor then shows in reverse video).
+
+Every 30 seconds the name in the top-left corner slides out, the version
+(`v1.0 f0c0e0b`) scrolls through, and the name slides back in; a small
+spinner turns in the bottom-right corner. Both show the TUI is alive.
 
 Directories end in `/` and symlinks in `@`, like `ls -F`; `../` goes
 up. A name too long for its column scrolls slowly on the cursor row, so you
