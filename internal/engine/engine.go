@@ -365,6 +365,10 @@ func (e *Engine) heartbeat(ctx context.Context, done chan<- struct{}, conflict c
 			return
 		case <-t.C:
 			other, err := e.tr.Heartbeat(ctx, e.info.Instance)
+			if errors.Is(err, transport.ErrNotRegistered) {
+				e.log.Warn("this node's registry entry was removed; registering again")
+				err = e.tr.Register(ctx, e.info)
+			}
 			if err != nil {
 				e.log.Warn("heartbeat failed", "err", err)
 			}

@@ -6,6 +6,7 @@ package transport
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"time"
 
@@ -57,6 +58,10 @@ type Reply struct {
 	Code string          `json:"code,omitempty"`
 	Body json.RawMessage `json:"body,omitempty"`
 }
+
+// ErrNotRegistered: this node's registry entry is gone (removed under a
+// running node); Heartbeat reports it so the node can register again.
+var ErrNotRegistered = errors.New("registry entry missing")
 
 type Transport interface {
 	// Self is the local node ID.

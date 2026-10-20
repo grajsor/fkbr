@@ -73,6 +73,9 @@ That works. fkbr opens its folders on the share to everyone, so keep the share w
 **Does it clean up after itself?**
 Yes, but only while it runs. Think of fkbr as a mail carrier who tidies the mailbox while on duty. Letters are thrown away once delivered. Small notes about finished jobs stay for an hour, then the carrier throws those away too. If no carrier is on duty, nothing gets tidied until one shows up. There is no cron job or service doing it for you.
 
+**Someone deleted things in the share?**
+Running nodes put back what they need within seconds. Jobs that were running may need to be started again.
+
 **Tidy up right now?**
 `./fkbr /mnt/nfs/somedir prune -keep 0`
 Removes everything finished. Jobs still running are left alone.

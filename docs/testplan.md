@@ -43,7 +43,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | NFS attribute caching (`actimeo=1800`), negative dentries | Refresh trick plus wait-by-listing; no stale reads | lab |
 | Host clocks skewed against the NFS server | Liveness and pruning use server mtimes | auto (pruning by code review) |
 | NAS restart during a transfer | Soft mount: errors, then resume within 3 min; hard mount: pause | **todo** (needs the NAS) |
-| One host loses the network to the NAS for minutes | Others detach it and finish; it catches up | **todo** (needs root for iptables) |
+| One host loses the network to the NAS for 90 s (blackhole route; hard mount) | A target is detached after 30 s, the others finish, it cleans up when back; a cut source makes the targets wait and the job finishes afterwards | lab (weird `nfscut.py`) |
 | Protocol version mismatch on the share | Clear refusal | auto |
 
 ## 4. Load and limits
@@ -55,11 +55,29 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | `job_quota` 256 MiB / 1 GiB / 4 GiB | 1 and 4 GiB equal, 256 MiB slower | lab |
 | 1 million small files, one sync | Memory bounded, plan streams | **todo** |
 | Files bigger than `job_quota` (e.g. 20 GiB) | Segments flow through the window | **todo** on the lab (auto for 3 MiB through 256 KiB) |
-| Hundreds of finished jobs on the share | Listing stays fast, pruning keeps up | **todo** |
-| Target disk full during receive | Target fails cleanly, staging removed | **todo** |
+| 200 copies submitted at once; 100,000 files in one folder | All done (27 s); `jobs` 0.03 s; 100k files in 46 s, target RSS 18 MiB | lab (weird `flood`, `bigdir`) |
+| Target disk full during receive (40 MiB tmpfs) | Target fails cleanly, staging removed, the other target completes | lab (weird `diskfull`) |
 | Destination folder not writable for some entries | Those entries are errors; the rest installs; staging removed | auto |
 
-## 5. Mixed fleet
+## 5. Odd inputs and a damaged share
+
+| Case | Expected | Status |
+|---|---|---|
+| Names with newlines, invalid UTF-8, 255 bytes; a 2849-byte path | Arrive intact | lab (weird `names`) |
+| Sparse, hard-linked, fifo, socket, unreadable file and dir, symlink loops | Sparse stays sparse; links as separate files; specials and unreadables reported | auto, lab |
+| Destination through a symlink pointing outside the root; `../` paths | Refused, nothing written outside | lab |
+| mtimes in 2100 and before 1970, nanoseconds | Kept exactly | lab |
+| Read-only directories on later copies, syncs and deletes | Made writable for the moment, mode restored (like rsync) | auto, lab |
+| Source changing during the send; cancel; copy onto itself | Whole files only; nothing left behind; file intact | lab |
+| Mirror of an empty folder over 1500 files | Refused by `max_deletes` unless forced | lab |
+| Junk in the share (broken `info.json`, stray files and dirs) | Ignored; every command keeps working | auto, lab |
+| `tmp/`, a node's registry entry or inbox, `jobs/`, `data/` deleted under running nodes | Recreated on the next use; the node registers again | auto, lab (weird `vandal`) |
+| Type clashes (dir where the target has a file, and back) | Left as they are, reported (like `cp`, even with overwrite) | lab |
+| Spaces and unicode in the share path; root through a symlink | Work | lab |
+| Subcommand flags after the paths (`sync /a b:/c -mirror`) | Same as before the paths | auto |
+| TUI: 21,000+ random keys and resizes down to 10x4 | No panic, no exit | lab (weird `fuzz_tui.py`) |
+
+## 6. Mixed fleet
 
 | Case | Expected | Status |
 |---|---|---|
@@ -71,6 +89,10 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 - **Torture** (`~/fkbr-lab/torture`): rounds of random copies and syncs
   between five nodes, with kill -9, SIGSTOP and restarts, verified by
   sha256 manifests. See its README.
+- **Weird** (`~/fkbr-lab/weird`): `weird.py [test...]` runs odd cases with
+  several nodes on one machine; `nfscut.py target|source` cuts a lab node
+  off the NAS mid-transfer; `fuzz_tui.py SECONDS SEED` (with pyte) throws
+  random keys and resizes at the TUI.
 - **Explore** (`~/fkbr-lab/explore`): `explore.py quota | quota2 |
   concurrent | same | dup | queued | clean`, each a focused experiment;
   results append to `results.log`.

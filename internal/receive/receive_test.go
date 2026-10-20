@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -206,18 +207,19 @@ func TestRejectsStagingAsDest(t *testing.T) {
 	}
 }
 
-// An entry that cannot be installed (here: a destination directory without
-// write access) is an error for that entry; the rest is installed and the
-// staging area is removed.
-func TestInstallContinuesPastUnwritableDir(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root ignores directory permissions")
-	}
+// An entry that cannot be installed (here: every rename into sub/ fails)
+// is an error for that entry; the rest is installed and the staging area
+// is removed.
+func TestInstallContinuesPastFailedEntries(t *testing.T) {
 	_, dstDir, src, dst := setup(t)
-	locked := filepath.Join(dstDir, "tree/sub")
-	os.MkdirAll(locked, 0o755)
-	os.Chmod(locked, 0o555)
-	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	orig := renameEntry
+	renameEntry = func(r *os.Root, from, to string) error {
+		if strings.HasPrefix(to, "tree/sub/") {
+			return &os.LinkError{Op: "renameat", Old: from, New: to, Err: syscall.EIO}
+		}
+		return orig(r, from, to)
+	}
+	t.Cleanup(func() { renameEntry = orig })
 	s := bundleTree(t, src, "tree", 64<<10)
 	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictSkip})
 	if err != nil {
@@ -236,5 +238,69 @@ func TestInstallContinuesPastUnwritableDir(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dstDir, StagingDir)); !os.IsNotExist(err) {
 		t.Errorf("staging not cleaned up: %v", err)
+	}
+}
+
+// A directory that arrived read-only (as on the source) does not stop a
+// later copy into it: it is made writable for the moment, then restored.
+func TestInstallIntoReadOnlyDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	_, dstDir, src, dst := setup(t)
+	ro := filepath.Join(dstDir, "tree/sub")
+	os.MkdirAll(ro, 0o755)
+	os.WriteFile(filepath.Join(ro, "big.bin"), []byte("old"), 0o644)
+	os.Chmod(ro, 0o555)
+	t.Cleanup(func() { os.Chmod(ro, 0o755) })
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictOverwrite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	res, err := r.Commit()
+	if err != nil || res.Errors != 0 {
+		t.Fatalf("Commit: %+v %v", res, err)
+	}
+	if b, _ := os.ReadFile(filepath.Join(ro, "big.bin")); len(b) != 300<<10 {
+		t.Errorf("big.bin not replaced: %d bytes", len(b))
+	}
+	// overwrite also applies the source's directory modes (0750 here).
+	if fi, _ := os.Stat(ro); fi.Mode().Perm() != 0o750 {
+		t.Errorf("mode: %v", fi.Mode())
+	}
+}
+
+// A sparse file stays sparse, and a replayed segment over existing data
+// still writes its zeros.
+func TestSparseFiles(t *testing.T) {
+	f, err := os.Create(filepath.Join(t.TempDir(), "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	data := make([]byte, 8<<20)
+	copy(data[4<<20:], "middle")
+	if n, err := writeSparse(f, bytes.NewReader(data), 0); err != nil || n != int64(len(data)) {
+		t.Fatalf("writeSparse: %d %v", n, err)
+	}
+	f.Truncate(int64(len(data)))
+	var st syscall.Stat_t
+	syscall.Fstat(int(f.Fd()), &st)
+	if used := st.Blocks * 512; used > 1<<20 {
+		t.Errorf("8 MiB with 6 bytes of data uses %d bytes on disk", used)
+	}
+	got, _ := os.ReadFile(f.Name())
+	if !bytes.Equal(got, data) {
+		t.Fatal("content differs")
+	}
+	// Replay over a file that has data where the chunk has zeros.
+	f.Seek(0, io.SeekStart)
+	f.Write(bytes.Repeat([]byte{'x'}, 1<<20))
+	f.Seek(0, io.SeekStart)
+	writeSparse(f, bytes.NewReader(data), 0)
+	if got, _ := os.ReadFile(f.Name()); !bytes.Equal(got, data) {
+		t.Fatal("replay left old data in a zero range")
 	}
 }

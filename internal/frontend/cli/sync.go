@@ -40,7 +40,7 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 	planID := fl.String("plan", "", "apply this plan")
 	maxDel := fl.Int("max-deletes", 0, "deletion limit per target")
 	force := fl.Bool("force", false, "allow exceeding the deletion limit")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 

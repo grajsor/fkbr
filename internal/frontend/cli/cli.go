@@ -64,7 +64,7 @@ func Run(ctx context.Context, c api.Client, cmd string, args []string, out io.Wr
 func nodes(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	fl := flag.NewFlagSet("nodes", flag.ContinueOnError)
 	asJSON := fl.Bool("json", false, "print JSON")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 	ns, err := c.Nodes(ctx)
@@ -111,7 +111,7 @@ func ls(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	asJSON := fl.Bool("json", false, "print JSON")
 	offset := fl.Int("offset", 0, "skip this many entries")
 	limit := fl.Int("limit", 0, "max entries (default 1000)")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 	if fl.NArg() != 1 {
@@ -322,7 +322,7 @@ func forget(ctx context.Context, c api.Client, args []string, out io.Writer) err
 func prune(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	fl := flag.NewFlagSet("prune", flag.ContinueOnError)
 	keep := fl.Duration("keep", 0, "keep records younger than this")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 	if err := c.Prune(ctx, *keep); err != nil {
@@ -330,4 +330,26 @@ func prune(ctx context.Context, c api.Client, args []string, out io.Writer) erro
 	}
 	fmt.Fprintf(out, "pruned finished records older than %s (running jobs are kept)\n", *keep)
 	return nil
+}
+
+// parseFlags parses a command's flags wherever they are among its
+// arguments, so "sync /a b:/c -mirror" works like "sync -mirror /a b:/c".
+// After "--" everything is an argument.
+func parseFlags(fl *flag.FlagSet, args []string) error {
+	var pos []string
+	for {
+		if err := fl.Parse(args); err != nil {
+			return err
+		}
+		rest := fl.Args()
+		if len(rest) == 0 {
+			break
+		}
+		if used := len(args) - len(rest); used > 0 && args[used-1] == "--" {
+			pos = append(pos, rest...)
+			break
+		}
+		pos, args = append(pos, rest[0]), rest[1:]
+	}
+	return fl.Parse(append([]string{"--"}, pos...))
 }

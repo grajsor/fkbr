@@ -397,3 +397,42 @@ func TestPruneJobWithForgottenSource(t *testing.T) {
 		t.Fatal("job of a forgotten source never pruned")
 	}
 }
+
+// One damaged registry entry must not break listing the others.
+func TestNodesSkipsDamagedEntries(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	for dir, content := range map[string]string{"broken": "{not json", "wrongid": `{"id":"other"}`} {
+		os.MkdirAll(filepath.Join(share, "nodes", dir), 0o777)
+		os.WriteFile(filepath.Join(share, "nodes", dir, "info.json"), []byte(content), 0o644)
+	}
+	ns, err := a.Nodes(ctx)
+	if err != nil || len(ns) != 1 || ns[0].ID != "a" {
+		t.Fatalf("Nodes = %+v, %v", ns, err)
+	}
+}
+
+// Share directories removed under a running node come back on their own.
+func TestLayoutHeals(t *testing.T) {
+	share := t.TempDir()
+	a, b := open(t, share, "a"), open(t, share, "b")
+	os.RemoveAll(filepath.Join(share, "tmp"))
+	if _, err := a.Heartbeat(ctx, "w1 1 a"); err != nil {
+		t.Fatalf("heartbeat without tmp/: %v", err)
+	}
+	if _, err := a.Nodes(ctx); err != nil {
+		t.Fatalf("probe without tmp/: %v", err)
+	}
+	os.RemoveAll(filepath.Join(share, "inbox", "b"))
+	b.Fetch(ctx) // notices and repairs
+	if err := a.Send(ctx, &transport.Message{Protocol: 1, ID: "0007", From: "a", To: "b", Notify: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := b.Fetch(ctx); err != nil || len(got) != 1 {
+		t.Fatalf("Fetch after the inbox was removed: %v %v", got, err)
+	}
+	os.RemoveAll(filepath.Join(share, "nodes", "a"))
+	if _, err := a.Heartbeat(ctx, "w1 1 a"); !errors.Is(err, transport.ErrNotRegistered) {
+		t.Fatalf("heartbeat with the entry removed: %v", err)
+	}
+}

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
+	"os"
 	"path"
 	"strings"
 	"time"
@@ -114,7 +116,7 @@ func (e *Engine) removeLocal(req api.RemoveRequest) (*api.RemoveResult, error) {
 	for _, raw := range req.Paths {
 		p, err := e.writablePath(req.Root, raw)
 		if err == nil {
-			err = root.RemoveAll(p)
+			err = removeAll(root, p)
 		}
 		if err != nil {
 			res.Errors = append(res.Errors, fmt.Sprintf("%s: %v", raw, err))
@@ -123,6 +125,30 @@ func (e *Engine) removeLocal(req api.RemoveRequest) (*api.RemoveResult, error) {
 		res.Removed++
 	}
 	return res, nil
+}
+
+// removeAll removes p and everything below it. Directories that are
+// read-only for their owner (copied that way, say) would stop it, so on a
+// permission error they are made writable and it is tried again; p's
+// parent gets its mode back afterwards. Others' directories stay as they
+// are, and so does the error.
+func removeAll(root *os.Root, p string) error {
+	err := root.RemoveAll(p)
+	if !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	fs.WalkDir(root.FS(), p, func(q string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
+				root.Chmod(q, fi.Mode().Perm()|0o700)
+			}
+		}
+		return nil
+	})
+	if fi, err := root.Lstat(path.Dir(p)); err == nil && fi.Mode().Perm()&0o200 == 0 && root.Chmod(path.Dir(p), fi.Mode().Perm()|0o200) == nil {
+		defer root.Chmod(path.Dir(p), fi.Mode().Perm())
+	}
+	return root.RemoveAll(p)
 }
 
 func (e *Engine) readLocal(req api.ReadRequest) (*api.ReadResult, error) {

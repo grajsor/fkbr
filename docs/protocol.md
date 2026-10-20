@@ -78,6 +78,11 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
    inbox and install into their own directories). A crashed worker's entry
    can be replaced at once. If a heartbeat finds another worker's token,
    the worker that started later stops, without leaving the registry.
+   A heartbeat that finds the node's `info.json` gone registers it again,
+   and a write, probe or inbox read that finds `tmp/` or one of the node's
+   own directories gone recreates them, so a share cleaned up under
+   running nodes heals. Entries in `nodes/` that cannot be read are left
+   out of the node list.
 8. **Leaving.** A node is removed from the registry (its `nodes/`,
    `inbox/`, `reply/` and `data/` directories) in three ways: `forget` by
    any node once it is offline; by any running node when it has been

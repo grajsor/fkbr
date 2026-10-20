@@ -128,15 +128,8 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 		opts.OfflineAfter = 30 * time.Second
 	}
 	m := &Mailbox{root: root, self: self, opts: opts, refreshedAt: map[string]time.Time{}, claimed: map[string]int{}}
-	for _, d := range []string{
-		"tmp", "nodes", "inbox", "reply",
-		m.inbox(self, "new"), m.inbox(self, "cur"), m.inbox(self, "failed"),
-		filepath.Join("reply", self),
-		filepath.Join("nodes", self),
-	} {
-		if err := mkdir(filepath.Join(root, d)); err != nil {
-			return nil, fmt.Errorf("nfsmailbox: %w", err)
-		}
+	if err := m.layout(); err != nil {
+		return nil, fmt.Errorf("nfsmailbox: %w", err)
 	}
 	if err := m.checkProtocol(); err != nil {
 		return nil, err
@@ -165,6 +158,25 @@ func (m *Mailbox) checkProtocol() error {
 
 func (m *Mailbox) Self() string { return m.self }
 
+// layout creates the share's fixed directories and this node's own. Open
+// calls it, and so does any write, probe or inbox read that finds one of
+// them gone (someone cleaned up the share under running nodes), so the
+// share heals instead of failing until every node restarts. It never
+// recreates a job's directories: a pruned job stays gone.
+func (m *Mailbox) layout() error {
+	for _, d := range []string{
+		"tmp", "nodes", "inbox", "reply",
+		m.inbox(m.self, "new"), m.inbox(m.self, "cur"), m.inbox(m.self, "failed"),
+		filepath.Join("reply", m.self),
+		filepath.Join("nodes", m.self),
+	} {
+		if err := mkdir(m.path(d)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // inbox returns the share-relative path of a node's inbox state directory.
 func (m *Mailbox) inbox(node, state string) string {
 	return filepath.Join("inbox", node, state)
@@ -175,7 +187,11 @@ func (m *Mailbox) path(parts ...string) string {
 }
 
 func (m *Mailbox) write(dest string, data []byte) error {
-	return atomicfile.Write(m.path("tmp"), dest, data, shareFileMode)
+	err := atomicfile.Write(m.path("tmp"), dest, data, shareFileMode)
+	if errors.Is(err, fs.ErrNotExist) && m.layout() == nil {
+		err = atomicfile.Write(m.path("tmp"), dest, data, shareFileMode)
+	}
+	return err
 }
 
 func (m *Mailbox) writeJSON(dest string, v any) error {
@@ -208,12 +224,22 @@ func (m *Mailbox) Heartbeat(_ context.Context, token string) (string, error) {
 		}
 	}
 	// Creating and writing a new file lets the NFS server stamp the mtime.
-	return other, m.write(p, []byte(token+"\n"))
+	if err := m.write(p, []byte(token+"\n")); err != nil {
+		return other, err
+	}
+	// The entry may have been removed under us; the caller registers again.
+	if ok, err := m.listed(m.path("nodes", m.self), "info.json"); err == nil && !ok {
+		return other, transport.ErrNotRegistered
+	}
+	return other, nil
 }
 
 // serverNow returns the current time according to the share's clock.
 func (m *Mailbox) serverNow() (time.Time, error) {
 	f, err := os.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
+	if errors.Is(err, fs.ErrNotExist) && m.layout() == nil {
+		f, err = os.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
+	}
 	if err != nil {
 		return time.Time{}, err
 	}
@@ -245,16 +271,15 @@ func (m *Mailbox) Nodes(_ context.Context) ([]api.Node, error) {
 			continue
 		}
 		m.fresh(m.path("nodes", de.Name()))
+		// An entry that cannot be read is left out, so one damaged or
+		// half-created entry does not make every node fail.
 		data, err := os.ReadFile(m.path("nodes", de.Name(), "info.json"))
-		if errors.Is(err, fs.ErrNotExist) {
-			continue // directory created but never registered
-		}
 		if err != nil {
-			return nil, err
+			continue // never registered, or unreadable
 		}
 		var n api.Node
-		if err := json.Unmarshal(data, &n.NodeInfo); err != nil {
-			return nil, fmt.Errorf("nfsmailbox: node %s: info.json: %w", de.Name(), err)
+		if json.Unmarshal(data, &n.NodeInfo) != nil || n.ID != de.Name() {
+			continue
 		}
 		n.Self = n.ID == m.self
 		n.LastSeen = -1
@@ -424,6 +449,9 @@ func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
 			continue
 		}
 		out = append(out, &msg)
+	}
+	if len(errs) > 0 {
+		m.layout() // the inbox may have been removed under us
 	}
 	return out, errors.Join(errs...)
 }

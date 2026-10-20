@@ -10,6 +10,7 @@ package receive
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -213,7 +214,7 @@ func (r *Receiver) applyFile(p string, h *bundle.Header, data io.Reader) error {
 		f.Close()
 		return err
 	}
-	if n, err := io.Copy(f, data); err != nil || n != h.Length {
+	if n, err := writeSparse(f, data, h.Offset); err != nil || n != h.Length {
 		f.Close()
 		return fmt.Errorf("%s: wrote %d of %d bytes: %v", h.Name, n, h.Length, err)
 	}
@@ -231,6 +232,47 @@ func (r *Receiver) applyFile(p string, h *bundle.Header, data io.Reader) error {
 	}
 	return nil
 }
+
+// writeSparse copies data into f at offset (where f is positioned). An
+// all-zero block beyond the current end of f is skipped, leaving a hole
+// that reads as zeros, so sparse files stay sparse (as with cp
+// --sparse=auto); the final Truncate gives the file its size. Below the
+// end every block is written, so a replayed chunk never leaves old data.
+func writeSparse(f *os.File, data io.Reader, offset int64) (int64, error) {
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, err
+	}
+	end := fi.Size()
+	buf := make([]byte, sparseBlock)
+	var n int64
+	for {
+		k, rerr := io.ReadFull(data, buf)
+		if k > 0 {
+			b := buf[:k]
+			if offset+n >= end && allZero(b) {
+				if _, err := f.Seek(int64(k), io.SeekCurrent); err != nil {
+					return n, err
+				}
+			} else if _, err := f.Write(b); err != nil {
+				return n, err
+			}
+			n += int64(k)
+		}
+		switch {
+		case rerr == io.EOF || rerr == io.ErrUnexpectedEOF:
+			return n, nil
+		case rerr != nil:
+			return n, rerr
+		}
+	}
+}
+
+const sparseBlock = 64 << 10
+
+var zeros = make([]byte, sparseBlock)
+
+func allZero(b []byte) bool { return bytes.Equal(b, zeros[:len(b)]) }
 
 // setDirMeta is setMeta for directories, keeping them ours unless we may
 // still write into them after giving them away.
@@ -357,11 +399,35 @@ func (r *Receiver) ensureDir(dir string, created map[string]bool) error {
 	if err := r.ensureDir(path.Dir(dir), created); err != nil {
 		return err
 	}
-	if err := r.root.Mkdir(dir, 0o755); err != nil && !errors.Is(err, fs.ErrExist) {
+	err = r.writable(path.Dir(dir), func() error { return r.root.Mkdir(dir, 0o755) })
+	if err != nil && !errors.Is(err, fs.ErrExist) {
 		return err
 	}
 	created[dir] = true
 	return nil
+}
+
+// renameEntry moves an entry into place; tests replace it to fail.
+var renameEntry = (*os.Root).Rename
+
+// writable runs op, which changes entries in dir. If that fails for lack
+// of permission because dir is read-only for its owner (a directory that
+// arrived read-only in an earlier copy, say), dir is made writable for the
+// moment, op tried again, and dir's mode put back, as rsync does.
+func (r *Receiver) writable(dir string, op func() error) error {
+	err := op()
+	if !errors.Is(err, fs.ErrPermission) {
+		return err
+	}
+	fi, serr := r.root.Lstat(dir)
+	if serr != nil || !fi.IsDir() || fi.Mode().Perm()&0o200 != 0 {
+		return err
+	}
+	if r.root.Chmod(dir, fi.Mode().Perm()|0o200) != nil {
+		return err // not ours
+	}
+	defer r.root.Chmod(dir, fi.Mode().Perm())
+	return op()
 }
 
 func (r *Receiver) commitDir(rel string, res *Result, created map[string]bool) error {
@@ -421,7 +487,7 @@ func (r *Receiver) install(name, src, dst string, sfi fs.FileInfo, res *Result) 
 		res.problem("%s: destination not older, skipped", name)
 		return nil
 	}
-	if err := r.root.Rename(src, dst); err != nil {
+	if err := r.writable(path.Dir(dst), func() error { return renameEntry(r.root, src, dst) }); err != nil {
 		// One unwritable directory must not stop the rest of the install.
 		res.Errors++
 		res.problem("%s: %v", name, err)

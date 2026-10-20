@@ -2,6 +2,8 @@ package engine
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -229,5 +231,32 @@ func TestQueuedTargetVisible(t *testing.T) {
 	<-b.recvSem
 	if j.State != api.JobPartial || len(j.Detached) != 1 || !strings.Contains(j.Detached[0].Reason, "queued on the target") {
 		t.Fatalf("state %s detached %+v", j.State, j.Detached)
+	}
+}
+
+// Deleting (F8, or a mirror's deletions) works through directories that
+// are read-only for their owner, as they arrive from a read-only source.
+func TestRemoveReadOnlyTree(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	share := t.TempDir()
+	a, aroot := node(t, share, "a")
+	runWorker(t, a)
+	for _, d := range []string{"keep/ro/deeper", "keep/gone"} {
+		os.MkdirAll(filepath.Join(aroot, d), 0o755)
+	}
+	os.WriteFile(filepath.Join(aroot, "keep/ro/deeper/f"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(aroot, "keep/gone/f"), []byte("x"), 0o644)
+	for _, d := range []string{"keep/ro/deeper", "keep/ro", "keep"} {
+		os.Chmod(filepath.Join(aroot, d), 0o555)
+	}
+	t.Cleanup(func() { os.Chmod(filepath.Join(aroot, "keep"), 0o755) })
+	res, err := a.Remove(context.Background(), api.RemoveRequest{Node: "a", Root: "data", Paths: []string{"keep/ro", "keep/gone"}})
+	if err != nil || res.Removed != 2 || len(res.Errors) != 0 {
+		t.Fatalf("Remove: %+v %v", res, err)
+	}
+	if fi, _ := os.Stat(filepath.Join(aroot, "keep")); fi.Mode().Perm() != 0o555 {
+		t.Errorf("parent mode not restored: %v", fi.Mode())
 	}
 }

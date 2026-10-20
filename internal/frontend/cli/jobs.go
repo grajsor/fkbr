@@ -36,7 +36,7 @@ func cp(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	conflict := fl.String("conflict", string(api.DefaultConflictPolicy), "what to do when a destination entry exists")
 	compress := fl.Bool("z", false, "zstd-compress chunks on the share")
 	detach := fl.Bool("detach", false, "print the job ID and return immediately")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 	if fl.NArg() < 2 {
@@ -171,7 +171,7 @@ func summary(j *api.Job, out io.Writer) error {
 func jobs(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	fl := flag.NewFlagSet("jobs", flag.ContinueOnError)
 	asJSON := fl.Bool("json", false, "print JSON")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 	js, err := c.Jobs(ctx)
@@ -203,7 +203,7 @@ func job(ctx context.Context, c api.Client, args []string, out io.Writer) error 
 	fl := flag.NewFlagSet("job", flag.ContinueOnError)
 	asJSON := fl.Bool("json", false, "print JSON")
 	wait := fl.Bool("f", false, "follow until the job ends")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 	if fl.NArg() != 1 {
@@ -240,7 +240,7 @@ func cancel(ctx context.Context, c api.Client, args []string, out io.Writer) err
 func catchup(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	fl := flag.NewFlagSet("catchup", flag.ContinueOnError)
 	detach := fl.Bool("detach", false, "print the new job ID and return immediately")
-	if err := fl.Parse(args); err != nil {
+	if err := parseFlags(fl, args); err != nil {
 		return err
 	}
 	if fl.NArg() != 1 {
