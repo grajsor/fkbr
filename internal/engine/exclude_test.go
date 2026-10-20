@@ -114,3 +114,32 @@ func TestSyncPlanEntries(t *testing.T) {
 		t.Errorf("limited to 2: %+v %v", l.Deletes, err)
 	}
 }
+
+// A sync with KeepNewer leaves a target file that was changed after the
+// source's alone.
+func TestSyncKeepNewer(t *testing.T) {
+	share := t.TempDir()
+	a, aroot := node(t, share, "a")
+	b, broot := node(t, share, "b")
+	runWorker(t, a)
+	runWorker(t, b)
+	writeFiles(t, aroot, "p/edited-there.txt", "p/plain.txt")
+	req := api.SyncRequest{SrcRoot: "data", SrcPath: "p", DstNodes: []string{"b"}, DstRoot: "data", DstPath: "m", KeepNewer: true}
+	applyAndWait(t, a, mustPlan(t, a, req), false)
+	later := time.Now().Add(time.Hour)
+	os.WriteFile(filepath.Join(broot, "m/edited-there.txt"), []byte("mine"), 0o644)
+	os.Chtimes(filepath.Join(broot, "m/edited-there.txt"), later, later)
+	os.WriteFile(filepath.Join(aroot, "p/plain.txt"), []byte("new"), 0o644)
+	os.Chtimes(filepath.Join(aroot, "p/plain.txt"), later, later)
+	plan := mustPlan(t, a, req)
+	if tg := target(plan, "b"); tg.Kept != 1 || tg.Copy < 1 {
+		t.Fatalf("plan: %+v", tg)
+	}
+	applyAndWait(t, a, plan, false)
+	if b, _ := os.ReadFile(filepath.Join(broot, "m/edited-there.txt")); string(b) != "mine" {
+		t.Errorf("newer target file replaced: %q", b)
+	}
+	if b, _ := os.ReadFile(filepath.Join(broot, "m/plain.txt")); string(b) != "new" {
+		t.Errorf("older target file not updated: %q", b)
+	}
+}

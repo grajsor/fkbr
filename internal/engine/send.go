@@ -85,6 +85,11 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 		return s.status.finish(ctx, api.JobFailed, fmt.Errorf("job source is %s, not %s", job.Request.SrcNode, e.Self()))
 	}
 	req := job.Request
+	if req.Move && sameRootTarget(req, req.DstNodes) {
+		if err := e.checkMoveHere(req); err != nil {
+			return s.status.finish(ctx, api.JobFailed, err)
+		}
+	}
 	what := summary(req.Paths, 3)
 	if req.SyncPlan != "" {
 		what = fmt.Sprintf("%s (sync, %d entries)", req.BaseDir, req.PathsCount)

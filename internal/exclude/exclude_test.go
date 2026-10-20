@@ -1,6 +1,10 @@
 package exclude
 
-import "testing"
+import (
+	"path"
+	"strings"
+	"testing"
+)
 
 func TestMatch(t *testing.T) {
 	s, err := New([]string{"*.tmp", ".git", "node_modules/", "build/out", "/top.txt", "logs/*.gz", "  ", "cache/"})
@@ -45,4 +49,28 @@ func TestMatch(t *testing.T) {
 	if s, _ := New(nil); s != nil {
 		t.Error("no patterns should give a nil set")
 	}
+}
+
+func FuzzExclude(f *testing.F) {
+	for _, s := range []string{"*.tmp", ".git", "cache/", "/top", "a/b/*.gz", "[a-", "**", "\\", "a\x00b"} {
+		f.Add(s, "a/b/c.tmp", true)
+	}
+	f.Fuzz(func(t *testing.T, pat, rel string, dir bool) {
+		s, err := New([]string{pat})
+		if err != nil || s == nil {
+			return
+		}
+		got := s.Match(rel, dir)
+		if s.Match(".", true) {
+			t.Fatalf("%q excludes the top", pat)
+		}
+		// A plain name pattern matches by the last name only: the same
+		// name under another folder gives the same answer.
+		if !strings.Contains(strings.Trim(pat, " /"), "/") && !strings.HasPrefix(strings.TrimSpace(pat), "/") && rel != "" && !strings.Contains(rel, "\\") {
+			name := path.Base(rel)
+			if s.Match("other/"+name, dir) != got && name != "." && name != "/" && !strings.HasPrefix(rel, "/") && path.Clean(rel) == rel {
+				t.Fatalf("%q: %q=%v but other/%s=%v", pat, rel, got, name, !got)
+			}
+		}
+	})
 }

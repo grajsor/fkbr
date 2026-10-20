@@ -814,6 +814,7 @@ func (m *model) submit(req api.TransferRequest, move bool) tea.Cmd {
 	if move {
 		mv = &moveInfo{node: req.SrcNode, root: req.SrcRoot, paths: slices.Clone(req.Paths)}
 	}
+	req.Move = move
 	return func() tea.Msg {
 		id, err := m.c.Submit(m.ctx, req)
 		return submittedMsg{id: id, req: req, move: mv, err: err}

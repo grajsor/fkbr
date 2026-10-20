@@ -24,6 +24,9 @@ var Commands = map[string]string{
 	"ls":      "list a directory: ls [node:]/path (or [node:]root/path with several roots)",
 	"cp":      "copy: cp [node:]/path... node|n1,n2|@all:/dir (also: put, get)",
 	"put":     "alias for cp",
+	"mv":      "move: mv SRC... DST (copy, then delete the sources if every copy succeeded)",
+	"mkdir":   "make folders, with their parents: mkdir [node:]/path...",
+	"rm":      "delete: rm [-r] [node:]/path... (-r for folders)",
 	"get":     "alias for cp",
 	"jobs":    "list transfer jobs",
 	"job":     "show one job: job [-f] ID",
@@ -46,6 +49,12 @@ func Run(ctx context.Context, c api.Client, cmd string, args []string, out io.Wr
 		return ls(ctx, c, args, out)
 	case "cp", "put", "get":
 		return cp(ctx, c, args, out)
+	case "mv":
+		return mv(ctx, c, args, out)
+	case "mkdir":
+		return mkdir(ctx, c, args, out)
+	case "rm":
+		return rm(ctx, c, args, out)
 	case "jobs":
 		return jobs(ctx, c, args, out)
 	case "job":

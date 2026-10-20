@@ -175,8 +175,10 @@ func TestMouseDialogs(t *testing.T) {
 	h.click(x+1, y, tea.MouseButtonLeft)
 	x, y = h.find("mode:")
 	h.click(x+1, y, tea.MouseButtonLeft)
-	if !s.checksum || !s.mirror {
-		t.Errorf("sync settings: checksum %v mirror %v", s.checksum, s.mirror)
+	x, y = h.find("keep newer:")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	if !s.checksum || !s.mirror || !s.keepNewer {
+		t.Errorf("sync settings: checksum %v mirror %v keep newer %v", s.checksum, s.mirror, s.keepNewer)
 	}
 	x, y = h.find("Esc cancel")
 	h.click(x+1, y, tea.MouseButtonLeft)

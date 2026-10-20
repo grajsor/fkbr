@@ -344,3 +344,31 @@ func TestPlanCoarseTarget(t *testing.T) {
 		t.Errorf("exact target: f differs in mode and mtime but is not copied: %v", s.copies)
 	}
 }
+
+// KeepNewer (rsync -u) keeps target files newer than the source's; a type
+// change still applies, and an older target file is still replaced.
+func TestPlanKeepNewer(t *testing.T) {
+	at := func(e Entry, d int64) Entry { e.M = t0 + d*1e9; return e }
+	src := func() *Reader {
+		return snap(t, dir("."), at(file("newer-there", 1), 0), at(file("older-there", 1), 10), at(file("same", 1), 0), dir("was-file"))
+	}
+	dst := func() *Reader {
+		return snap(t, dir("."), at(file("newer-there", 2), 10), at(file("older-there", 2), 0), at(file("same", 1), 0), at(file("was-file", 1), 99))
+	}
+	s := newSink()
+	ps, err := Plan(src(), []Target{{Node: "t", Snap: dst()}}, PlanOptions{KeepNewer: true}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.copies["newer-there"] != 0 || s.copies["older-there"] == 0 || s.copies["was-file"] == 0 {
+		t.Errorf("copies %v", s.copies)
+	}
+	if ts := ps.Targets[0]; ts.Kept != 1 || ts.Unchanged < 1 || ts.Replace != 1 {
+		t.Errorf("stats %+v", ts)
+	}
+	s = newSink()
+	Plan(src(), []Target{{Node: "t", Snap: dst()}}, PlanOptions{}, s)
+	if s.copies["newer-there"] == 0 {
+		t.Error("without KeepNewer a newer target file must be replaced")
+	}
+}

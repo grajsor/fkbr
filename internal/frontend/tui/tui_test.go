@@ -322,6 +322,9 @@ func TestMoveDeletesSourcesOnlyAfterCleanSuccess(t *testing.T) {
 	if len(h.f.submits) != 1 {
 		t.Fatal("move not submitted")
 	}
+	if !h.f.submits[0].Move {
+		t.Error("F6 does not mark its transfer as a move (the nodes would not check it)")
+	}
 	id := "job0000000000000001"
 	ev := func(state api.JobState, skipped int64) {
 		h.send(eventMsg{api.Event{Type: api.EventJob, JobID: id, Job: &api.Job{ID: id, State: state,
@@ -891,8 +894,12 @@ func TestExcludeAndPlanList(t *testing.T) {
 	}
 	d.setFocus(3)
 	h.key("*.tmp .git")
+	h.send(tea.KeyMsg{Type: tea.KeyCtrlN})
 	h.key("enter")
-	if len(h.f.syncs) != 1 || strings.Join(h.f.syncs[0].Exclude, " ") != "*.tmp .git" {
+	if len(h.f.syncs) != 1 || !h.f.syncs[0].KeepNewer {
+		t.Fatalf("Ctrl+N: keep newer not in the request: %+v", h.f.syncs)
+	}
+	if strings.Join(h.f.syncs[0].Exclude, " ") != "*.tmp .git" {
 		t.Fatalf("plan request exclude: %+v", h.f.syncs)
 	}
 	c, ok := h.m.dlg.(*confirmDialog)
@@ -919,5 +926,27 @@ func TestExcludeAndPlanList(t *testing.T) {
 	h.key("f4")
 	if d, ok := h.m.dlg.(*syncDialog); !ok || d.inputs[3].Value() != "*.tmp .git" {
 		t.Errorf("exclude not offered again: %T", h.m.dlg)
+	}
+}
+
+// A move deletes its sources once copied: what an exclude leaves out
+// would be deleted without a copy, so a move refuses excludes.
+func TestMoveRefusesExclude(t *testing.T) {
+	h := newHarness(t)
+	h.m.active = 1
+	h.open("s1", "data")
+	h.m.active = 0
+	h.open("master", "data")
+	h.m.panes[0].cursorTo("proj")
+	h.key("f6")
+	d, ok := h.m.dlg.(*transferDialog)
+	if !ok {
+		t.Fatalf("F6: %T", h.m.dlg)
+	}
+	d.setFocus(3)
+	h.key("*.tmp")
+	h.key("enter")
+	if len(h.f.submits) != 0 || !strings.Contains(d.err, "exclude") {
+		t.Fatalf("move with exclude: submits %+v, err %q", h.f.submits, d.err)
 	}
 }

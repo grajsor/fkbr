@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"fkbr/internal/api"
+	"fkbr/internal/exclude"
 	"fkbr/internal/localfs"
 	"fkbr/internal/product"
 	"fkbr/internal/receive"
@@ -125,10 +126,20 @@ func (e *Engine) removeLocal(req api.RemoveRequest) (*api.RemoveResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	ex, err := exclude.New(req.Exclude)
+	if err != nil {
+		return nil, err
+	}
+	base, err := localfs.CleanRel(req.Base)
+	if err != nil {
+		return nil, err
+	}
 	res := &api.RemoveResult{}
 	for _, raw := range req.Paths {
 		p, err := e.writablePath(req.Root, raw)
-		if err == nil {
+		if err == nil && ex != nil {
+			err = removeExcept(root, p, func(q string, dir bool) bool { return ex.Match(inventoryRel(base, q), dir) })
+		} else if err == nil {
 			err = removeAll(root, p)
 		}
 		if err != nil {
@@ -145,6 +156,46 @@ func (e *Engine) removeLocal(req api.RemoveRequest) (*api.RemoveResult, error) {
 // permission error they are made writable and it is tried again; p's
 // parent gets its mode back afterwards. Others' directories stay as they
 // are, and so does the error.
+// removeExcept removes p and everything below it except what keep says,
+// and the folders on the way to it. A symlink is removed, never followed.
+func removeExcept(root *os.Root, p string, keep func(p string, dir bool) bool) error {
+	_, err := removeKeeping(root, p, keep)
+	return err
+}
+
+func removeKeeping(root *os.Root, p string, keep func(string, bool) bool) (kept bool, err error) {
+	fi, err := root.Lstat(p)
+	if err != nil {
+		return false, err
+	}
+	if keep(p, fi.IsDir()) {
+		return true, nil
+	}
+	if !fi.IsDir() {
+		return false, removeAll(root, p)
+	}
+	f, err := root.Open(p)
+	if err != nil {
+		return false, err
+	}
+	names, err := f.Readdirnames(-1)
+	f.Close()
+	if err != nil {
+		return false, err
+	}
+	for _, n := range names {
+		k, err := removeKeeping(root, path.Join(p, n), keep)
+		if err != nil {
+			return kept, err
+		}
+		kept = kept || k
+	}
+	if kept {
+		return true, nil
+	}
+	return false, removeAll(root, p)
+}
+
 func removeAll(root *os.Root, p string) error {
 	err := root.RemoveAll(p)
 	if !errors.Is(err, fs.ErrPermission) {

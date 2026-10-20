@@ -83,6 +83,14 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	if err != nil {
 		return "", err
 	}
+	if req.Move && sameRootTarget(req, append(append([]string(nil), targets...), offline...)) {
+		if err := moveOverlap(req, req.Paths, req.DstDir); err != nil {
+			return "", err
+		}
+		if err := needFeature(api.FeatureMove, "safe moves onto itself", src); err != nil {
+			return "", err
+		}
+	}
 	initiator := e.info
 	if n, ok := byID[e.Self()]; ok {
 		initiator = n.NodeInfo

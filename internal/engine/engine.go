@@ -93,7 +93,7 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 			AcceptWritesFrom: cfg.AcceptWritesFrom,
 			PID:              os.Getpid(),
 			BootID:           bootID(),
-			Features:         []string{api.FeatureExclude},
+			Features:         []string{api.FeatureExclude, api.FeatureMove},
 		},
 	}
 }

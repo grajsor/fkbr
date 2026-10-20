@@ -69,6 +69,9 @@ type NodeInfo struct {
 // FeatureExclude: the node honours Exclude in transfers and sync scans.
 const FeatureExclude = "exclude"
 
+// FeatureMove: as a source, the node refuses a move onto its own sources.
+const FeatureMove = "move"
+
 // Has reports whether the node's build has feature f.
 func (n *NodeInfo) Has(f string) bool { return slices.Contains(n.Features, f) }
 
@@ -251,6 +254,9 @@ type TransferRequest struct {
 	// Exclude leaves entries inside the copied paths out (see package
 	// exclude); the paths named themselves are always sent.
 	Exclude []string `json:"exclude,omitempty"`
+	// Move: the initiator deletes the sources once the job is done, so it
+	// must not overlap them (checked at submit and by the source node).
+	Move bool `json:"move,omitempty"`
 	// SyncPlan is the plan this transfer belongs to.
 	SyncPlan string `json:"sync_plan,omitempty"`
 }
@@ -380,6 +386,11 @@ type RemoveRequest struct {
 	Node  string   `json:"node,omitempty"`
 	Root  string   `json:"root"`
 	Paths []string `json:"paths"`
+	// Exclude keeps what matches (patterns relative to Base, see package
+	// exclude), and the folders holding it: a mirror sync's deletions
+	// never take excluded files along.
+	Exclude []string `json:"exclude,omitempty"`
+	Base    string   `json:"base,omitempty"`
 }
 
 type RemoveResult struct {
@@ -443,6 +454,8 @@ type SyncRequest struct {
 	// Exclude leaves entries out on both sides: they are neither copied
 	// nor deleted (see package exclude).
 	Exclude []string `json:"exclude,omitempty"`
+	// KeepNewer keeps target files newer than the source's (rsync -u).
+	KeepNewer bool `json:"keep_newer,omitempty"`
 }
 
 // SyncTarget is what a plan would do on one target.
@@ -453,6 +466,7 @@ type SyncTarget struct {
 	Replace   int64  `json:"replace"` // type changed: deleted, then copied
 	Delete    int64  `json:"delete"`  // removals (mirror), collapsed to top-level
 	Unchanged int64  `json:"unchanged"`
+	Kept      int64  `json:"kept,omitempty"` // newer there, kept (KeepNewer)
 	// OverLimit is set when Delete exceeds the plan's max deletes.
 	OverLimit bool `json:"over_limit,omitempty"`
 }

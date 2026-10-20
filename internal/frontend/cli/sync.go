@@ -15,7 +15,7 @@ import (
 	"fkbr/internal/safetext"
 )
 
-const syncUsage = `usage: sync [-mirror] [-checksum] [-z] [-n [-v]] [-exclude PAT]... [-max-deletes N] [-force] SRC DST
+const syncUsage = `usage: sync [-mirror] [-update] [-checksum] [-z] [-n [-v]] [-exclude PAT]... [-max-deletes N] [-force] SRC DST
        sync -plan ID [-force]
 
 Makes DST match SRC, like "rsync -a SRC/ DST/". SRC is [node:]/dir, DST
@@ -26,6 +26,8 @@ target can apply it); only differences are sent, and entries needed by
 several targets are sent once for all of them.
 
   -mirror       also delete destination entries missing from the source
+  -update, -u   keep destination files that are newer than the source's
+                (like rsync -u); a file/folder type change still applies
   -exclude PAT  leave out matching entries on both sides: neither copied
                 nor deleted (repeatable; *.tmp, .git, build/out, cache/);
                 -exclude-from FILE reads them one per line
@@ -40,6 +42,9 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 	fl.Usage = func() { fmt.Fprintln(fl.Output(), syncUsage) }
 	mirror := fl.Bool("mirror", false, "delete destination entries missing from the source")
 	checksum := fl.Bool("checksum", false, "also compare file content hashes (reads every file)")
+	var keepNewer bool
+	fl.BoolVar(&keepNewer, "update", false, "keep destination files newer than the source's")
+	fl.BoolVar(&keepNewer, "u", false, "short for -update")
 	compress := fl.Bool("z", false, "zstd-compress chunks on the share")
 	dry := fl.Bool("n", false, "dry run")
 	verbose := fl.Bool("v", false, "with -n: list every entry, not just the first 20 of each list")
@@ -65,7 +70,7 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 			fl.Usage()
 			return errors.New("need SRC and DST")
 		}
-		req := api.SyncRequest{Mode: api.SyncIncremental, Checksum: *checksum, Compress: *compress, MaxDeletes: *maxDel}
+		req := api.SyncRequest{Mode: api.SyncIncremental, Checksum: *checksum, Compress: *compress, MaxDeletes: *maxDel, KeepNewer: keepNewer}
 		if req.Exclude, err = excludes(); err != nil {
 			return err
 		}
@@ -184,13 +189,20 @@ func printPlan(p *api.SyncPlan, out io.Writer) {
 	}
 	fmt.Fprintf(out, "source: %d entries, %s\n", p.SrcEntries, humanBytes(p.SrcBytes))
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "  TARGET\tCOPY\tBYTES\tREPLACE\tDELETE\tUNCHANGED")
+	kept := ""
+	if r.KeepNewer {
+		kept = "\tKEPT NEWER"
+	}
+	fmt.Fprintln(tw, "  TARGET\tCOPY\tBYTES\tREPLACE\tDELETE\tUNCHANGED"+kept)
 	for _, t := range p.Targets {
 		del := fmt.Sprint(t.Delete)
 		if t.OverLimit {
 			del += fmt.Sprintf(" (over limit %d)", p.MaxDeletes)
 		}
-		fmt.Fprintf(tw, "  %s\t%d\t%s\t%d\t%s\t%d\n", t.Node, t.Copy, humanBytes(t.CopyBytes), t.Replace, del, t.Unchanged)
+		if r.KeepNewer {
+			kept = fmt.Sprintf("\t%d", t.Kept)
+		}
+		fmt.Fprintf(tw, "  %s\t%d\t%s\t%d\t%s\t%d%s\n", t.Node, t.Copy, humanBytes(t.CopyBytes), t.Replace, del, t.Unchanged, kept)
 	}
 	tw.Flush()
 	for _, g := range p.Groups {

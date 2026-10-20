@@ -35,6 +35,12 @@ In the TUI's node list, mark them with Insert. F5 then copies to them (`@dest`).
 Add `-n` to preview first. Add `-mirror` to also delete extra files.
 In the TUI: F4. It syncs the folder you are in, or only the folders you marked, and always shows what it will do first.
 
+**Someone changed a file on the target; will sync overwrite it?**
+Yes, a sync makes the target match the source. Add `-u` (Ctrl+N in the TUI) to keep files that are newer on the target.
+
+**Move, delete or make folders from a script?**
+`fkbr /mnt/nfs/xfer mv /a hostb:/b`, `rm -r hostb:/old`, `mkdir hostb:/new`. `mv` deletes the sources only if the copy fully succeeded.
+
 **Leave some files out?**
 `-exclude '*.tmp' -exclude .git` on `cp` or `sync`, or the "exclude" field in the TUI. In a sync, excluded files are never copied and never deleted. Details: `docs/operations.md`.
 

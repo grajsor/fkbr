@@ -14,11 +14,17 @@ type Target struct {
 	// Chown: the target preserves file ownership; ChownDirs: directory
 	// ownership too.
 	Chown, ChownDirs bool
+	// Holders are the target's folders (paths inside the base) that hold
+	// excluded entries: a mirror deletes what else is in them, never them.
+	Holders map[string]bool
 }
 
 type PlanOptions struct {
 	Mirror   bool
 	Checksum bool
+	// KeepNewer keeps a target's file or symlink when it is newer than the
+	// source's (rsync -u); a type change still applies.
+	KeepNewer bool
 }
 
 // Sink receives the plan as it is computed. Copy is called once per entry
@@ -32,6 +38,7 @@ type Sink interface {
 // TargetStats counts what the plan does on one target.
 type TargetStats struct {
 	Copy, CopyBytes, Replace, Delete, Unchanged int64
+	Kept                                        int64 // newer on the target (KeepNewer)
 }
 
 type PlanStats struct {
@@ -224,7 +231,7 @@ func (p *planner) step(path string) (err error) {
 		case s == nil && d == nil:
 			// unreadable/special source entry absent on target
 		case s == nil:
-			if srcUnknown || !p.opts.Mirror || d.T == TypeError {
+			if srcUnknown || !p.opts.Mirror || d.T == TypeError || d.T == TypeDir && t.Holders[path] {
 				continue
 			}
 			if err := p.sink.Delete(i, path); err != nil {
@@ -242,6 +249,8 @@ func (p *planner) step(path string) (err error) {
 			p.touchParent(path, i)
 		case d.T == TypeError:
 			p.stats.problem("%s: %s unreadable on target (%s)", t.Node, path, d.E)
+		case d.T != s.T && d.T == TypeDir && t.Holders[path]:
+			p.stats.problem("%s: %s stays a folder: it holds excluded entries", t.Node, path)
 		case d.T != s.T:
 			if err := p.sink.Delete(i, path); err != nil {
 				return err
@@ -253,6 +262,8 @@ func (p *planner) step(path string) (err error) {
 			ts.Replace++
 			ts.CopyBytes += s.S
 			p.touchParent(path, i)
+		case p.opts.KeepNewer && s.T != TypeDir && newerThere(s, d, t) && p.differs(s, d, t):
+			ts.Kept++
 		case p.differs(s, d, t):
 			copyMask |= bit(i)
 			ts.Copy++
@@ -279,6 +290,15 @@ func (p *planner) step(path string) (err error) {
 		return p.sink.Copy(copyMask, s)
 	}
 	return nil
+}
+
+// newerThere reports whether target entry d is newer than source entry s,
+// by more than what the target's filesystem can tell apart.
+func newerThere(s, d *Entry, t Target) bool {
+	if step := t.Snap.Header.MtimeStep; step > 1 {
+		return d.M-s.M >= step*1e9
+	}
+	return sec(d.M) > sec(s.M)
 }
 
 // sec truncates an mtime to whole seconds, the precision compared.

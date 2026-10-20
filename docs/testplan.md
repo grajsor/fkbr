@@ -80,6 +80,13 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Spaces and unicode in the share path; root through a symlink | Work | lab |
 | Subcommand flags after the paths (`sync /a b:/c -mirror`) | Same as before the paths | auto |
 | Excludes (`*.tmp`, `.git`, `cache/`, `build/out`) on copy and mirror sync | Not sent; in a sync neither copied nor deleted on either side; a node without the feature refuses with its name | auto, Pi |
+| Sync `-update` with files edited on the target | Newer target files kept and counted; older ones replaced; type changes applied | auto, Pi |
+| CLI `rm` (folders need `-r`, missing paths are errors), `mkdir`, `mv` (sources deleted only after a clean copy; refuses `-exclude`) | As stated; TUI F6 also refuses an exclude | auto, Pi |
+| Random trees and options, sync checked against an independent model (`TestSyncModel`: mirror, keep newer, excludes, type changes, same size and time with other content) | Target as the model says; source untouched; a second sync has nothing left | auto (40 rounds; 400 run once) |
+| Random moves with the real `mv`, also onto and into the sources and through a symlink (`TestMoveModel`) | No file content lost; a successful move has everything at the destination | auto (30 rounds); it found that a move into its own subfolder deleted everything (also TUI F6) |
+| Mirror with excludes over a folder the source lacks | Excluded files and their folders stay; found deleting them | auto, funky `danger` |
+| Odd `rm`/`mkdir`/`mv` arguments (`/`, `..`, staging, the share, a symlink out, `file/`) | Nothing removed or created; `rm file/` refused like coreutils | auto |
+| Exclude patterns, fuzzed | No panic; the top is never excluded | auto (3.5 million inputs) |
 | Dry run of a mirror | Lists what it deletes and copies (20 per list, `-v` all; TUI: first 5, `l` all) | auto, Pi |
 | TUI: 30,000 random keys and resizes down to 10x4 | No panic, no exit | lab (weird `fuzz_tui.py`) |
 

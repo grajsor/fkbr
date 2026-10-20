@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -42,7 +43,10 @@ type scanRequest struct {
 }
 
 func snapshotBlob(planID, node string) string { return "scans/" + planID + "/" + node + ".snap" }
-func planBlob(planID string) string           { return "plans/" + planID + "/plan.json" }
+
+// holdersBlob lists the folders of a scan that hold excluded entries.
+func holdersBlob(planID, node string) string { return "scans/" + planID + "/" + node + ".holders" }
+func planBlob(planID string) string          { return "plans/" + planID + "/plan.json" }
 
 // scanLocal snapshots root/path into the share.
 func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(inventory.ScanStats)) (*inventory.ScanStats, error) {
@@ -66,14 +70,54 @@ func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(i
 	if err != nil {
 		return nil, err
 	}
+	// The folders above what is left out: a mirror must not delete them
+	// whole (they would take the excluded entries along).
+	holders := map[string]bool{}
+	skip := func(rel string, dir bool) bool {
+		if !ex.Match(rel, dir) {
+			return false
+		}
+		for q := path.Dir(rel); q != "."; q = path.Dir(q) {
+			holders[q] = true
+		}
+		return true
+	}
 	st, err := inventory.Scan(e.fs, req.Root, req.Path, h, inventory.ScanOptions{
-		Checksum: req.Checksum, Exclude: receive.StagingDir, Skip: ex.Match,
+		Checksum: req.Checksum, Exclude: receive.StagingDir, Skip: skip,
 		Progress: progress, Interval: scanProgressInterval,
 	}, w)
 	if err != nil {
 		return nil, err
 	}
+	if len(holders) > 0 {
+		hw, err := e.st.CreateBlob(ctx, holdersBlob(req.PlanID, e.Self()))
+		if err != nil {
+			return nil, err
+		}
+		defer hw.Abort()
+		bw := bufio.NewWriter(hw)
+		for q := range holders {
+			fmt.Fprintln(bw, strconv.Quote(q))
+		}
+		if err := bw.Flush(); err != nil {
+			return nil, err
+		}
+		if err := hw.Commit(nil); err != nil {
+			return nil, err
+		}
+	}
 	return st, w.Commit(nil)
+}
+
+// readHolders reads a scan's holders list (none if it has none).
+func (e *Engine) readHolders(ctx context.Context, planID, node string) (map[string]bool, error) {
+	rc, err := e.st.OpenBlob(ctx, holdersBlob(planID, node))
+	if err != nil {
+		return nil, nil // nothing excluded there
+	}
+	defer rc.Close()
+	keep := map[string]bool{}
+	return keep, readPathList(rc, func(p string) error { keep[p] = true; return nil })
 }
 
 // serveScan runs a peer's scan request, reporting progress as reply parts.
@@ -264,10 +308,14 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		defer c.Close()
 		defer r.Close()
 		n := byID[t]
-		its = append(its, inventory.Target{Node: t, Snap: r, Chown: n.ChownCapable, ChownDirs: n.ChownCapable && n.DACOverride})
+		holders, err := e.readHolders(ctx, plan.ID, t)
+		if err != nil {
+			return nil, err
+		}
+		its = append(its, inventory.Target{Node: t, Snap: r, Chown: n.ChownCapable, ChownDirs: n.ChownCapable && n.DACOverride, Holders: holders})
 	}
 	sink := &planSink{e: e, ctx: ctx, plan: plan, targets: targets, groups: map[uint64]*listWriter{}, deletes: map[int]*listWriter{}}
-	ps, err := inventory.Plan(srcRd, its, inventory.PlanOptions{Mirror: req.Mode == api.SyncMirror, Checksum: req.Checksum}, sink)
+	ps, err := inventory.Plan(srcRd, its, inventory.PlanOptions{Mirror: req.Mode == api.SyncMirror, Checksum: req.Checksum, KeepNewer: req.KeepNewer}, sink)
 	if err != nil {
 		sink.abort()
 		return nil, err
@@ -281,7 +329,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		ts := ps.Targets[i]
 		plan.Targets = append(plan.Targets, api.SyncTarget{
 			Node: t, Copy: ts.Copy, CopyBytes: ts.CopyBytes, Replace: ts.Replace,
-			Delete: ts.Delete, Unchanged: ts.Unchanged,
+			Delete: ts.Delete, Unchanged: ts.Unchanged, Kept: ts.Kept,
 			OverLimit: maxDel >= 0 && ts.Delete+ts.Replace > int64(maxDel),
 		})
 		todo = append(todo, fmt.Sprintf("%s:copy=%d,delete=%d", t, ts.Copy, ts.Delete))
@@ -363,7 +411,7 @@ func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api
 		if t.Delete+t.Replace == 0 {
 			continue
 		}
-		errs := e.applyDeletes(ctx, plan.ID, t.Node, req.DstRoot)
+		errs := e.applyDeletes(ctx, plan.ID, t.Node, req.DstRoot, req.Exclude, req.DstPath)
 		plan.DeleteErrors = append(plan.DeleteErrors, errs...)
 	}
 	for _, g := range plan.Groups {
@@ -384,7 +432,9 @@ func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api
 	return plan, e.savePlan(ctx, plan)
 }
 
-func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string) []string {
+// applyDeletes removes a plan's deletions on node; what the sync excludes
+// (patterns relative to base) stays, with the folders holding it.
+func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string, excl []string, base string) []string {
 	var errs []string
 	fail := func(err error) []string { return append(errs, fmt.Sprintf("%s: %v", node, err)) }
 	rc, err := e.st.OpenBlob(ctx, "plans/"+planID+"/delete-"+node)
@@ -397,7 +447,7 @@ func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string) []
 		if len(batch) == 0 {
 			return
 		}
-		res, err := e.Remove(ctx, api.RemoveRequest{Node: node, Root: root, Paths: batch})
+		res, err := e.Remove(ctx, api.RemoveRequest{Node: node, Root: root, Paths: batch, Exclude: excl, Base: base})
 		if err != nil {
 			errs = fail(err)
 		} else {
@@ -564,9 +614,11 @@ func (e *Engine) SyncPlanEntries(ctx context.Context, planID string, limit int) 
 				l.More++
 				return nil
 			}
-			if rel := inventoryRel(base, p); rel != "." { // the top itself is not news
-				l.Paths = append(l.Paths, rel)
+			rel := inventoryRel(base, p)
+			if rel == "." {
+				rel = "./" // the synced folder itself (its time or mode)
 			}
+			l.Paths = append(l.Paths, rel)
 			return nil
 		})
 	}

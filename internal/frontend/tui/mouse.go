@@ -211,7 +211,8 @@ func (m *model) dialogClick(msg tea.MouseMsg) tea.Cmd {
 var hintKeys = map[string]tea.KeyMsg{
 	"Enter": {Type: tea.KeyEnter}, "Tab": {Type: tea.KeyTab}, "Esc": {Type: tea.KeyEsc},
 	"^A": {Type: tea.KeyCtrlA}, "^O": {Type: tea.KeyCtrlO}, "^K": {Type: tea.KeyCtrlK}, "^Z": {Type: tea.KeyCtrlZ},
-	"y": {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
+	"^N": {Type: tea.KeyCtrlN},
+	"y":  {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
 	"l": {Type: tea.KeyRunes, Runes: []rune("l")},
 }
 
@@ -237,16 +238,20 @@ func hintKey(line string, col int, k *tea.KeyMsg) bool {
 	return false
 }
 
-// settingKeys are the settings shown on a dialog's settings line (it
-// starts with the first of them) and the keys that toggle them.
+// settingKeys are the settings shown on a dialog's settings lines (each
+// starts with one of them) and the keys that toggle them.
 var settingKeys = []struct{ label, key string }{
-	{"if exists:", "^O"}, {"mode:", "^O"}, {"checksum:", "^K"}, {"zstd:", "^Z"},
+	{"if exists:", "^O"}, {"mode:", "^O"}, {"keep newer:", "^N"}, {"checksum:", "^K"}, {"zstd:", "^Z"},
 }
 
 // settingKey is the key of the setting at column col: the nearest label
 // at or left of it.
 func settingKey(line string, col int) (tea.KeyMsg, bool) {
-	if !strings.HasPrefix(line, settingKeys[0].label) && !strings.HasPrefix(line, settingKeys[1].label) {
+	starts := false
+	for _, s := range settingKeys {
+		starts = starts || strings.HasPrefix(line, s.label)
+	}
+	if !starts {
 		return tea.KeyMsg{}, false
 	}
 	at, key := -1, ""

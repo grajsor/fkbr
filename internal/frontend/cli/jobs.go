@@ -37,56 +37,11 @@ Examples:
 func cp(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	fl := flag.NewFlagSet("cp", flag.ContinueOnError)
 	fl.Usage = func() { fmt.Fprintln(fl.Output(), cpUsage) }
-	conflict := fl.String("conflict", string(api.DefaultConflictPolicy), "what to do when a destination entry exists")
-	compress := fl.Bool("z", false, "zstd-compress chunks on the share")
 	detach := fl.Bool("detach", false, "print the job ID and return immediately")
-	excludes := excludeFlags(fl)
-	if err := parseFlags(fl, args); err != nil {
-		return err
-	}
-	if fl.NArg() < 2 {
-		fl.Usage()
-		return errors.New("need at least one source and a destination")
-	}
-	ex, err := excludes()
+	req, err := transferArgs(ctx, c, fl, args)
 	if err != nil {
 		return err
 	}
-	req := api.TransferRequest{Conflict: api.ConflictPolicy(*conflict), Compress: *compress, Exclude: ex}
-	srcs := fl.Args()[:fl.NArg()-1]
-	for i, s := range srcs {
-		node, root, p := ParseTarget(s)
-		root, p, err := resolveRoot(ctx, c, node, root, p)
-		if err != nil {
-			return err
-		}
-		if root == "" {
-			return fmt.Errorf("source %q: missing root", s)
-		}
-		if p == "" {
-			p = "."
-		}
-		if i == 0 {
-			req.SrcNode, req.SrcRoot = node, root
-		} else if node != req.SrcNode || root != req.SrcRoot {
-			return fmt.Errorf("all sources must be on the same node and root (%q vs %s:%s)", s, req.SrcNode, req.SrcRoot)
-		}
-		req.Paths = append(req.Paths, p)
-	}
-	dnodes, droot, ddir := ParseTarget(fl.Arg(fl.NArg() - 1))
-	droot, ddir, err = resolveRoot(ctx, c, dnodes, droot, ddir)
-	if err != nil {
-		return err
-	}
-	if droot == "" {
-		return errors.New("destination: missing root")
-	}
-	if dnodes == "" {
-		dnodes = c.Self()
-	}
-	req.DstNodes = strings.Split(dnodes, ",")
-	req.DstRoot, req.DstDir = droot, ddir
-
 	id, err := c.Submit(ctx, req)
 	if err != nil {
 		return err
@@ -97,6 +52,60 @@ func cp(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 	}
 	fmt.Fprintf(os.Stderr, "job %s submitted (Ctrl-C detaches; the job keeps running)\n", id)
 	return follow(ctx, c, id, out)
+}
+
+// transferArgs parses what cp and mv share: their flags (added to fl
+// here), SRC... and DST.
+func transferArgs(ctx context.Context, c api.Client, fl *flag.FlagSet, args []string) (api.TransferRequest, error) {
+	conflict := fl.String("conflict", string(api.DefaultConflictPolicy), "what to do when a destination entry exists")
+	compress := fl.Bool("z", false, "zstd-compress chunks on the share")
+	excludes := excludeFlags(fl)
+	if err := parseFlags(fl, args); err != nil {
+		return api.TransferRequest{}, err
+	}
+	if fl.NArg() < 2 {
+		fl.Usage()
+		return api.TransferRequest{}, errors.New("need at least one source and a destination")
+	}
+	ex, err := excludes()
+	if err != nil {
+		return api.TransferRequest{}, err
+	}
+	req := api.TransferRequest{Conflict: api.ConflictPolicy(*conflict), Compress: *compress, Exclude: ex}
+	srcs := fl.Args()[:fl.NArg()-1]
+	for i, s := range srcs {
+		node, root, p := ParseTarget(s)
+		root, p, err := resolveRoot(ctx, c, node, root, p)
+		if err != nil {
+			return api.TransferRequest{}, err
+		}
+		if root == "" {
+			return api.TransferRequest{}, fmt.Errorf("source %q: missing root", s)
+		}
+		if p == "" {
+			p = "."
+		}
+		if i == 0 {
+			req.SrcNode, req.SrcRoot = node, root
+		} else if node != req.SrcNode || root != req.SrcRoot {
+			return api.TransferRequest{}, fmt.Errorf("all sources must be on the same node and root (%q vs %s:%s)", s, req.SrcNode, req.SrcRoot)
+		}
+		req.Paths = append(req.Paths, p)
+	}
+	dnodes, droot, ddir := ParseTarget(fl.Arg(fl.NArg() - 1))
+	droot, ddir, err = resolveRoot(ctx, c, dnodes, droot, ddir)
+	if err != nil {
+		return api.TransferRequest{}, err
+	}
+	if droot == "" {
+		return api.TransferRequest{}, errors.New("destination: missing root")
+	}
+	if dnodes == "" {
+		dnodes = c.Self()
+	}
+	req.DstNodes = strings.Split(dnodes, ",")
+	req.DstRoot, req.DstDir = droot, ddir
+	return req, nil
 }
 
 // follow shows progress until the job ends, then a summary. The live

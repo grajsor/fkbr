@@ -196,6 +196,9 @@ in-process mode.
 | `forget NODE...` | remove offline nodes from the share (they re-register if started again) |
 | `ls [node:]/path` | list a directory on any node |
 | `cp [node:]/path... node\|n1,n2\|@all:/dir` | copy; `-conflict`, `-z`, `-detach`, `-exclude` |
+| `mv [node:]/path... node:/dir` | copy, then delete the sources if every copy succeeded (nothing failed, skipped or detached); refuses a destination that is a source or inside one, also through a symlink |
+| `mkdir [node:]/path...` | make folders, with their parents |
+| `rm [-r] [node:]/path...` | delete; folders only with `-r`; every path must exist; a symlink is removed, not what it points to |
 | `sync [-mirror] [-n] SRC DST` | make DST match SRC (see below) |
 | `jobs`, `job [-f] ID`, `cancel ID`, `catchup ID` | follow and control jobs |
 | `events` | live change stream as JSON lines |
@@ -275,6 +278,9 @@ plan and applies it. Only differences are transferred.
 - `-n` stops after the plan and prints its ID; `fkbr sync -plan ID` applies
   that plan later. It also lists the first 20 entries it would delete and
   copy on each target; add `-v` for all of them.
+- `-update` (or `-u`) keeps files on the targets that are newer than the
+  source's, like rsync `-u` (TUI: Ctrl+N). A file/folder type change
+  still applies, and `-mirror` still deletes what the source lacks.
 - `-mirror` also deletes extra entries on the targets. If any target would
   lose more than `sync.max_deletes` entries (default 1000), the apply is
   refused unless you pass `-force`. `-max-deletes N` changes the limit for
@@ -300,7 +306,9 @@ dialogs have an `exclude:` field (patterns separated by spaces).
 `*` and `?` never match across a `/`. An excluded folder leaves out
 everything in it. What you name yourself (`cp a.tmp ...`) is always
 copied; patterns apply inside it. In a sync, excluded entries are skipped
-on both sides: they are never copied, and never deleted on the targets.
+on both sides: they are never copied, and never deleted on the targets. A
+mirror deletes the rest of a folder that holds excluded entries, but keeps
+the folder; such a folder is not replaced by a file of the same name.
 Every node involved needs this version: an older one would ignore the
 patterns, so fkbr refuses and names it.
 

@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"path"
 	"strings"
@@ -80,12 +81,19 @@ func (d *transferDialog) request() (api.TransferRequest, error) {
 	if err != nil {
 		return api.TransferRequest{}, err
 	}
+	if d.move && len(ex) > 0 {
+		return api.TransferRequest{}, errMoveExclude
+	}
 	return api.TransferRequest{
 		SrcNode: d.srcNode, SrcRoot: d.srcRoot, Paths: d.paths,
 		DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstDir: dir,
 		Conflict: conflictPolicies[d.conflict], Compress: d.compress, Exclude: ex,
 	}, nil
 }
+
+// errMoveExclude: a move deletes its sources once copied, so what an
+// exclude left out would be deleted without a copy.
+var errMoveExclude = errors.New("a move cannot exclude: what is left out would be deleted with the sources (copy with F5 instead)")
 
 // excludes splits the exclude field into patterns and checks them.
 func excludes(field string) ([]string, error) {
@@ -471,6 +479,7 @@ SYNC (F4)
   Makes the other side match this pane. With nothing marked, the whole folder is synced; marked folders each go to a folder of the same name, marked files are copied. Incremental (the default) sends new and changed files and keeps extra ones; mirror (Ctrl+O) also deletes what the source does not have, but only inside what you sync. You always see a dry run first and confirm it.
   Ctrl+O         incremental or mirror
   Ctrl+K         compare by checksum, not size and time
+  Ctrl+N         keep files that are newer on the destination
   l              in the plan: list everything it copies and deletes
 
   Excluded entries are neither copied nor deleted, on either side.
@@ -499,6 +508,7 @@ type syncDialog struct {
 	inputs                     [4]textinput.Model // nodes, root, dir, exclude
 	focus                      int
 	mirror, checksum, compress bool
+	keepNewer                  bool // keep target files newer than the source's
 	err                        string
 	dest                       []string // the marked nodes, for @dest
 	// dirs and files are the selected entries; none means the whole
@@ -557,7 +567,7 @@ func (d *syncDialog) requests() ([]api.SyncRequest, *api.TransferRequest, error)
 	}
 	base := api.SyncRequest{SrcNode: d.srcNode, SrcRoot: d.srcRoot, SrcPath: d.srcPath,
 		DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstPath: dir, Mode: mode, Checksum: d.checksum, Compress: d.compress,
-		Exclude: ex}
+		Exclude: ex, KeepNewer: d.keepNewer}
 	if len(d.dirs) == 0 && len(d.files) == 0 {
 		return []api.SyncRequest{base}, nil, nil
 	}
@@ -594,6 +604,9 @@ func (d *syncDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 		return false, nil
 	case "ctrl+k":
 		d.checksum = !d.checksum
+		return false, nil
+	case "ctrl+n":
+		d.keepNewer = !d.keepNewer
 		return false, nil
 	case "ctrl+a":
 		d.inputs[0].SetValue("@" + api.GroupAll)
@@ -632,10 +645,15 @@ func (d *syncDialog) view(st *styles, width, _ int) string {
 		mode = "MIRROR (extra files deleted)"
 	}
 	fmt.Fprintf(&b, "\nmode: %-32s checksum: %-4v zstd: %v\n", mode, onOff(d.checksum), onOff(d.compress))
+	keep := "off (newer files there are replaced)"
+	if d.keepNewer {
+		keep = "on (newer files there are kept)"
+	}
+	fmt.Fprintf(&b, "keep newer: %s\n", keep)
 	if d.err != "" {
 		b.WriteString("\n" + st.dialogErr.Render("! "+d.err) + "\n")
 	}
-	b.WriteString("\nEnter plan (dry run first) · Tab next field · Esc cancel\n^A all nodes · ^O mode · ^K checksum · ^Z zstd")
+	b.WriteString("\nEnter plan (dry run first) · Tab next field · Esc cancel\n^A all nodes · ^O mode · ^K checksum · ^Z zstd · ^N keep newer")
 	return b.String()
 }
 
@@ -698,6 +716,9 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest, pr
 		for _, t := range p.Targets {
 			l := fmt.Sprintf("%s%-12s copy %d (%s)  replace %d  delete %d  unchanged %d",
 				indent, t.Node, t.Copy, humanSize(t.CopyBytes), t.Replace, t.Delete, t.Unchanged)
+			if t.Kept > 0 {
+				l += fmt.Sprintf("  kept newer %d", t.Kept)
+			}
 			if t.OverLimit {
 				l += fmt.Sprintf("  ⚠ over the delete limit %d", p.MaxDeletes)
 				over = true
