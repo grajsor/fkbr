@@ -5,14 +5,17 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // The mouse does what keys do. In the panes and the jobs panel a click
 // moves the cursor (and the focus) there and a double click opens (Enter);
 // a right click marks or unmarks the row under it, as in Norton Commander;
 // the wheel moves the cursor. A click on the key bar presses that key. In
-// a dialog the wheel scrolls, a click outside closes it (Esc), and a
-// confirm dialog takes a click on its answers.
+// a dialog the wheel scrolls, a click outside closes it (Esc), a click on
+// a hint ("Enter start · Tab next field · Esc cancel") presses that key,
+// one on a setting ("if exists:", "zstd:", ...) toggles it, and one on a
+// field puts the cursor there.
 
 const doubleClick = 400 * time.Millisecond
 
@@ -22,15 +25,26 @@ type click struct {
 	at        time.Time
 }
 
-// box is where View drew the dialog: its frame, and where its content
-// starts and how many lines it has.
+// box is where View drew the dialog: its frame, where its content starts,
+// and the content's lines as plain text.
 type box struct {
-	x, y, w, h       int
-	cx, cy, contentH int
+	x, y, w, h int
+	cx, cy     int
+	lines      []string
 }
 
 func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
-	if msg.Action != tea.MouseActionPress || m.width < 40 || m.height < 12 {
+	if m.width < 40 || m.height < 12 {
+		return nil
+	}
+	switch msg.Action {
+	case tea.MouseActionRelease:
+		m.drag = dragNone
+		return nil
+	case tea.MouseActionMotion:
+		if m.drag != dragNone {
+			return m.dragTo(msg.Y)
+		}
 		return nil
 	}
 	switch msg.Button {
@@ -56,6 +70,11 @@ func (m *model) mouse(msg tea.MouseMsg) tea.Cmd {
 		i := 0
 		if msg.X >= m.width/2 {
 			i = 1
+		}
+		if bar := []int{m.width/2 - 1, m.width - 1}[i]; msg.X == bar && msg.Button == tea.MouseButtonLeft {
+			if cmd, ok := m.paneBarClick(i, msg.Y-2); ok {
+				return cmd
+			}
 		}
 		return m.rowClick(i, msg.Y-2, msg.Button)
 	}
@@ -166,18 +185,79 @@ func (m *model) dialogClick(msg tea.MouseMsg) tea.Cmd {
 		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 		return cmd
 	}
-	if _, ok := m.dlg.(*confirmDialog); ok && msg.Button == tea.MouseButtonLeft && msg.Y == b.cy+b.contentH-1 {
-		// The last line is confirmHint: "y = yes · n / Esc = no".
-		answer := "n"
-		if x := msg.X - b.cx; x >= 0 && x < len("y = yes") {
-			answer = "y"
-		} else if x < 0 || x >= len([]rune(confirmHint)) {
-			return nil
-		}
-		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(answer)})
+	row, col := msg.Y-b.cy, msg.X-b.cx
+	if msg.Button != tea.MouseButtonLeft || row < 0 || row >= len(b.lines) || col < 0 {
+		return nil
+	}
+	if d, ok := m.dlg.(*textDialog); ok && col == d.vp.Width && row >= 1 && row <= d.vp.Height {
+		m.textBarClick(d, row-1)
+		return nil
+	}
+	line := b.lines[row]
+	// Hints end every dialog (the last two lines): a list of the keys it
+	// takes, so names listed above them never count as keys.
+	if k, ok := settingKey(line, col); ok || row >= len(b.lines)-2 && hintKey(line, col, &k) {
+		_, cmd := m.Update(k)
 		return cmd
 	}
+	if f, ok := m.dlg.(interface{ focusLine(string) bool }); ok {
+		f.focusLine(line)
+	}
 	return nil
+}
+
+// hintKeys are the keys dialogs name in their hints and what a click on
+// them presses.
+var hintKeys = map[string]tea.KeyMsg{
+	"Enter": {Type: tea.KeyEnter}, "Tab": {Type: tea.KeyTab}, "Esc": {Type: tea.KeyEsc},
+	"^A": {Type: tea.KeyCtrlA}, "^O": {Type: tea.KeyCtrlO}, "^K": {Type: tea.KeyCtrlK}, "^Z": {Type: tea.KeyCtrlZ},
+	"y": {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
+}
+
+// hintKey finds the key of the hint at column col of a hint line
+// ("Enter start · Tab next field · Esc cancel": the first word of the
+// part clicked).
+func hintKey(line string, col int, k *tea.KeyMsg) bool {
+	const sep = " · "
+	start := 0
+	for _, part := range strings.Split(line, sep) {
+		w := ansi.StringWidth(part)
+		if col < start+w {
+			f := strings.Fields(part)
+			if col < start || len(f) == 0 {
+				return false
+			}
+			var ok bool
+			*k, ok = hintKeys[f[0]]
+			return ok
+		}
+		start += w + ansi.StringWidth(sep)
+	}
+	return false
+}
+
+// settingKeys are the settings shown on a dialog's settings line (it
+// starts with the first of them) and the keys that toggle them.
+var settingKeys = []struct{ label, key string }{
+	{"if exists:", "^O"}, {"mode:", "^O"}, {"checksum:", "^K"}, {"zstd:", "^Z"},
+}
+
+// settingKey is the key of the setting at column col: the nearest label
+// at or left of it.
+func settingKey(line string, col int) (tea.KeyMsg, bool) {
+	if !strings.HasPrefix(line, settingKeys[0].label) && !strings.HasPrefix(line, settingKeys[1].label) {
+		return tea.KeyMsg{}, false
+	}
+	at, key := -1, ""
+	for _, s := range settingKeys {
+		if i := strings.Index(line, s.label); i >= 0 {
+			if c := ansi.StringWidth(line[:i]); c <= col && c > at {
+				at, key = c, s.key
+			}
+		}
+	}
+	k, ok := hintKeys[key]
+	return k, ok
 }
 
 // placedBox works out where lipgloss.Place centres a block of w x h cells
@@ -185,5 +265,3 @@ func (m *model) dialogClick(msg tea.MouseMsg) tea.Cmd {
 func placedBox(aw, ah, w, h int) (x, y int) {
 	return max(0, aw-w) / 2, max(0, ah-h) / 2
 }
-
-func lineCount(s string) int { return strings.Count(s, "\n") + 1 }

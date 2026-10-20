@@ -834,3 +834,39 @@ func TestControlCharactersNeverReachTheTerminal(t *testing.T) {
 	h.key("enter")
 	check("inside an evil directory")
 }
+
+// The help flows with the window: paragraphs fill the width, key rows
+// wrap under their description.
+func TestHelpFlows(t *testing.T) {
+	para := "  " + strings.Repeat("word ", 30)
+	row := "  Enter          " + strings.Repeat("open ", 20)
+	got := flowText(para+"\n"+row, 40)
+	for i, l := range strings.Split(got, "\n") {
+		if runewidth.StringWidth(l) > 40 {
+			t.Errorf("line %d too wide: %q", i, l)
+		}
+	}
+	lines := strings.Split(got, "\n")
+	if !strings.HasPrefix(lines[1], "  word") || strings.HasPrefix(lines[1], "   ") {
+		t.Errorf("paragraph continuation: %q", lines[1])
+	}
+	var cont string
+	for i, l := range lines {
+		if strings.HasPrefix(l, "  Enter") {
+			cont = lines[i+1]
+		}
+	}
+	if !strings.HasPrefix(cont, strings.Repeat(" ", 17)+"open") {
+		t.Errorf("key row continuation not under its description: %q", cont)
+	}
+	if wide := flowText(para, 200); strings.Count(wide, "\n") != 0 {
+		t.Errorf("a paragraph on a wide screen is not one line: %q", wide)
+	}
+	// Every help line fits 80 columns when flowed for the dialog there.
+	h := newHarness(t)
+	for _, l := range strings.Split(flowText(h.m.helpText(), 80-7), "\n") {
+		if runewidth.StringWidth(l) > 80-7 {
+			t.Errorf("help line too wide: %q", l)
+		}
+	}
+}

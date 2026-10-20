@@ -6,6 +6,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path"
@@ -17,6 +18,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"fkbr/internal/api"
@@ -59,8 +61,8 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 		popts = append(popts, tea.WithMouseCellMotion())
 	}
 	_, err := tea.NewProgram(m, popts...).Run()
-	if err == tea.ErrProgramKilled && ctx.Err() != nil {
-		return nil
+	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
+		return nil // ended from outside: the caller knows why
 	}
 	return err
 }
@@ -83,9 +85,10 @@ type model struct {
 	st     *styles
 	panes  [2]*pane
 	active int
-	// lastClick and dlgBox serve the mouse (mouse.go).
+	// lastClick, dlgBox and drag serve the mouse (mouse.go, scrollbar.go).
 	lastClick click
 	dlgBox    box
+	drag      drag
 
 	nodes    map[string]api.Node
 	jobs     map[string]api.Job
@@ -544,7 +547,7 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 		if m.version != "" {
 			title = product.Name + " " + m.version + " · help"
 		}
-		m.dlg = newTextDialog(title, m.helpText())
+		m.dlg = newHelpDialog(title, m.helpText())
 	case "f2":
 		p.level, p.node, p.root, p.path, p.err = levelNodes, "", "", ".", ""
 		p.clearSelection()
@@ -1154,7 +1157,7 @@ func (m *model) View() string {
 		d := m.st.dialog
 		m.dlgBox = box{x: x, y: 1 + y, w: w, h: h,
 			cx: x + d.GetBorderLeftSize() + d.GetPaddingLeft(), cy: 1 + y + d.GetBorderTopSize() + d.GetPaddingTop(),
-			contentH: lineCount(content)}
+			lines: strings.Split(ansi.Strip(content), "\n")}
 		out = append(out, lipgloss.Place(m.width, area, lipgloss.Center, lipgloss.Center, framed,
 			lipgloss.WithWhitespaceBackground(cPanel)))
 	} else {
@@ -1251,6 +1254,9 @@ func (m *model) renderPanes(h int) string {
 			title += " (offline)"
 		}
 		boxes[i] = m.st.frame(active, title, strings.Join(lines, "\n"), inner)
+		if start, size, ok := scrollThumb(h, p.scrollLen(), p.offset); ok {
+			boxes[i] = m.st.withScrollbar(boxes[i], active, 1, start, size)
+		}
 		if i == 1 && m.jobsHeight() == 0 { // no jobs panel: the spinner sits here
 			boxes[i] = m.st.withCorner(boxes[i], active, spinChar(m.spin))
 		}

@@ -506,8 +506,10 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, opts tui.O
 	}()
 	opts.RunsNode, opts.LogPath = true, logPath
 	terr := tui.Run(tctx, n.c, opts)
-	if err := n.stop(); err != nil && terr == nil {
-		terr = err
+	// The worker's reason comes first: when it stopped on its own (its
+	// directory deleted, lock lost), that is why the TUI ended.
+	if err := n.stop(); err != nil {
+		return err
 	}
 	return terr
 }

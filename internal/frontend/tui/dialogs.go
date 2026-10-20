@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
 	"fkbr/internal/api"
 	"fkbr/internal/product"
@@ -141,6 +143,21 @@ func (d *transferDialog) setFocus(i int) {
 	d.inputs[d.focus].Focus()
 }
 
+// focusLine puts the cursor in the field shown on line (a mouse click).
+func (d *transferDialog) focusLine(line string) bool {
+	return focusLine(d.inputs[:], line, d.setFocus)
+}
+
+func focusLine(inputs []textinput.Model, line string, setFocus func(int)) bool {
+	for i, in := range inputs {
+		if strings.HasPrefix(line, strings.TrimSpace(in.Prompt)) {
+			setFocus(i)
+			return true
+		}
+	}
+	return false
+}
+
 func (d *transferDialog) view(st *styles, width, _ int) string {
 	verb := "Copy"
 	if d.move {
@@ -243,8 +260,7 @@ func (d *confirmDialog) view(st *styles, width, height int) string {
 	return b.String()
 }
 
-// confirmHint ends a confirm dialog. A click on its answers works too
-// (dialogClick): it must start with "y = yes".
+// confirmHint ends a confirm dialog; a click on an answer works too.
 const confirmHint = "y = yes · n / Esc = no"
 
 // textDialog shows scrollable text (file viewer, help, job details).
@@ -257,6 +273,8 @@ type textDialog struct {
 	jobID string
 	// lang ("xml", "json" or "") selects syntax highlighting.
 	lang string
+	// flow word-wraps to the width (the help) instead of cutting lines.
+	flow bool
 	st   *styles
 }
 
@@ -272,11 +290,21 @@ func (d *textDialog) content(w int) string {
 	if d.lang != "" && d.st != nil {
 		return highlight(d.st, d.lang, d.text, w)
 	}
+	if d.flow {
+		return flowText(d.text, w-1) // a cell between the text and the scrollbar
+	}
 	return wrapText(d.text, w)
 }
 
 func newTextDialog(title, text string) *textDialog {
 	return &textDialog{title: safetext.Clean(title), text: safetext.Text(text)}
+}
+
+// newHelpDialog is a text dialog whose paragraphs flow with the window.
+func newHelpDialog(title, text string) *textDialog {
+	d := newTextDialog(title, text)
+	d.flow = true
+	return d
 }
 
 func (d *textDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -292,13 +320,62 @@ func (d *textDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 func (d *textDialog) view(st *styles, width, height int) string {
 	w, h := max(20, width-6), max(3, height-6)
 	d.st = st
-	if !d.ready || d.vp.Width != w || d.vp.Height != h {
-		d.vp = viewport.New(w, h)
-		d.vp.SetContent(d.content(w))
+	// The text leaves the last column to the scrollbar (scrollbar.go).
+	if !d.ready || d.vp.Width != w-1 || d.vp.Height != h {
+		d.vp = viewport.New(w-1, h)
+		d.vp.SetContent(d.content(w - 1))
 		d.ready = true
 	}
 	pct := int(d.vp.ScrollPercent() * 100)
-	return st.dialogTitle.Render(fit(d.title, w-8)+fmt.Sprintf(" %5d%%", pct)) + "\n" + d.vp.View() + "\n" + fit("↑↓ PgUp PgDn scroll · Esc close", w)
+	lines := strings.Split(d.vp.View(), "\n")
+	bar := st.bar(len(lines), d.vp.TotalLineCount(), d.vp.YOffset)
+	for i, l := range lines {
+		if gap := w - 1 - lipgloss.Width(l); gap > 0 {
+			l += st.inputLabel.Render(strings.Repeat(" ", gap))
+		}
+		lines[i] = l + bar[i]
+	}
+	return st.dialogTitle.Render(fit(d.title, w-8)+fmt.Sprintf(" %5d%%", pct)) + "\n" + strings.Join(lines, "\n") + "\n" + fit("↑↓ PgUp PgDn scroll · Esc close", w)
+}
+
+// flowText word-wraps s to w cells for the help: a paragraph fills the
+// width with its indent kept; a key row ("  Enter          open ...")
+// continues under its description.
+func flowText(s string, w int) string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		body := strings.TrimLeft(line, " ")
+		hang := len(line) - len(body)
+		if i := strings.Index(body, "  "); i > 0 && hang+i < 20 {
+			gap := len(body[i:]) - len(strings.TrimLeft(body[i:], " "))
+			hang += i + gap
+		}
+		prefix, rest := line[:hang], line[hang:] // hang is in bytes ("↑ ↓")
+		indent := min(runewidth.StringWidth(prefix), w/2)
+		cont := strings.Repeat(" ", indent)
+		cur := prefix
+		for _, word := range strings.Fields(rest) {
+			ww := runewidth.StringWidth(word)
+			switch {
+			case cur == prefix:
+			case runewidth.StringWidth(cur)+1+ww <= w:
+				cur += " "
+			default:
+				out = append(out, cur)
+				cur = cont
+			}
+			for runewidth.StringWidth(cur)+ww > w && w-runewidth.StringWidth(cur) > 0 { // a word longer than the line
+				cut := runewidth.Truncate(word, w-runewidth.StringWidth(cur), "")
+				out = append(out, cur+cut)
+				word = word[len(cut):]
+				ww = runewidth.StringWidth(word)
+				cur = cont
+			}
+			cur += word
+		}
+		out = append(out, cur)
+	}
+	return strings.Join(out, "\n")
 }
 
 // wrapText hard-wraps long lines to w cells and expands tabs.
@@ -318,12 +395,10 @@ func wrapText(s string, w int) string {
 // helpText is the F1 screen. Lines stay under 72 columns so it reads well
 // in an 80-column terminal.
 func (m *model) helpText() string {
-	jobs := `  Copies run on the nodes, not in this window. A daemon keeps going
-  after you quit.`
+	// Paragraphs are one line each: flowText wraps them to the window.
+	jobs := `  Copies run on the nodes, not in this window. A daemon keeps going after you quit.`
 	if m.runsNode {
-		jobs = `  This window is node ` + m.c.Self() + ` (no daemon runs it). Quitting asks
-  first if it has running jobs; its part pauses and resumes the next
-  time ` + product.Name + ` runs here. Nothing is lost.`
+		jobs = `  This window is node ` + m.c.Self() + ` (no daemon runs it). Quitting asks first if it has running jobs; its part pauses and resumes the next time ` + product.Name + ` runs here. Nothing is lost.`
 	}
 	text := product.Expand(`
 MOVING AROUND
@@ -341,15 +416,16 @@ MOVING AROUND
 MARKING
   Insert, Space  mark and move down
   + - *          mark all, none, invert
-  In a node list, the marked nodes are @dest: the destination
-  that F5 and F4 offer until you unmark them.
+  In a node list, the marked nodes are @dest: the destination that F5 and F4 offer until you unmark them.
 
 MOUSE
   click          move there (in either pane or the jobs)
   double-click   open, like Enter
   right-click    mark or unmark
   wheel          move up or down; scroll a dialog
+  scrollbar      click above or below the thumb: a page; drag it
   key bar        a click presses that key
+  in a dialog    click a key it names (Enter, Esc, ^O) or a setting
   click outside  close a dialog
   Shift+drag     select text (-mouse=false: no Shift needed)
 
@@ -360,19 +436,13 @@ FILES
   F7             new folder
   F8             delete (asks first)
 
-  In the F5/F6 dialog, "to" is the other pane, a node, n1,n2,
-  @dest, @all or @role.
+  In the F5/F6 dialog, "to" is the other pane, a node, n1,n2, @dest, @all or @role.
   Ctrl+A         to every node (@all)
   Ctrl+O         if a file exists: skip, overwrite if older, overwrite
   Ctrl+Z         compress on the way (zstd)
 
 SYNC (F4)
-  Makes the other side match this pane. With nothing marked, the
-  whole folder is synced; marked folders each go to a folder of the
-  same name, marked files are copied. Incremental (the default) sends
-  new and changed files and keeps extra ones; mirror (Ctrl+O) also
-  deletes what the source does not have, but only inside what you
-  sync. You always see a dry run first and confirm it.
+  Makes the other side match this pane. With nothing marked, the whole folder is synced; marked folders each go to a folder of the same name, marked files are copied. Incremental (the default) sends new and changed files and keeps extra ones; mirror (Ctrl+O) also deletes what the source does not have, but only inside what you sync. You always see a dry run first and confirm it.
   Ctrl+O         incremental or mirror
   Ctrl+K         compare by checksum, not size and time
 
@@ -422,6 +492,17 @@ func newSyncDialog(src *pane, dstNodes, dstRoot, dstDir string) *syncDialog {
 	return d
 }
 
+func (d *syncDialog) setFocus(i int) {
+	d.inputs[d.focus].Blur()
+	d.focus = i
+	d.inputs[d.focus].Focus()
+}
+
+// focusLine puts the cursor in the field shown on line (a mouse click).
+func (d *syncDialog) focusLine(line string) bool {
+	return focusLine(d.inputs[:], line, d.setFocus)
+}
+
 // requests returns one sync per selected folder (into a folder of the same
 // name), or one for the whole directory, and a copy of the selected files.
 func (d *syncDialog) requests() ([]api.SyncRequest, *api.TransferRequest, error) {
@@ -469,14 +550,10 @@ func (d *syncDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 	case "esc":
 		return true, nil
 	case "tab", "down":
-		d.inputs[d.focus].Blur()
-		d.focus = (d.focus + 1) % len(d.inputs)
-		d.inputs[d.focus].Focus()
+		d.setFocus((d.focus + 1) % len(d.inputs))
 		return false, nil
 	case "shift+tab", "up":
-		d.inputs[d.focus].Blur()
-		d.focus = (d.focus + len(d.inputs) - 1) % len(d.inputs)
-		d.inputs[d.focus].Focus()
+		d.setFocus((d.focus + len(d.inputs) - 1) % len(d.inputs))
 		return false, nil
 	case "ctrl+o":
 		d.mirror = !d.mirror

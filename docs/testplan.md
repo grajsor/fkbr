@@ -92,6 +92,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Shared directory inside the share, reached by a symlink or `-root` | Refused (a symlink got past the check) | auto, lab (funky) |
 | Names, link targets, a peer's host/OS, file contents with terminal escapes | Shown as `?` in the TUI and on a terminal; exact when piped, in `-json` and in actions (they reached the terminal raw) | auto, lab (funky) |
 | Target on FAT: names it cannot hold, README next to readme, 2 s mtimes, no modes | Those names refused and reported, the rest arrives; sync settles (one bad name failed the whole copy; the clash overwrote silently; sync re-sent everything) | auto, lab (funky `vfat_*`) |
+| Shared directory deleted, moved or replaced under a running node | The node stops within seconds and says why; a TUI closes and leaves the share (it went on failing every copy with "mkdirat .fkbr-tmp: no such file or directory") | auto, lab (funky `root_deleted`) |
 | File over the target's `ulimit -f` | That file reported, the rest arrives | lab (funky) |
 | Stdout and stderr closed, 40 open files, odd hostnames | Work | lab (funky) |
 | Share entries replaced by symlinks to elsewhere | Pruning deletes nothing outside the share | lab (funky) |

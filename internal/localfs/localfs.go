@@ -34,8 +34,16 @@ type FS interface {
 	Open(rootID, rel string) (*os.File, error)
 	// WritableRoot returns the os.Root handle of a root that allows writes.
 	WritableRoot(rootID string) (*os.Root, error)
+	// CheckRoots returns ErrRootGone if a root's directory was deleted,
+	// moved or replaced since it was opened.
+	CheckRoots() error
 	Close() error
 }
+
+// ErrRootGone: a shared directory was deleted, moved or replaced while the
+// node ran. The node holds it open, so it would go on working in a
+// directory nobody can see.
+var ErrRootGone = errors.New("shared directory gone")
 
 // WalkFunc is called for every entry. Returning SkipDir for a directory
 // skips its children. A non-nil err means rel could not be read (fn may
@@ -97,6 +105,30 @@ func (l *Local) Close() error {
 }
 
 func (l *Local) Roots() []api.Root { return append([]api.Root(nil), l.order...) }
+
+// CheckRoots reports the first root whose path no longer leads to the
+// directory opened at start. Other errors (EIO, a stale NFS handle that
+// may pass) are left to the operations that meet them.
+func (l *Local) CheckRoots() error {
+	for _, o := range l.order {
+		r := l.roots[o.ID]
+		open, err := r.r.Stat(".")
+		if err != nil {
+			continue
+		}
+		if st, ok := open.Sys().(*syscall.Stat_t); ok && st.Nlink == 0 {
+			return fmt.Errorf("%w: %s was deleted", ErrRootGone, r.cfg.Path)
+		}
+		now, err := os.Stat(r.cfg.Path)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			return fmt.Errorf("%w: %s was moved or renamed", ErrRootGone, r.cfg.Path)
+		case err == nil && !os.SameFile(open, now):
+			return fmt.Errorf("%w: %s was replaced by another directory", ErrRootGone, r.cfg.Path)
+		}
+	}
+	return nil
+}
 
 func (l *Local) lookup(rootID, rel string) (*root, string, error) {
 	r, ok := l.roots[rootID]

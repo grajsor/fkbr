@@ -87,7 +87,8 @@ fkbr /mnt/nfs/xfer
   default, or a directory inside the share (symlinks are followed for
   this check). If the share is inside the shared directory (`cd ~ &&
   fkbr ~/box`), the node leaves it out: peers do not see it, and nothing
-  is copied into or deleted from it.
+  is copied into or deleted from it. If a shared directory is deleted,
+  moved or replaced while the node runs, the node stops and says so.
 - **Peers:** paths look like `hostb:/sub/dir`. With several roots on a
   node, name the root: `hostb:logs/app.log`.
 - **Groups:** `@all` targets every other node. In the TUI, `@dest` is the
@@ -120,7 +121,10 @@ TUI is alive. `q` quits, like F10.
 
 The mouse works too: a click moves the cursor, a double click opens, a
 right click marks, the wheel scrolls, and a click on the key bar presses
-that key. Hold Shift to select text, or start with `-mouse=false`.
+that key. Long lists and texts show a scrollbar in their right edge: drag
+it, or click above or below it for a page. In dialogs, click the keys they list (Enter, Esc, ^O …) or a
+setting to change it. Hold Shift to select text, or start with
+`-mouse=false`.
 
 The TUI writes this node's log to `/tmp/fkbr-<uid>-<node>/node.log` (F1
 shows the path; `-v` adds debug lines). It stays after you quit, so a

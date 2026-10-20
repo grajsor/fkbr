@@ -2,12 +2,15 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"fkbr/internal/api"
+	"fkbr/internal/localfs"
 )
 
 // A share inside a node's root (cd ~ && fkbr ~/box) is not sent, not
@@ -48,5 +51,29 @@ func TestShareInsideRoot(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(aroot, "x/box/nodes/info.json")); err != nil {
 		t.Errorf("share damaged: %v", err)
+	}
+}
+
+// A node whose shared directory is deleted stops, saying why, instead of
+// failing every transfer into a directory that is gone.
+func TestWorkerStopsWhenRootDeleted(t *testing.T) {
+	defer func(d time.Duration) { rootCheckInterval = d }(rootCheckInterval)
+	rootCheckInterval = 20 * time.Millisecond
+	a, aroot := node(t, t.TempDir(), "a")
+	done := make(chan error, 1)
+	go func() { done <- a.Run(context.Background()) }()
+	select {
+	case <-a.Ready():
+	case err := <-done:
+		t.Fatal(err)
+	}
+	os.RemoveAll(aroot)
+	select {
+	case err := <-done:
+		if !errors.Is(err, localfs.ErrRootGone) || !strings.Contains(err.Error(), "was deleted") {
+			t.Fatalf("Run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker still running with its shared directory deleted")
 	}
 }

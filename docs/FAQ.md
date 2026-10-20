@@ -94,7 +94,7 @@ Fine (`cd ~ && fkbr ~/box`). fkbr leaves the share out.
 The name holds a character your terminal could act on, like an escape or a line break. fkbr shows it as `?`. Copies keep the real name.
 
 **Mouse?**
-Click to move, double-click to open, right-click to mark, wheel to scroll. To select text, hold Shift (or start with `-mouse=false`).
+Click to move, double-click to open, right-click to mark, wheel or scrollbar to scroll. In a dialog, click Enter, Esc or an option. To select text, hold Shift (or start with `-mouse=false`).
 
 **Copy to a USB stick (FAT)?**
 Works. Names FAT cannot hold (`a:b`, or `README` next to `readme`) are skipped and reported; the rest arrives. Sync knows FAT keeps times in 2-second steps and has no permissions.

@@ -266,6 +266,8 @@ func (e *Engine) Run(ctx context.Context) error {
 	}()
 	lockCheck := time.NewTicker(lockCheckInterval)
 	defer lockCheck.Stop()
+	rootCheck := time.NewTicker(rootCheckInterval)
+	defer rootCheck.Stop()
 
 	// Refuse to take over a node ID another live host or process is using:
 	// with IDs defaulting to hostnames, two machines could otherwise
@@ -344,6 +346,13 @@ func (e *Engine) Run(ctx context.Context) error {
 			if err := lock.maintain(); err != nil {
 				e.log.Error("worker lock lost; stopping this worker", "err", err)
 				return err
+			}
+		case <-rootCheck.C:
+			if err := e.fs.CheckRoots(); err != nil {
+				// Stopped on purpose: a TUI's node leaves the share.
+				e.log.Error("shared directory gone; stopping this node", "err", err)
+				stopped = true
+				return fmt.Errorf("%w; this node stopped (start %s again from the directory to share)", err, product.Name)
 			}
 		case <-prune.C:
 			e.prune(ctx)
@@ -574,6 +583,10 @@ var (
 	lockCheckInterval = 30 * time.Second
 	lockTouchInterval = 10 * time.Minute
 )
+
+// rootCheckInterval is how often the worker checks that its shared
+// directories are still where they were (localfs.CheckRoots).
+var rootCheckInterval = 5 * time.Second
 
 // workerLock is an exclusive flock in the local state dir. Local-disk flock
 // is reliable, unlike locks on the NFS share.

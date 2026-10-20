@@ -54,6 +54,7 @@ type styles struct {
 	header, headerName, keyNum, keyLabel, status, statusErr, spinner lipgloss.Style
 	// Dialogs.
 	dialog, dialogTitle, dialogErr, inputLabel, inputFocus, inputCursor lipgloss.Style
+	dialogBar                                                           lipgloss.Style
 }
 
 func newStyles() *styles {
@@ -90,6 +91,7 @@ func newStyles() *styles {
 		dialogTitle: on(cSurface).Foreground(cSurfaceTitle).Bold(true),
 		dialogErr:   on(cSurface).Foreground(cSurfaceErr).Bold(true),
 		inputLabel:  on(cSurface).Foreground(cSurfaceText),
+		dialogBar:   on(cSurface).Foreground(cSurfaceTitle),
 		inputFocus:  on(cAccent).Foreground(cAccentText).Bold(true),
 		inputCursor: on(cAccent).Foreground(cAccentText),
 	}

@@ -119,3 +119,75 @@ func TestMouseJobs(t *testing.T) {
 		t.Error("click on a pane did not take the focus back")
 	}
 }
+
+// Dialogs take clicks on their hints (each part presses its key), on
+// their settings (each toggles) and on their fields (focus).
+func TestMouseDialogs(t *testing.T) {
+	h := newHarness(t)
+	h.m.active = 1
+	h.open("s1", "data") // the destination
+	h.m.active = 0
+	h.open("master", "data")
+	h.m.panes[0].cursorTo("a.txt")
+	h.key("f5")
+	d, ok := h.m.dlg.(*transferDialog)
+	if !ok {
+		t.Fatalf("F5: dialog %T", h.m.dlg)
+	}
+	x, y := h.find("^Z zstd")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	if !d.compress {
+		t.Error("click on ^Z zstd: compression still off")
+	}
+	conflict := d.conflict
+	x, y = h.find("if exists:")
+	h.click(x+3, y, tea.MouseButtonLeft)
+	if d.conflict == conflict {
+		t.Error("click on if exists: policy unchanged")
+	}
+	x, y = h.find("zstd: on")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	if d.compress {
+		t.Error("click on zstd: on did not turn it off")
+	}
+	x, y = h.find("directory:")
+	h.click(x+2, y, tea.MouseButtonLeft)
+	if d.focus != 2 {
+		t.Errorf("click on the directory field: focus %d", d.focus)
+	}
+	x, y = h.find("^A all nodes")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	if d.inputs[0].Value() != "@all" {
+		t.Errorf("click on ^A: to = %q", d.inputs[0].Value())
+	}
+	x, y = h.find("Enter start")
+	h.click(x+2, y, tea.MouseButtonLeft)
+	if h.m.dlg != nil || len(h.f.submits) != 1 || h.f.submits[0].Conflict == "" {
+		t.Fatalf("click on Enter start: dialog %T, submits %+v, err %q", h.m.dlg, h.f.submits, d.err)
+	}
+
+	h.key("f4")
+	s, ok := h.m.dlg.(*syncDialog)
+	if !ok {
+		t.Fatalf("F4: dialog %T", h.m.dlg)
+	}
+	x, y = h.find("checksum:")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	x, y = h.find("mode:")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	if !s.checksum || !s.mirror {
+		t.Errorf("sync settings: checksum %v mirror %v", s.checksum, s.mirror)
+	}
+	x, y = h.find("Esc cancel")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	if h.m.dlg != nil {
+		t.Fatalf("click on Esc cancel: dialog %T", h.m.dlg)
+	}
+
+	h.key("f7")
+	x, y = h.find("Esc cancel")
+	h.click(x+1, y, tea.MouseButtonLeft)
+	if h.m.dlg != nil {
+		t.Fatalf("mkdir, click on Esc cancel: dialog %T", h.m.dlg)
+	}
+}

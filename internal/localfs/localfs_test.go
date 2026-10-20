@@ -188,3 +188,33 @@ func TestHiddenShare(t *testing.T) {
 		t.Error("Hidden too wide")
 	}
 }
+
+// CheckRoots notices a shared directory that was deleted, moved, or
+// replaced by another one: the open root then leads nowhere visible.
+func TestCheckRoots(t *testing.T) {
+	for _, tc := range []struct {
+		name, want string
+		do         func(dir string)
+	}{
+		{"deleted", "was deleted", func(dir string) { os.RemoveAll(dir) }},
+		{"moved", "was moved", func(dir string) { os.Rename(dir, dir+".old") }},
+		{"replaced", "was replaced", func(dir string) { os.Rename(dir, dir+".old"); os.Mkdir(dir, 0o755) }},
+		{"recreated", "was deleted", func(dir string) { os.RemoveAll(dir); os.Mkdir(dir, 0o755) }},
+	} {
+		dir := filepath.Join(t.TempDir(), "share-me")
+		must(t, os.Mkdir(dir, 0o755))
+		l, err := Open([]config.Root{{ID: "files", Path: dir, AllowWrite: true}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := l.CheckRoots(); err != nil {
+			t.Fatalf("%s: before: %v", tc.name, err)
+		}
+		tc.do(dir)
+		err = l.CheckRoots()
+		if !errors.Is(err, ErrRootGone) || !strings.Contains(err.Error(), tc.want) || !strings.Contains(err.Error(), dir) {
+			t.Errorf("%s: %v", tc.name, err)
+		}
+		l.Close()
+	}
+}
