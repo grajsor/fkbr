@@ -22,6 +22,9 @@ In the TUI, select files and press F5. In a shell:
 **To every machine?**
 Use `@all` as the destination, or press Ctrl+A in the F5 dialog.
 
+**To some of them?**
+In the TUI's node list, mark them with Insert. F5 then copies to them (`@dest`).
+
 **Sync a folder?**
 ```
 ./fkbr /mnt/nfs/somedir sync /dir othermachine:/dir

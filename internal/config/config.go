@@ -293,6 +293,9 @@ func (c *Config) Validate() error {
 		if !ValidID(r) {
 			errs = append(errs, fmt.Errorf("roles: %q must match %s", r, idRE))
 		}
+		if r == "all" || r == "dest" { // api.GroupAll, api.GroupDest
+			errs = append(errs, fmt.Errorf("roles: %q is reserved (@%s is built in)", r, r))
+		}
 	}
 	for _, a := range c.AcceptWritesFrom {
 		if !ValidID(strings.TrimPrefix(a, "@")) {

@@ -343,3 +343,57 @@ func TestPruneOrphanData(t *testing.T) {
 		t.Errorf("orphan data not pruned: %v", err)
 	}
 }
+
+// A target that was detached mid-transfer and never came back leaves its
+// last status ("running") behind; the finished job must still be pruned.
+func TestPruneJobWithVanishedDetachedTarget(t *testing.T) {
+	share := t.TempDir()
+	a, b, c := open(t, share, "a"), open(t, share, "b"), open(t, share, "c")
+	j := &api.Job{ID: "000000000000000000000005", Request: api.TransferRequest{SrcNode: "a", DstNodes: []string{"b", "c"}}}
+	if err := a.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	a.PutStatus(ctx, j.ID, &api.JobStatus{Node: "a", Role: api.RoleSource, State: api.JobDone})
+	b.PutStatus(ctx, j.ID, &api.JobStatus{Node: "b", Role: api.RoleTarget, State: api.JobRunning})
+	c.PutStatus(ctx, j.ID, &api.JobStatus{Node: "c", Role: api.RoleTarget, State: api.JobDone})
+	if err := a.Detach(ctx, j.ID, api.Detached{Node: "b", Reason: "offline"}); err != nil {
+		t.Fatal(err)
+	}
+	past := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(filepath.Join(share, "jobs", j.ID, "job.json"), past, past)
+	if err := a.PruneJobs(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.GetJob(ctx, j.ID); err == nil {
+		t.Fatal("finished job kept because a detached target's stale status says running")
+	}
+}
+
+// A source that died mid-job and was forgotten leaves "running" behind too.
+func TestPruneJobWithForgottenSource(t *testing.T) {
+	share := t.TempDir()
+	a, b := open(t, share, "a"), open(t, share, "b")
+	j := &api.Job{ID: "000000000000000000000006", Request: api.TransferRequest{SrcNode: "b", DstNodes: []string{"a"}}}
+	if err := a.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	b.PutStatus(ctx, j.ID, &api.JobStatus{Node: "b", Role: api.RoleSource, State: api.JobRunning})
+	a.PutStatus(ctx, j.ID, &api.JobStatus{Node: "a", Role: api.RoleTarget, State: api.JobFailed})
+	past := time.Now().Add(-2 * time.Hour)
+	os.Chtimes(filepath.Join(share, "jobs", j.ID, "job.json"), past, past)
+	if err := a.PruneJobs(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.GetJob(ctx, j.ID); err != nil {
+		t.Fatalf("job pruned while its source is still registered: %v", err)
+	}
+	if err := a.Unregister(ctx, "b"); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.PruneJobs(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.GetJob(ctx, j.ID); err == nil {
+		t.Fatal("job of a forgotten source never pruned")
+	}
+}

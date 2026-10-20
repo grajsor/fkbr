@@ -228,7 +228,9 @@ func (p *pane) selectedBytes() (n int, bytes int64) {
 // render draws the pane's content area (without border).
 // render draws the rows. On the active cursor row a name that does not fit
 // scrolls, marquee elapsed into its cycle (see anim.go).
-func (p *pane) render(st *styles, width, height int, active bool, marquee time.Duration) []string {
+// marks are the marked rows: the pane's selection in a directory, the
+// TUI's @dest in the node list.
+func (p *pane) render(st *styles, width, height int, active bool, marquee time.Duration, marks map[string]bool) []string {
 	lines := make([]string, 0, height)
 	if p.err != "" {
 		lines = append(lines, st.err.Render(fit("! "+p.err, width)))
@@ -241,7 +243,7 @@ func (p *pane) render(st *styles, width, height int, active bool, marquee time.D
 		r := p.rows[i]
 		cur := i == p.cursor && active
 		text := p.formatRow(r, width, cur, marquee)
-		marked := p.selected[r.name] && !r.up
+		marked := marks[r.name] && !r.up
 		if cur {
 			s := st.cursor
 			if marked {

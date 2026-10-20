@@ -20,6 +20,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -319,6 +320,12 @@ func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("nfsmailbox: probe: %w", err)
 	}
+	// Statuses of detached targets and of nodes that were forgotten never
+	// change again, whatever they say; they must not keep a job forever.
+	registered, err := m.listNames(m.path("nodes"))
+	if err != nil {
+		return err
+	}
 	var errs []error
 	for _, de := range des {
 		fi, err := os.Stat(m.path("jobs", de.Name(), "job.json"))
@@ -342,7 +349,8 @@ func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 		}
 		finished := true
 		for _, p := range j.Participants {
-			finished = finished && p.State.Terminal()
+			stale := (p.Role == api.RoleTarget && j.IsDetached(p.Node)) || !slices.Contains(registered, p.Node)
+			finished = finished && (p.State.Terminal() || stale)
 		}
 		if finished {
 			errs = append(errs, os.RemoveAll(m.path("jobs", de.Name())))

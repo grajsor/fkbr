@@ -83,7 +83,9 @@ fkbr /mnt/nfs/xfer
   default, or a directory inside the share.
 - **Peers:** paths look like `hostb:/sub/dir`. With several roots on a
   node, name the root: `hostb:logs/app.log`.
-- **Groups:** `@all` targets every other node. `-roles a,b` adds tags for
+- **Groups:** `@all` targets every other node. In the TUI, `@dest` is the
+  nodes you marked in the node list (Insert); it lasts until you quit.
+  `-roles a,b` adds tags for
   your own groups (`@a`) and for `accept_writes_from`. Neither is needed
   otherwise; every node is equal.
 - **Flags:** they can come before or after the share
@@ -212,10 +214,10 @@ keys.
 
 | Key | Action |
 |---|---|
-| Insert / Space, `+` `-` `*` | select; select all, none, invert |
+| Insert / Space, `+` `-` `*` | select; select all, none, invert. In the node list they mark nodes: the marked nodes are `@dest` |
 | F3 | view a file (first 64 KiB; XML and JSON highlighted, binary files as hex) |
-| F4 | sync: make the other pane's directory match this one (plan shown first) |
-| F5 / F6 | copy / move the selection. The destination defaults to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`) |
+| F4 | sync: make the other side match this pane (plan shown first). Nothing selected: the whole directory. Selected folders: each into a folder of the same name; selected files are copied. Mirror (Ctrl+O) deletes only inside what is synced |
+| F5 / F6 | copy / move the selection. The destination defaults to `@dest` while nodes are marked, else to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`). Marked nodes that are offline are detached, to catch up later, as with `@all` |
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
 | F9 | jobs panel with progress and ETA: Enter for details (each node's state, time-stamped notes), `c` cancel, `u` catch up |
 | F10 | quit |

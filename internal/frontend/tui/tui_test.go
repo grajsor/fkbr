@@ -637,3 +637,120 @@ func TestRowNameMarkers(t *testing.T) {
 		}
 	}
 }
+
+// Nodes marked in the node list are @dest: the copy dialog's default
+// destination, expanded to the marked IDs on submit, with offline ones to
+// be detached instead of failing the copy.
+func TestDestFromMarkedNodes(t *testing.T) {
+	h := newHarness(t)
+	data := []api.Root{{ID: "data", Writable: true}}
+	h.f.nodes = append(h.f.nodes,
+		api.Node{NodeInfo: api.NodeInfo{ID: "s2", Roots: data}, Online: true},
+		api.Node{NodeInfo: api.NodeInfo{ID: "s3", Roots: data}}) // offline
+	h.run(h.m.loadNodes())
+	h.key("tab")
+	right := h.m.panes[1]
+	right.cursorTo("s2")
+	h.key("insert", "insert") // s2, then s3
+	if got := h.m.destList(); fmt.Sprint(got) != "[s2 s3]" {
+		t.Fatalf("marked %v", got)
+	}
+	if !strings.Contains(h.m.status, "@dest = s2,s3") {
+		t.Errorf("status %q", h.m.status)
+	}
+	h.key("tab")
+	h.open("master", "data")
+	h.key("backspace") // back to the node list and in again: marks stay
+	h.open("master", "data")
+	h.m.panes[0].cursorTo("a.txt")
+	h.key("f5")
+	d, ok := h.m.dlg.(*transferDialog)
+	if !ok {
+		t.Fatalf("no transfer dialog: %T", h.m.dlg)
+	}
+	if d.inputs[0].Value() != "@dest" || d.inputs[1].Value() != "data" {
+		t.Fatalf("defaults: %q %q", d.inputs[0].Value(), d.inputs[1].Value())
+	}
+	if !strings.Contains(d.view(h.m.st, 120, 40), "(@dest = s2,s3)") {
+		t.Error("dialog does not show what @dest is")
+	}
+	h.key("enter")
+	if len(h.f.submits) != 1 {
+		t.Fatalf("submits %d, dialog %T", len(h.f.submits), h.m.dlg)
+	}
+	got := h.f.submits[0]
+	if fmt.Sprint(got.DstNodes) != "[s2 s3]" || !got.DetachOffline || got.DstRoot != "data" {
+		t.Fatalf("submit %+v", got)
+	}
+	// "-" in the node list clears @dest; F5 then falls back to the other pane.
+	h.key("tab", "-", "tab")
+	h.key("f5")
+	if d := h.m.dlg.(*transferDialog); d.inputs[0].Value() == "@dest" {
+		t.Error("@dest still the default after clearing the marks")
+	}
+}
+
+func TestExpandDest(t *testing.T) {
+	if _, _, err := expandDest("@dest", nil); err == nil {
+		t.Error("empty @dest accepted")
+	}
+	nodes, via, err := expandDest("n1, @dest", []string{"a", "b"})
+	if err != nil || !via || fmt.Sprint(nodes) != "[n1 a b]" {
+		t.Errorf("got %v %v %v", nodes, via, err)
+	}
+	if _, via, _ := expandDest("n1,@all", []string{"a"}); via {
+		t.Error("detach_offline set without @dest")
+	}
+}
+
+// With entries selected, F4 syncs each selected folder into a folder of
+// the same name on the other side, copies the selected files, and asks
+// once for all of it.
+func TestSyncSelectedFolders(t *testing.T) {
+	h := newHarness(t)
+	h.f.files["master:data/."] = append(h.f.files["master:data/."], api.Entry{Name: "docs", Type: api.TypeDir, Mode: 0o755})
+	h.open("master", "data")
+	h.key("tab")
+	h.open("s1", "data")
+	h.m.panes[1].cursorTo("in")
+	h.key("enter", "tab") // other side: s1:data/in
+	p := h.m.panes[0]
+	for _, n := range []string{"docs", "proj", "a.txt"} {
+		p.selected[n] = true
+	}
+	h.key("f4")
+	d, ok := h.m.dlg.(*syncDialog)
+	if !ok {
+		t.Fatalf("no sync dialog: %T", h.m.dlg)
+	}
+	if !strings.Contains(d.view(h.m.st, 120, 40), "docs/, proj/, a.txt in master:data/.") {
+		t.Errorf("title does not name the selection:\n%s", d.view(h.m.st, 120, 40))
+	}
+	h.key("ctrl+o", "enter") // mirror
+	if len(h.f.syncs) != 2 {
+		t.Fatalf("plans: %+v", h.f.syncs)
+	}
+	for i, n := range []string{"docs", "proj"} {
+		if s := h.f.syncs[i]; s.SrcPath != n || s.DstPath != "in/"+n || s.Mode != api.SyncMirror {
+			t.Errorf("plan %d: %+v", i, s)
+		}
+	}
+	c, ok := h.m.dlg.(*confirmDialog)
+	if !ok {
+		t.Fatalf("no confirmation: %T", h.m.dlg)
+	}
+	all := strings.Join(c.lines, "\n")
+	for _, want := range []string{"docs/", "proj/", "files: copy 1 to s1"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("confirmation lacks %q:\n%s", want, all)
+		}
+	}
+	h.key("y")
+	if len(h.f.applied) != 2 {
+		t.Fatalf("applied: %v", h.f.applied)
+	}
+	if len(h.f.submits) != 1 || fmt.Sprint(h.f.submits[0].Paths) != "[a.txt]" || h.f.submits[0].DstDir != "in" ||
+		h.f.submits[0].Conflict != api.ConflictOverwrite {
+		t.Fatalf("files copy: %+v", h.f.submits)
+	}
+}

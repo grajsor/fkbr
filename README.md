@@ -111,3 +111,7 @@ The layers:
 - **Engine:** `internal/engine`, which handles jobs, fan-out and sync.
 - **Subsystems:** `transport/nfsmailbox`, `bundle`, `receive`, `inventory`
   and `localfs`.
+
+## License
+
+Copyright 2026 The Author. Licensed under the [Apache License 2.0](LICENSE).

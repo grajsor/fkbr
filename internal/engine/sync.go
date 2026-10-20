@@ -160,7 +160,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 	if _, ok := findRoot(src, req.SrcRoot); !ok {
 		return nil, fmt.Errorf("%w: %s:%s", api.ErrUnknownRoot, req.SrcNode, req.SrcRoot)
 	}
-	targets, offline, err := expandTargets(byID, req.DstNodes, req.SrcNode)
+	targets, offline, err := expandTargets(byID, req.DstNodes, req.SrcNode, req.DetachOffline)
 	if err != nil {
 		return nil, err
 	}

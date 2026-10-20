@@ -69,7 +69,7 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	if _, ok := findRoot(src, req.SrcRoot); !ok {
 		return "", fmt.Errorf("%w: %s:%s", api.ErrUnknownRoot, req.SrcNode, req.SrcRoot)
 	}
-	targets, offline, err := expandTargets(byID, req.DstNodes, req.SrcNode)
+	targets, offline, err := expandTargets(byID, req.DstNodes, req.SrcNode, req.DetachOffline)
 	if err != nil {
 		return "", err
 	}
@@ -112,12 +112,12 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	return job.ID, nil
 }
 
-// expandTargets resolves destination entries. A node ID must be online.
-// "@all" means every other registered node, and "@role" every registered
-// node with that role, in both cases except the source;
-// members that are offline are returned separately so the job can record
-// them as detached. At least one target must be online.
-func expandTargets(byID map[string]api.Node, dsts []string, src string) (online, offline []string, err error) {
+// expandTargets resolves destination entries. A node ID must be online,
+// unless detachOffline. "@all" means every other registered node, and
+// "@role" every registered node with that role, in both cases except the
+// source; members that are offline are returned separately so the job can
+// record them as detached. At least one target must be online.
+func expandTargets(byID map[string]api.Node, dsts []string, src string, detachOffline bool) (online, offline []string, err error) {
 	seen := map[string]bool{}
 	add := func(n api.Node) {
 		if seen[n.ID] {
@@ -134,11 +134,14 @@ func expandTargets(byID map[string]api.Node, dsts []string, src string) (online,
 		role, isGroup := strings.CutPrefix(d, "@")
 		if !isGroup {
 			n, err := onlineNode(byID, d)
-			if err != nil {
+			if err != nil && !(detachOffline && errors.Is(err, api.ErrNodeOffline)) {
 				return nil, nil, err
 			}
 			add(n)
 			continue
+		}
+		if role == api.GroupDest {
+			return nil, nil, fmt.Errorf("%w: @%s is the TUI's marked nodes; name the nodes instead (n1,n2)", api.ErrUnknownNode, role)
 		}
 		var members []api.Node
 		for _, n := range byID {

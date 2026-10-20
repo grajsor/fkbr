@@ -179,6 +179,10 @@ destination of `@role` expands, at submit time, to every registered node
 carrying that role except the source; roles come from each node's own
 `roles:` config, published in `info.json`. Group members that are offline
 at submit are recorded as detached with the reason `offline at submit`.
+A named target that is offline fails the request, unless it sets
+`detach_offline`: then it is detached the same way. The TUI sets it when
+it expands `@dest` (the nodes marked in its node list) into names; `all`
+and `dest` are never roles.
 
 **Detaching.** While the source is blocked (no staging space, or waiting
 for final acks), it drops a target that is holding things up:

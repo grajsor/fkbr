@@ -213,14 +213,18 @@ func (p ConflictPolicy) Valid() bool {
 // submit it is expanded and members that are offline are recorded as
 // detached so they can catch up later.
 type TransferRequest struct {
-	SrcNode  string         `json:"src_node"`
-	SrcRoot  string         `json:"src_root"`
-	Paths    []string       `json:"paths"`
-	DstNodes []string       `json:"dst_nodes"`
-	DstRoot  string         `json:"dst_root"`
-	DstDir   string         `json:"dst_dir"`
-	Conflict ConflictPolicy `json:"conflict"`
-	Compress bool           `json:"compress"`
+	SrcNode  string   `json:"src_node"`
+	SrcRoot  string   `json:"src_root"`
+	Paths    []string `json:"paths"`
+	DstNodes []string `json:"dst_nodes"`
+	// DetachOffline: a named target that is offline is recorded as detached
+	// (catch it up later), as an offline @role member is, instead of
+	// failing the request. The TUI sets it for @dest.
+	DetachOffline bool           `json:"detach_offline,omitempty"`
+	DstRoot       string         `json:"dst_root"`
+	DstDir        string         `json:"dst_dir"`
+	Conflict      ConflictPolicy `json:"conflict"`
+	Compress      bool           `json:"compress"`
 
 	// Used by sync (set by ApplySync, not by users):
 	// PathsBlob names a list of paths on the share, one per line, used
@@ -387,6 +391,10 @@ type ReadResult struct {
 // node except the source.
 const GroupAll = "all"
 
+// GroupDest is the TUI's "@dest": the nodes marked in its node list. The
+// TUI expands it before submitting; like "all", it is never a role.
+const GroupDest = "dest"
+
 // SyncMode selects what a sync does with destination entries that are not
 // in the source.
 type SyncMode string
@@ -408,11 +416,13 @@ type SyncRequest struct {
 	SrcRoot  string   `json:"src_root"`
 	SrcPath  string   `json:"src_path"`
 	DstNodes []string `json:"dst_nodes"` // node IDs or @role
-	DstRoot  string   `json:"dst_root"`
-	DstPath  string   `json:"dst_path"`
-	Mode     SyncMode `json:"mode"`
-	Checksum bool     `json:"checksum"`
-	Compress bool     `json:"compress"`
+	// DetachOffline: see TransferRequest.
+	DetachOffline bool     `json:"detach_offline,omitempty"`
+	DstRoot       string   `json:"dst_root"`
+	DstPath       string   `json:"dst_path"`
+	Mode          SyncMode `json:"mode"`
+	Checksum      bool     `json:"checksum"`
+	Compress      bool     `json:"compress"`
 	// MaxDeletes caps deletions per target unless the apply is forced;
 	// 0 means the node's sync.max_deletes, -1 means no limit.
 	MaxDeletes int `json:"max_deletes"`

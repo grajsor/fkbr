@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"path"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -32,6 +33,7 @@ type transferDialog struct {
 	conflict int
 	compress bool
 	err      string
+	dest     []string // the marked nodes, for @dest
 }
 
 func newTransferDialog(move bool, src *pane, names []string, dstNodes, dstRoot, dstDir string) *transferDialog {
@@ -53,7 +55,10 @@ func newTransferDialog(move bool, src *pane, names []string, dstNodes, dstRoot, 
 }
 
 func (d *transferDialog) request() (api.TransferRequest, error) {
-	nodes := strings.FieldsFunc(d.inputs[0].Value(), func(r rune) bool { return r == ',' || r == ' ' })
+	nodes, viaDest, err := expandDest(d.inputs[0].Value(), d.dest)
+	if err != nil {
+		return api.TransferRequest{}, err
+	}
 	if len(nodes) == 0 {
 		return api.TransferRequest{}, fmt.Errorf("enter a destination node, n1,n2 or @role")
 	}
@@ -67,9 +72,34 @@ func (d *transferDialog) request() (api.TransferRequest, error) {
 	}
 	return api.TransferRequest{
 		SrcNode: d.srcNode, SrcRoot: d.srcRoot, Paths: d.paths,
-		DstNodes: nodes, DstRoot: root, DstDir: dir,
+		DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstDir: dir,
 		Conflict: conflictPolicies[d.conflict], Compress: d.compress,
 	}, nil
+}
+
+// expandDest splits the node field and replaces @dest by the marked nodes.
+// viaDest tells the engine to detach marked nodes that are offline (catch
+// them up later) rather than refuse the request, as it does for @all.
+func expandDest(field string, dest []string) (nodes []string, viaDest bool, err error) {
+	for _, n := range strings.FieldsFunc(field, func(r rune) bool { return r == ',' || r == ' ' }) {
+		if n != "@"+api.GroupDest {
+			nodes = append(nodes, n)
+			continue
+		}
+		if len(dest) == 0 {
+			return nil, false, fmt.Errorf("@%s is empty: mark nodes with Insert in the node list", api.GroupDest)
+		}
+		nodes, viaDest = append(nodes, dest...), true
+	}
+	return nodes, viaDest, nil
+}
+
+// destHint shows what @dest stands for while the node field uses it.
+func destHint(field string, dest []string) string {
+	if !strings.Contains(field, "@"+api.GroupDest) || len(dest) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("            (@%s = %s)\n", api.GroupDest, strings.Join(dest, ","))
 }
 
 func (d *transferDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -126,6 +156,9 @@ func (d *transferDialog) view(st *styles, width, _ int) string {
 	for i := range d.inputs {
 		d.inputs[i].Width = w - 14
 		b.WriteString(d.inputs[i].View() + "\n")
+		if i == 0 {
+			b.WriteString(destHint(d.inputs[0].Value(), d.dest))
+		}
 	}
 	zs := "off"
 	if d.compress {
@@ -289,18 +322,29 @@ Navigation
 Selection
   Insert / Space           toggle and move down
   +  -  *                  select all, none, invert
+  In the node list, marked nodes are @dest: the default
+  destination of F5 and F4 until you unmark them (-).
 
 Names end in / for a directory and @ for a symlink.
 
 Files
   F3   view file (first 64 KiB; XML and JSON highlighted)
-  F4   sync: make the other pane's directory match this one
-       (dry-run plan first; incremental or mirror; works for n1,n2 / @role)
+  F4   sync: make the other side match this one (see Sync below)
   F5   copy selection to the other pane, or to n1,n2 or every node
        (Ctrl+A in the dialog = @all)
   F6   move: copy, then delete the source if the copy fully succeeded
   F7   make directory
   F8   delete selection (asks first)
+
+Sync (F4)
+  This pane is the source; the other pane's directory (or @dest,
+  n1,n2, @all) is the destination. With nothing selected, the whole
+  directory is synced. With folders selected, each one is synced into
+  a folder of the same name on the other side; selected files are
+  copied over. Incremental (the default) sends new and changed files
+  and keeps extra ones; mirror (Ctrl+O) also deletes files the source
+  does not have, but only inside what you sync. You always see a dry
+  run first (what would be copied and deleted) and confirm it.
 
 Jobs
   F9   focus the jobs panel: ↑↓ select, Enter details,
@@ -317,6 +361,10 @@ type syncDialog struct {
 	focus                      int
 	mirror, checksum, compress bool
 	err                        string
+	dest                       []string // the marked nodes, for @dest
+	// dirs and files are the selected entries; none means the whole
+	// directory. Each folder syncs to one of the same name; files are copied.
+	dirs, files []string
 }
 
 func newSyncDialog(src *pane, dstNodes, dstRoot, dstDir string) *syncDialog {
@@ -334,11 +382,16 @@ func newSyncDialog(src *pane, dstNodes, dstRoot, dstDir string) *syncDialog {
 	return d
 }
 
-func (d *syncDialog) request() (api.SyncRequest, error) {
-	nodes := strings.FieldsFunc(d.inputs[0].Value(), func(r rune) bool { return r == ',' || r == ' ' })
+// requests returns one sync per selected folder (into a folder of the same
+// name), or one for the whole directory, and a copy of the selected files.
+func (d *syncDialog) requests() ([]api.SyncRequest, *api.TransferRequest, error) {
+	nodes, viaDest, err := expandDest(d.inputs[0].Value(), d.dest)
+	if err != nil {
+		return nil, nil, err
+	}
 	root := strings.TrimSpace(d.inputs[1].Value())
 	if len(nodes) == 0 || root == "" {
-		return api.SyncRequest{}, fmt.Errorf("enter destination node(s) and root")
+		return nil, nil, fmt.Errorf("enter destination node(s) and root")
 	}
 	dir := strings.Trim(strings.TrimSpace(d.inputs[2].Value()), "/")
 	if dir == "" {
@@ -348,8 +401,27 @@ func (d *syncDialog) request() (api.SyncRequest, error) {
 	if d.mirror {
 		mode = api.SyncMirror
 	}
-	return api.SyncRequest{SrcNode: d.srcNode, SrcRoot: d.srcRoot, SrcPath: d.srcPath,
-		DstNodes: nodes, DstRoot: root, DstPath: dir, Mode: mode, Checksum: d.checksum, Compress: d.compress}, nil
+	base := api.SyncRequest{SrcNode: d.srcNode, SrcRoot: d.srcRoot, SrcPath: d.srcPath,
+		DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstPath: dir, Mode: mode, Checksum: d.checksum, Compress: d.compress}
+	if len(d.dirs) == 0 && len(d.files) == 0 {
+		return []api.SyncRequest{base}, nil, nil
+	}
+	var reqs []api.SyncRequest
+	for _, name := range d.dirs {
+		r := base
+		r.SrcPath, r.DstPath = path.Join(d.srcPath, name), path.Join(dir, name)
+		reqs = append(reqs, r)
+	}
+	var files *api.TransferRequest
+	if len(d.files) > 0 {
+		files = &api.TransferRequest{SrcNode: d.srcNode, SrcRoot: d.srcRoot,
+			DstNodes: nodes, DetachOffline: viaDest, DstRoot: root, DstDir: dir,
+			Conflict: api.ConflictOverwrite, Compress: d.compress}
+		for _, name := range d.files {
+			files.Paths = append(files.Paths, path.Join(d.srcPath, name))
+		}
+	}
+	return reqs, files, nil
 }
 
 func (d *syncDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
@@ -379,12 +451,12 @@ func (d *syncDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 		d.compress = !d.compress
 		return false, nil
 	case "enter":
-		req, err := d.request()
+		reqs, files, err := d.requests()
 		if err != nil {
 			d.err = err.Error()
 			return false, nil
 		}
-		return true, m.planSync(req)
+		return true, m.planSync(reqs, files)
 	}
 	var cmd tea.Cmd
 	d.inputs[d.focus], cmd = d.inputs[d.focus].Update(msg)
@@ -394,11 +466,14 @@ func (d *syncDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 func (d *syncDialog) view(st *styles, width, _ int) string {
 	w := min(width-6, 76)
 	var b strings.Builder
-	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("Sync %s → (make the destination match it)", clip(d.srcNode+":"+d.srcRoot+"/"+d.srcPath, w-40))) + "\n\n")
+	b.WriteString(st.dialogTitle.Render(fmt.Sprintf("Sync %s → (make the destination match it)", clip(d.what(), w-40))) + "\n\n")
 	st.styleInputs(d.focus, &d.inputs[0], &d.inputs[1], &d.inputs[2])
 	for i := range d.inputs {
 		d.inputs[i].Width = w - 14
 		b.WriteString(d.inputs[i].View() + "\n")
+		if i == 0 {
+			b.WriteString(destHint(d.inputs[0].Value(), d.dest))
+		}
 	}
 	mode := "incremental (extra files kept)"
 	if d.mirror {
@@ -412,6 +487,24 @@ func (d *syncDialog) view(st *styles, width, _ int) string {
 	return b.String()
 }
 
+// what names the source: the directory, or the selected entries in it.
+func (d *syncDialog) what() string {
+	where := d.srcNode + ":" + d.srcRoot + "/" + d.srcPath
+	if len(d.dirs) == 0 && len(d.files) == 0 {
+		return where
+	}
+	var parts []string
+	for _, n := range d.dirs {
+		parts = append(parts, n+"/")
+	}
+	if len(d.files) == 1 {
+		parts = append(parts, d.files[0])
+	} else if len(d.files) > 1 {
+		parts = append(parts, fmt.Sprintf("%d files", len(d.files)))
+	}
+	return strings.Join(parts, ", ") + " in " + where
+}
+
 func onOff(b bool) string {
 	if b {
 		return "on"
@@ -420,42 +513,81 @@ func onOff(b bool) string {
 }
 
 // syncConfirm shows a plan; y applies it.
-func syncConfirm(m *model, p *api.SyncPlan) dialog {
+// planWork is what applying a plan would change.
+func planWork(p *api.SyncPlan) int64 {
+	var n int64
+	for _, t := range p.Targets {
+		n += t.Copy + t.Delete + t.Replace
+	}
+	return n
+}
+
+// syncConfirm shows the dry-run plans (one per selected folder, or one for
+// the whole directory) and the files to copy, and applies them all on yes.
+func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest) dialog {
 	var lines []string
 	over := false
-	for _, t := range p.Targets {
-		l := fmt.Sprintf("%-12s copy %d (%s)  replace %d  delete %d  unchanged %d",
-			t.Node, t.Copy, humanSize(t.CopyBytes), t.Replace, t.Delete, t.Unchanged)
-		if t.OverLimit {
-			l += fmt.Sprintf("  ⚠ over the delete limit %d", p.MaxDeletes)
-			over = true
+	var entries int64
+	mode := api.SyncIncremental
+	for _, p := range plans {
+		entries += p.SrcEntries
+		mode = p.Request.Mode
+		indent := ""
+		if len(plans) > 1 || files != nil {
+			lines = append(lines, path.Base(p.Request.SrcPath)+"/")
+			indent = "  "
 		}
-		lines = append(lines, l)
+		for _, t := range p.Targets {
+			l := fmt.Sprintf("%s%-12s copy %d (%s)  replace %d  delete %d  unchanged %d",
+				indent, t.Node, t.Copy, humanSize(t.CopyBytes), t.Replace, t.Delete, t.Unchanged)
+			if t.OverLimit {
+				l += fmt.Sprintf("  ⚠ over the delete limit %d", p.MaxDeletes)
+				over = true
+			}
+			lines = append(lines, l)
+		}
+		for _, s := range p.Skipped {
+			lines = append(lines, indent+"skipped "+s+" (offline)")
+		}
+		for _, pr := range p.Problems {
+			lines = append(lines, indent+"problem: "+pr)
+		}
 	}
-	for _, s := range p.Skipped {
-		lines = append(lines, "skipped "+s+" (offline)")
+	if files != nil {
+		lines = append(lines, fmt.Sprintf("files: copy %d to %s (replacing what is there)", len(files.Paths), strings.Join(files.DstNodes, ",")))
 	}
-	for _, pr := range p.Problems {
-		lines = append(lines, "problem: "+pr)
-	}
-	title := fmt.Sprintf("Sync plan (%s, source %d entries): apply?", p.Request.Mode, p.SrcEntries)
+	title := fmt.Sprintf("Sync plan (%s, source %d entries): apply?", mode, entries)
 	if over {
 		title += " Deletions exceed the limit; y applies anyway."
 	}
-	id := p.ID
 	return &confirmDialog{title: title, lines: lines, onYes: func() tea.Cmd {
 		return func() tea.Msg {
-			ap, err := m.c.ApplySync(m.ctx, id, over)
-			if err != nil {
-				return statusMsg{text: "sync: " + err.Error(), err: true}
-			}
-			text := fmt.Sprintf("sync: %d transfer jobs submitted", len(ap.Jobs))
-			if len(ap.DeleteErrors) > 0 {
-				return statusMsg{text: fmt.Sprintf("%s; %d deletions failed: %s", text, len(ap.DeleteErrors), ap.DeleteErrors[0]), err: true}
-			}
+			jobs := 0
 			var ts []target
-			for _, t := range ap.Targets {
-				ts = append(ts, target{t.Node, ap.Request.DstRoot})
+			var problems []string
+			for _, p := range plans {
+				if planWork(p) == 0 {
+					continue
+				}
+				ap, err := m.c.ApplySync(m.ctx, p.ID, over)
+				if err != nil {
+					return statusMsg{text: "sync: " + err.Error(), err: true}
+				}
+				jobs += len(ap.Jobs)
+				problems = append(problems, ap.DeleteErrors...)
+				for _, t := range ap.Targets {
+					ts = append(ts, target{t.Node, ap.Request.DstRoot})
+				}
+			}
+			if files != nil {
+				if _, err := m.c.Submit(m.ctx, *files); err != nil {
+					return statusMsg{text: "sync: copying files: " + err.Error(), err: true}
+				}
+				jobs++
+			}
+			text := fmt.Sprintf("sync: %d transfer jobs submitted", jobs)
+			if len(problems) > 0 {
+				return statusMsg{text: fmt.Sprintf("%s; %d deletions failed: %s", text, len(problems), problems[0]), err: true}
 			}
 			return statusMsg{text: text, refresh: ts}
 		}

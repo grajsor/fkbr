@@ -485,3 +485,37 @@ func TestAutoForget(t *testing.T) {
 		t.Error("forgotten with forget_after off")
 	}
 }
+
+// Named targets: an offline one fails the request, unless DetachOffline
+// (the TUI's @dest), which records it as detached like an @role member.
+func TestDetachOfflineNamedTargets(t *testing.T) {
+	share := t.TempDir()
+	a, aroot := node(t, share, "a")
+	b, broot := node(t, share, "b")
+	c := nodeCfg(t, share, "c")
+	makeTree(t, aroot, 2, 1<<10) // into b and c
+	runWorker(t, a)
+	runWorker(t, b)
+	stopC := runWorker(t, build(t, c))
+	stopC()
+	waitUntil(t, func() bool { n, _ := registered(t, a, "c"); return !n.Online }, "c offline")
+	ctx := context.Background()
+	req := api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"b", "c"}, DstRoot: "data", DstDir: "d"}
+	if _, err := a.Submit(ctx, req); !errors.Is(err, api.ErrNodeOffline) {
+		t.Fatalf("offline named target without DetachOffline: %v", err)
+	}
+	req.DetachOffline = true
+	id, err := a.Submit(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, a, id, 20*time.Second)
+	if j.State != api.JobPartial || len(j.Detached) != 1 || j.Detached[0].Node != "c" {
+		t.Fatalf("state %s detached %+v", j.State, j.Detached)
+	}
+	sameTree(t, filepath.Join(aroot, "tree"), filepath.Join(broot, "d", "tree"))
+	req.DstNodes = []string{"@dest"}
+	if _, err := a.Submit(ctx, req); err == nil || !strings.Contains(err.Error(), "marked nodes") {
+		t.Fatalf("@dest outside the TUI: %v", err)
+	}
+}

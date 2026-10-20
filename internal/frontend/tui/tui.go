@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"path"
 	"slices"
 	"sort"
@@ -83,6 +84,9 @@ type model struct {
 	runsNode bool
 	logPath  string
 	version  string
+	// dest holds the nodes marked in the node list: "@dest" in the copy
+	// and sync dialogs. It lasts as long as the TUI.
+	dest map[string]bool
 	// Header animation, spinner and marquee (anim.go).
 	spin       int
 	anim       animPhase
@@ -100,7 +104,7 @@ func newModel(ctx context.Context, c api.Client) *model {
 		ctx: ctx, c: c, st: newStyles(),
 		panes: [2]*pane{newPane(), newPane()},
 		nodes: map[string]api.Node{}, jobs: map[string]api.Job{},
-		moves: map[string]moveInfo{},
+		moves: map[string]moveInfo{}, dest: map[string]bool{},
 	}
 }
 
@@ -134,8 +138,9 @@ type (
 		err   error
 	}
 	syncPlannedMsg struct {
-		plan *api.SyncPlan
-		err  error
+		plans []*api.SyncPlan
+		files *api.TransferRequest
+		err   error
 	}
 )
 
@@ -307,17 +312,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("sync plan: "+msg.err.Error(), true)
 			return m, nil
 		}
-		p := msg.plan
-		var work int64
-		for _, t := range p.Targets {
-			work += t.Copy + t.Delete + t.Replace
+		var work, entries int64
+		for _, p := range msg.plans {
+			work += planWork(p)
+			entries += p.SrcEntries
 		}
-		if work == 0 {
-			m.setStatus(fmt.Sprintf("in sync: nothing to do (%d entries compared)", p.SrcEntries), false)
+		if work == 0 && msg.files == nil {
+			m.setStatus(fmt.Sprintf("in sync: nothing to do (%d entries compared)", entries), false)
 			return m, nil
 		}
 		m.setStatus("", false)
-		m.dlg = syncConfirm(m, p)
+		m.dlg = syncConfirm(m, msg.plans, msg.files)
 		return m, nil
 
 	case animMsg:
@@ -491,31 +496,28 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case "backspace", "ctrl+h": // many terminals send ^H for Backspace
 		return m.up(m.active)
 	case "insert", " ":
-		if r := p.current(); r != nil && !r.up && p.level == levelDir {
-			p.selected[r.name] = !p.selected[r.name]
-			if !p.selected[r.name] {
-				delete(p.selected, r.name)
-			}
+		if r := p.current(); r != nil && !r.up && p.level != levelRoots {
+			toggle(m.marks(p), r.name)
 		}
 		p.move(1, h)
+		m.destStatus(p)
 	case "+":
 		for _, r := range p.rows {
-			if !r.up && p.level == levelDir {
-				p.selected[r.name] = true
+			if !r.up && p.level != levelRoots {
+				m.marks(p)[r.name] = true
 			}
 		}
+		m.destStatus(p)
 	case "-":
-		p.clearSelection()
+		clear(m.marks(p))
+		m.destStatus(p)
 	case "*":
 		for _, r := range p.rows {
-			if !r.up && p.level == levelDir {
-				if p.selected[r.name] {
-					delete(p.selected, r.name)
-				} else {
-					p.selected[r.name] = true
-				}
+			if !r.up && p.level != levelRoots {
+				toggle(m.marks(p), r.name)
 			}
 		}
+		m.destStatus(p)
 	case "ctrl+r":
 		return m.refreshPane(m.active)
 	case "f1", "?":
@@ -667,7 +669,10 @@ func (m *model) openTransfer(move bool) {
 	} else if dst.level == levelRoots {
 		dNodes = dst.node
 	}
-	m.dlg = newTransferDialog(move, src, names, dNodes, dRoot, dDir)
+	dNodes, dRoot = m.destDefault(dNodes, dRoot)
+	d := newTransferDialog(move, src, names, dNodes, dRoot, dDir)
+	d.dest = m.destList()
+	m.dlg = d
 }
 
 func (m *model) openSync() {
@@ -680,14 +685,87 @@ func (m *model) openSync() {
 	if dst.level == levelDir {
 		dNodes, dRoot, dDir = dst.node, dst.root, dst.path
 	}
-	m.dlg = newSyncDialog(src, dNodes, dRoot, dDir)
+	dNodes, dRoot = m.destDefault(dNodes, dRoot)
+	d := newSyncDialog(src, dNodes, dRoot, dDir)
+	d.dest = m.destList()
+	// Only an explicit selection counts: with none, the whole directory.
+	for _, r := range src.rows {
+		switch {
+		case r.up || !src.selected[r.name]:
+		case r.isDir:
+			d.dirs = append(d.dirs, r.name)
+		default:
+			d.files = append(d.files, r.name)
+		}
+	}
+	m.dlg = d
 }
 
-func (m *model) planSync(req api.SyncRequest) tea.Cmd {
+// marks returns the marked set a pane works on: its own selection in a
+// directory, the TUI's @dest in the node list.
+func (m *model) marks(p *pane) map[string]bool {
+	if p.level == levelNodes {
+		return m.dest
+	}
+	return p.selected
+}
+
+func toggle(set map[string]bool, name string) {
+	if set[name] {
+		delete(set, name)
+	} else {
+		set[name] = true
+	}
+}
+
+// destList returns the marked nodes, sorted.
+func (m *model) destList() []string {
+	return slices.Sorted(maps.Keys(m.dest))
+}
+
+// destStatus tells what @dest holds after marking in the node list.
+func (m *model) destStatus(p *pane) {
+	switch {
+	case p.level != levelNodes:
+	case len(m.dest) == 0:
+		m.setStatus("no nodes marked", false)
+	default:
+		m.setStatus(fmt.Sprintf("@%s = %s (F5/F4 copy or sync there)", api.GroupDest, strings.Join(m.destList(), ",")), false)
+	}
+}
+
+// destDefault makes @dest the dialogs' destination while nodes are marked,
+// with their shared root if they all have one of that name.
+func (m *model) destDefault(nodes, root string) (string, string) {
+	if len(m.dest) == 0 {
+		return nodes, root
+	}
+	common := ""
+	for i, id := range m.destList() {
+		n, ok := m.nodes[id]
+		if !ok || len(n.Roots) != 1 || (i > 0 && n.Roots[0].ID != common) {
+			return "@" + api.GroupDest, root
+		}
+		common = n.Roots[0].ID
+	}
+	return "@" + api.GroupDest, common
+}
+
+// planSync makes a dry-run plan for each request (one per selected
+// folder, or one for the whole directory); files, if any, are copied
+// alongside once the plans are confirmed.
+func (m *model) planSync(reqs []api.SyncRequest, files *api.TransferRequest) tea.Cmd {
 	m.setStatus("planning sync: scanning source and targets…", false)
 	return func() tea.Msg {
-		p, err := m.c.PlanSync(m.ctx, req)
-		return syncPlannedMsg{plan: p, err: err}
+		var plans []*api.SyncPlan
+		for _, r := range reqs {
+			p, err := m.c.PlanSync(m.ctx, r)
+			if err != nil {
+				return syncPlannedMsg{err: fmt.Errorf("%s: %w", r.SrcPath, err)}
+			}
+			plans = append(plans, p)
+		}
+		return syncPlannedMsg{plans: plans, files: files}
 	}
 }
 
@@ -1114,7 +1192,7 @@ func (m *model) renderPanes(h int) string {
 			}
 			marquee = time.Since(m.marqueeAt)
 		}
-		lines := p.render(m.st, inner, h, active, marquee)
+		lines := p.render(m.st, inner, h, active, marquee, m.marks(p))
 		lines = append(lines, m.st.rule.Render(strings.Repeat("─", inner)), m.st.panel.Render(p.footer(inner)))
 		title := p.title()
 		if n, ok := m.nodes[p.node]; ok && p.node != "" && !n.Online {

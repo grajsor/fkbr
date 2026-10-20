@@ -41,6 +41,8 @@ func TestParseRejects(t *testing.T) {
 		"duplicate root": "node_id: a\nnfs_root: /x\nstate_dir: /s\nroots:\n- {id: r, path: /a}\n- {id: r, path: /b}\n",
 		"relative root":  "node_id: a\nnfs_root: /x\nstate_dir: /s\nroots:\n- {id: r, path: a}\n",
 		"offline<=hb":    "node_id: a\nnfs_root: /x\nstate_dir: /s\nheartbeat_interval: 10s\noffline_after: 5s\n",
+		"role dest":      "node_id: a\nnfs_root: /x\nstate_dir: /s\nroles: [dest]\n",
+		"role all":       "node_id: a\nnfs_root: /x\nstate_dir: /s\nroles: [all]\n",
 	}
 	for name, y := range cases {
 		if _, err := Parse([]byte(y)); err == nil {
