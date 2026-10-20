@@ -197,3 +197,37 @@ func TestTargetResumesAfterSourceFinished(t *testing.T) {
 		t.Fatalf("target state %s", s)
 	}
 }
+
+// A target whose job slots are all busy publishes "queued", and if it is
+// dropped from a fan-out for that, the reason says so.
+func TestQueuedTargetVisible(t *testing.T) {
+	share := t.TempDir()
+	acfg := nodeCfg(t, share, "a")
+	acfg.Transfer.DetachAfter = 300 * time.Millisecond
+	a := build(t, acfg)
+	bcfg := nodeCfg(t, share, "b")
+	bcfg.Transfer.MaxJobs = 1
+	b := build(t, bcfg)
+	c, _ := node(t, share, "c")
+	makeTree(t, acfg.Roots[0].Path, 5, 3<<20) // beyond the job quota: the source blocks on b
+	runWorker(t, a)
+	runWorker(t, b)
+	runWorker(t, c)
+	b.recvSem <- struct{}{} // b's only slot is taken
+	ctx := context.Background()
+	id, err := a.Submit(ctx, api.TransferRequest{
+		SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"b", "c"}, DstRoot: "data", DstDir: "in",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool {
+		j, err := a.st.GetJob(ctx, id)
+		return err == nil && roleState(j, api.RoleTarget, "b") == api.JobQueued
+	}, "b reports queued")
+	j := waitJob(t, a, id, 20*time.Second)
+	<-b.recvSem
+	if j.State != api.JobPartial || len(j.Detached) != 1 || !strings.Contains(j.Detached[0].Reason, "queued on the target") {
+		t.Fatalf("state %s detached %+v", j.State, j.Detached)
+	}
+}

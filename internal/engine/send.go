@@ -39,8 +39,10 @@ type sender struct {
 	progress  map[string]time.Time
 	online    map[string]bool
 	lastNodes time.Time
-	// gone is when each target was first seen missing from the registry.
+	// gone is when each target was first seen missing from the registry;
+	// tstate is each target's last published state.
 	gone       map[string]time.Time
+	tstate     map[string]api.JobState
 	lastNotify time.Time
 
 	log     *slog.Logger
@@ -58,7 +60,8 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	s := &sender{
 		e: e, job: job, status: e.newStatus(id, api.RoleSource),
 		detached: map[string]bool{}, acks: map[string]int{}, progress: map[string]time.Time{}, gone: map[string]time.Time{},
-		log: e.log.With("job", id), start: time.Now(),
+		tstate: map[string]api.JobState{},
+		log:    e.log.With("job", id), start: time.Now(),
 	}
 	s.status.before = s.totals.apply
 	now := time.Now()
@@ -73,7 +76,7 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 			return nil // duplicate request for a finished job
 		}
 		s.status.st = *prev
-		s.status.st.Error = ""
+		s.status.st.State, s.status.st.Error = api.JobRunning, "" // was queued, or interrupted
 		s.resumeFrom = prev.Chunks
 	}
 	if job.Request.SrcNode != e.Self() {
@@ -327,7 +330,9 @@ func (s *sender) check(ctx context.Context, force bool) error {
 	}
 	renotify := time.Since(s.lastNotify) > renotifyEvery
 	for _, d := range s.active() {
-		switch roleState(j, api.RoleTarget, d) {
+		st := roleState(j, api.RoleTarget, d)
+		s.tstate[d] = st
+		switch st {
 		case "":
 			// Not started yet: the notify may have been lost (or the node
 			// was busy, or restarted from an old inbox). Send it again.
@@ -487,7 +492,11 @@ func (s *sender) detachLaggards(ctx context.Context, total int) error {
 				return err
 			}
 		case idle > cfg.Transfer.DetachAfter:
-			if err := s.detach(ctx, d, fmt.Sprintf("no progress for %s", idle.Round(time.Second))); err != nil {
+			reason := fmt.Sprintf("no progress for %s", idle.Round(time.Second))
+			if s.tstate[d] == api.JobQueued {
+				reason = fmt.Sprintf("queued on the target for %s (all its job slots busy)", idle.Round(time.Second))
+			}
+			if err := s.detach(ctx, d, reason); err != nil {
 				return err
 			}
 		}

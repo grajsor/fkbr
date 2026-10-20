@@ -205,3 +205,36 @@ func TestRejectsStagingAsDest(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// An entry that cannot be installed (here: a destination directory without
+// write access) is an error for that entry; the rest is installed and the
+// staging area is removed.
+func TestInstallContinuesPastUnwritableDir(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	_, dstDir, src, dst := setup(t)
+	locked := filepath.Join(dstDir, "tree/sub")
+	os.MkdirAll(locked, 0o755)
+	os.Chmod(locked, 0o555)
+	t.Cleanup(func() { os.Chmod(locked, 0o755) })
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+	if res.Files != 1 || res.Errors != 3 {
+		t.Fatalf("want a.txt installed and 3 errors in sub/: %+v", res)
+	}
+	if b, _ := os.ReadFile(filepath.Join(dstDir, "tree/a.txt")); string(b) != "alpha" {
+		t.Errorf("a.txt: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, StagingDir)); !os.IsNotExist(err) {
+		t.Errorf("staging not cleaned up: %v", err)
+	}
+}

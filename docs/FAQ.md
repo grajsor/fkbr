@@ -52,6 +52,15 @@ F10 in the TUI, or kill it. Unfinished jobs resume next time.
 **Two machines with the same hostname?**
 Start one with `-node othername`.
 
+**"already running on this host"?**
+Another user (or `sudo`) already runs fkbr here under that name. Use that one, or start yours with `-node othername`.
+
+**Two copies into the same folder at once?**
+Safe. Every file arrives whole. If both copies have the same file, you get one of them; which one is not defined.
+
+**Would a bigger `job_quota` make copies faster?**
+No. The share only holds a moving window of a copy. 1 GiB (the default) was as fast as 4 GiB in our lab; 256 MiB was slower. The network to the NFS server sets the speed.
+
 **Share read-only?**
 Start with `-ro`.
 

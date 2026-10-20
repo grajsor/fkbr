@@ -422,7 +422,10 @@ func (r *Receiver) install(name, src, dst string, sfi fs.FileInfo, res *Result) 
 		return nil
 	}
 	if err := r.root.Rename(src, dst); err != nil {
-		return err
+		// One unwritable directory must not stop the rest of the install.
+		res.Errors++
+		res.problem("%s: %v", name, err)
+		return nil
 	}
 	if sfi.Mode()&fs.ModeSymlink != 0 {
 		res.Symlinks++

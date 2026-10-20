@@ -41,7 +41,7 @@ func TestProtocolMismatch(t *testing.T) {
 func TestNodesLiveness(t *testing.T) {
 	share := t.TempDir()
 	a, b := open(t, share, "a"), open(t, share, "b")
-	if err := b.Heartbeat(ctx); err != nil {
+	if _, err := b.Heartbeat(ctx, "w1 1 b"); err != nil {
 		t.Fatal(err)
 	}
 	ns, err := a.Nodes(ctx)
@@ -209,7 +209,7 @@ func TestRefreshLeavesNoTrace(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Register(ctx, api.NodeInfo{ID: "a"})
-	m.Heartbeat(ctx)
+	m.Heartbeat(ctx, "w1 1 a")
 	for i := 0; i < 5; i++ {
 		if _, err := m.Nodes(ctx); err != nil {
 			t.Fatal(err)

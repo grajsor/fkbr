@@ -197,9 +197,18 @@ func (m *Mailbox) Register(_ context.Context, info api.NodeInfo) error {
 	return m.write(m.path("nodes", m.self, "info.json"), data)
 }
 
-func (m *Mailbox) Heartbeat(_ context.Context) error {
+func (m *Mailbox) Heartbeat(_ context.Context, token string) (string, error) {
+	p := m.path("nodes", m.self, "heartbeat")
+	var other string
+	m.freshFile(p)
+	if b, err := os.ReadFile(p); err == nil {
+		// Older versions wrote a timestamp; only tokens count.
+		if t := strings.TrimSpace(string(b)); t != token && strings.HasPrefix(t, "w1 ") {
+			other = t
+		}
+	}
 	// Creating and writing a new file lets the NFS server stamp the mtime.
-	return m.write(m.path("nodes", m.self, "heartbeat"), []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"))
+	return other, m.write(p, []byte(token+"\n"))
 }
 
 // serverNow returns the current time according to the share's clock.

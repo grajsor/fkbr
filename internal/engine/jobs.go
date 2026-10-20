@@ -313,9 +313,9 @@ func (e *Engine) startJob(ctx context.Context, m *transport.Message) {
 		e.tr.Finish(ctx, m, false)
 		return
 	}
-	sem, run := e.sendSem, e.runSend
+	sem, run, role := e.sendSem, e.runSend, api.RoleSource
 	if m.Type == transport.TypeReceive {
-		sem, run = e.recvSem, e.runReceive
+		sem, run, role = e.recvSem, e.runReceive, api.RoleTarget
 	}
 	e.jobsWG.Add(1)
 	go func() {
@@ -327,10 +327,15 @@ func (e *Engine) startJob(ctx context.Context, m *transport.Message) {
 		}()
 		select {
 		case sem <- struct{}{}:
-			defer func() { <-sem }()
-		case <-ctx.Done():
-			return
+		default:
+			e.markQueued(ctx, ref.ID, role)
+			select {
+			case sem <- struct{}{}:
+			case <-ctx.Done():
+				return
+			}
 		}
+		defer func() { <-sem }()
 		log := e.log.With("job", ref.ID, "role", m.Type)
 		log.Info("job started")
 		err := run(ctx, ref.ID)
@@ -400,6 +405,21 @@ func (w *statusWriter) finish(ctx context.Context, state api.JobState, err error
 	}
 	w.put(ctx, true)
 	return err
+}
+
+// markQueued publishes that this node has the job but waits for a free
+// slot (transfer.max_jobs), so nobody takes the wait for a stall. A job
+// that already has a status (resumed after a restart) keeps it.
+func (e *Engine) markQueued(ctx context.Context, id string, role api.Role) {
+	j, err := e.st.GetJob(ctx, id)
+	if err != nil || ownStatus(j, e.Self(), role) != nil {
+		return
+	}
+	w := e.newStatus(id, role)
+	w.st.State = api.JobQueued
+	w.st.Phase = fmt.Sprintf("waiting for a free slot (%d jobs running)", e.cfg.Transfer.MaxJobs)
+	w.put(ctx, true)
+	e.log.Info("job queued: all slots busy", "job", id, "role", role, "max_jobs", e.cfg.Transfer.MaxJobs)
 }
 
 // ownStatus returns this node's previously published status for a job.

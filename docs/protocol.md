@@ -69,6 +69,15 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
    as offline when its heartbeat is older than `offline_after`. The
    heartbeat runs on its own, so a slow request does not delay it. Pruning
    judges ages the same way, by mtimes against the server clock.
+
+   The heartbeat file holds the worker's instance token (`w1 <start ns>
+   <random>`), also published in `info.json` with the worker's `pid` and the
+   host's `boot_id`. A worker refuses to start under an ID whose online
+   entry belongs to another host, or to a process still running on this
+   host (a second user, or another `-state` dir: both would consume one
+   inbox and install into their own directories). A crashed worker's entry
+   can be replaced at once. If a heartbeat finds another worker's token,
+   the worker that started later stops, without leaving the registry.
 8. **Leaving.** A node is removed from the registry (its `nodes/`,
    `inbox/`, `reply/` and `data/` directories) in three ways: `forget` by
    any node once it is offline; by any running node when it has been
@@ -127,10 +136,17 @@ write policy.
    while the source read them) are dropped and reported.
 5. **Install.** After the last chunk, the target renames entries into
    `dst_dir` under the conflict policy (`skip`, `overwrite`,
-   `overwrite-if-older`). It applies directory metadata deepest first (only
+   `overwrite-if-older`). An entry that cannot be renamed into place (say,
+   an unwritable directory) is reported as an error; the rest is still
+   installed. Each file is replaced whole, so two jobs installing into
+   the same directory at once leave every file complete, each from one of
+   them. It applies directory metadata deepest first (only
    to directories it created, unless the policy is `overwrite`), then
    removes the staging area.
-6. **Finish.** Every participant publishes its own status. The job's state
+6. **Finish.** A participant whose job slots (`max_jobs`) are all taken
+   publishes the state `queued` until one frees up; a source that drops
+   such a target says so in the reason. Every participant publishes its
+   own status. The job's state
    is derived from them: `done` when all are done, `failed` if any failed,
    `cancelled` once all have stopped after `CANCEL`. The source removes
    `data/<src>/<job>/` when it finishes.

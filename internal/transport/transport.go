@@ -63,8 +63,10 @@ type Transport interface {
 	Self() string
 	// Register publishes this node's info to the registry.
 	Register(ctx context.Context, info api.NodeInfo) error
-	// Heartbeat marks this node alive.
-	Heartbeat(ctx context.Context) error
+	// Heartbeat marks this node alive, writing token (the worker run's
+	// instance token). It first reads the token there and returns it as
+	// other if another worker wrote it.
+	Heartbeat(ctx context.Context, token string) (other string, err error)
 	// Nodes returns all registered nodes with liveness.
 	Nodes(ctx context.Context) ([]api.Node, error)
 	// Unregister deletes another node's registry entry, inbox, reply

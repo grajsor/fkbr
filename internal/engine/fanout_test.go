@@ -158,7 +158,7 @@ func TestStalledTargetDetached(t *testing.T) {
 	defer cancel()
 	go func() {
 		for ctx.Err() == nil {
-			mb.Heartbeat(ctx)
+			mb.Heartbeat(ctx, "")
 			time.Sleep(20 * time.Millisecond)
 		}
 	}()

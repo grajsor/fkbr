@@ -48,7 +48,7 @@ func TestShareModesIgnoreUmask(t *testing.T) {
 		t.Fatal(err)
 	}
 	a, b := open(t, root, "a"), open(t, root, "b")
-	a.Heartbeat(ctx)
+	a.Heartbeat(ctx, "w1 1 a")
 
 	msg := &transport.Message{Protocol: 1, ID: "0001", Type: "list", From: "a", To: "b"}
 	if err := a.Send(ctx, msg); err != nil {

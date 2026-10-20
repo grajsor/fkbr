@@ -73,7 +73,10 @@ fkbr /mnt/nfs/xfer
 
 - **Name:** the node is named after the short hostname. Use `-node NAME`
   when two hosts share a hostname, or to run several nodes on one host.
-  fkbr refuses to start if another host is online under the same name.
+  fkbr refuses to start if another host is online under the same name, or
+  if another fkbr process on this host runs that node already (for
+  example the same name started by another user, or with another
+  `-state`).
 - **Root:** the node shares the current directory and everything below it,
   writable. `-ro` makes it read-only. `-root id=/path[:ro]` (repeatable)
   shares explicit directories instead. fkbr refuses to share `/` by

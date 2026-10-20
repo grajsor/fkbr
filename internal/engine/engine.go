@@ -87,6 +87,8 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 			ChownCapable:     localfs.ProbeChown(cfg.StateDir),
 			DACOverride:      localfs.ProbeDACOverride(cfg.StateDir),
 			AcceptWritesFrom: cfg.AcceptWritesFrom,
+			PID:              os.Getpid(),
+			BootID:           bootID(),
 		},
 	}
 }
@@ -238,6 +240,8 @@ func (e *Engine) Run(ctx context.Context) error {
 		return err
 	}
 	defer lock.release()
+	ctx, runCancel := context.WithCancel(ctx)
+	defer runCancel()
 	// Runs after the jobs below have paused, while the lock is still held,
 	// so a new worker for this node cannot register in between.
 	stopped := false
@@ -249,14 +253,26 @@ func (e *Engine) Run(ctx context.Context) error {
 	lockCheck := time.NewTicker(lockCheckInterval)
 	defer lockCheck.Stop()
 
-	// Refuse to take over a node ID another live host is using: with IDs
-	// defaulting to hostnames, two machines could otherwise collide.
+	// Refuse to take over a node ID another live host or process is using:
+	// with IDs defaulting to hostnames, two machines could otherwise
+	// collide, and two users on one host would (see instance.go).
+	e.info.Started = time.Now().UTC()
+	e.info.Instance = newToken(e.info.Started)
 	nodes, err := e.tr.Nodes(ctx)
 	for _, n := range nodes {
-		if n.ID == e.Self() && n.Online && n.Hostname != e.info.Hostname {
+		if n.ID != e.Self() || !n.Online {
+			continue
+		}
+		if n.Hostname != e.info.Hostname {
 			return fmt.Errorf("%w: %q is in use by host %s; pass -node with another name", ErrNodeIDTaken, n.ID, n.Hostname)
 		}
+		if e.runningHere(n) {
+			return fmt.Errorf("%w: %q is already running on this host (pid %d, since %s); stop it, or pass -node with another name",
+				ErrNodeIDTaken, n.ID, n.PID, n.Started.Local().Format(time.DateTime))
+		}
 	}
+	liveInstances.Store(e.info.Instance, true)
+	defer liveInstances.Delete(e.info.Instance)
 	// A TUI only visits unless a daemon registered this node before. If the
 	// registry cannot be read, assume it did.
 	e.info.Transient = false
@@ -268,11 +284,12 @@ func (e *Engine) Run(ctx context.Context) error {
 			}
 		}
 	}
-	e.info.Started = time.Now().UTC()
 	if err := e.tr.Register(ctx, e.info); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
-	if err := e.tr.Heartbeat(ctx); err != nil {
+	// A token found now was left by the entry the check above allowed (a
+	// crashed worker); only tokens written after this one count.
+	if _, err := e.tr.Heartbeat(ctx, e.info.Instance); err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
 	e.log.Info("worker started", "node", e.Self(), "roots", len(e.info.Roots), "chown", e.info.ChownCapable)
@@ -282,7 +299,8 @@ func (e *Engine) Run(ctx context.Context) error {
 	// the jobs have paused (defers run in reverse) and before leaving.
 	hbCtx, hbStop := context.WithCancel(context.WithoutCancel(ctx))
 	hbDone := make(chan struct{})
-	go e.heartbeat(hbCtx, hbDone)
+	conflict := make(chan error, 1)
+	go e.heartbeat(hbCtx, hbDone, conflict)
 	defer func() { hbStop(); <-hbDone }()
 	// Prune at start (a node may have been off for days) and then every
 	// half keep_done, so nothing outlives keep_done by much.
@@ -293,7 +311,9 @@ func (e *Engine) Run(ctx context.Context) error {
 	defer poll.Stop()
 	lastActivity := time.Now()
 	// Jobs stop with ctx and resume from the share when the worker restarts.
-	defer e.jobsWG.Wait()
+	// When the worker stops on its own (lock lost, node ID taken), runCancel
+	// stops them first.
+	defer func() { runCancel(); e.jobsWG.Wait() }()
 
 	for {
 		select {
@@ -301,6 +321,10 @@ func (e *Engine) Run(ctx context.Context) error {
 			e.log.Info("worker stopping", "node", e.Self())
 			stopped = true
 			return nil
+		case err := <-conflict:
+			// Not stopped: the registry entry is the other worker's now.
+			e.log.Error("node ID in use by another worker; stopping this worker", "err", err)
+			return err
 		case <-lockCheck.C:
 			if err := lock.maintain(); err != nil {
 				e.log.Error("worker lock lost; stopping this worker", "err", err)
@@ -328,8 +352,10 @@ func (e *Engine) Run(ctx context.Context) error {
 	}
 }
 
-// heartbeat refreshes this node's heartbeat until ctx ends.
-func (e *Engine) heartbeat(ctx context.Context, done chan<- struct{}) {
+// heartbeat refreshes this node's heartbeat until ctx ends. If another
+// worker uses the node ID and this one must yield, it reports that on
+// conflict and stops.
+func (e *Engine) heartbeat(ctx context.Context, done chan<- struct{}, conflict chan<- error) {
 	defer close(done)
 	t := time.NewTicker(e.cfg.HeartbeatInterval)
 	defer t.Stop()
@@ -338,8 +364,19 @@ func (e *Engine) heartbeat(ctx context.Context, done chan<- struct{}) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := e.tr.Heartbeat(ctx); err != nil {
+			other, err := e.tr.Heartbeat(ctx, e.info.Instance)
+			if err != nil {
 				e.log.Warn("heartbeat failed", "err", err)
+			}
+			if other == "" {
+				continue
+			}
+			if err := e.heartbeatConflict(other); err != nil {
+				conflict <- err
+				return
+			}
+			if err := e.tr.Register(ctx, e.info); err != nil {
+				e.log.Warn("re-register failed", "err", err)
 			}
 		}
 	}

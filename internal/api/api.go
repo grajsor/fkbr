@@ -54,6 +54,11 @@ type NodeInfo struct {
 	// Transient marks a node registered by a TUI that runs it only while
 	// open; it leaves the share when the TUI quits.
 	Transient bool `json:"transient,omitempty"`
+	// Instance identifies one worker run (see engine/instance.go); PID and
+	// BootID tell a live worker on the same host from a crashed one.
+	Instance string `json:"instance,omitempty"`
+	PID      int    `json:"pid,omitempty"`
+	BootID   string `json:"boot_id,omitempty"`
 }
 
 // HasRole reports whether the node carries a role tag.

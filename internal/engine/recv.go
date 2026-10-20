@@ -29,6 +29,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 			return nil
 		}
 		status.st = *prev
+		status.st.State = api.JobRunning // was queued, or interrupted
 	}
 	req := job.Request
 	if !slices.Contains(req.DstNodes, e.Self()) {
@@ -88,6 +89,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	start := time.Now()
 	res, err := rcv.Commit()
 	if err != nil {
+		rcv.Abort() // a failed job never resumes: don't leave its staging behind
 		return status.finish(ctx, api.JobFailed, fmt.Errorf("install: %w", err))
 	}
 	log.Info("installed", "files", res.Files, "dirs", res.Dirs, "symlinks", res.Symlinks, "bytes", size(res.Bytes),
