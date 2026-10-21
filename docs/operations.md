@@ -122,8 +122,8 @@ right pane while there are no jobs), so you can tell at a glance that the
 TUI is alive. `q` quits, like F10.
 
 The mouse works too: a click moves the cursor, a double click opens, a
-right click marks, the wheel scrolls, and a click on the key bar presses
-that key. Long lists and texts show a scrollbar in their right edge: drag
+right click marks (held and dragged, it marks every row it passes), the
+wheel scrolls, and a click on the key bar presses that key. Long lists and texts show a scrollbar in their right edge: drag
 it, or click above or below it for a page. In dialogs, click the keys they list (Enter, Esc, ^O …) or a
 setting to change it. Hold Shift to select text, or start with
 `-mouse=false`.

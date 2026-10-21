@@ -1,6 +1,9 @@
 package tui
 
 import (
+	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"testing"
 
@@ -191,5 +194,70 @@ func TestMouseDialogs(t *testing.T) {
 	h.click(x+1, y, tea.MouseButtonLeft)
 	if h.m.dlg != nil {
 		t.Fatalf("mkdir, click on Esc cancel: dialog %T", h.m.dlg)
+	}
+}
+
+// Dragging with the right button held marks every row it passes (or
+// unmarks, when the first row was marked), past the pane's edge too, and
+// in a node list it marks @dest.
+func TestMouseDragMarks(t *testing.T) {
+	h := newHarness(t)
+	var es []api.Entry
+	for i := range 80 {
+		es = append(es, api.Entry{Name: fmt.Sprintf("f%02d", i), Type: api.TypeFile})
+	}
+	h.f.files["master:data/."] = es
+	left := 10
+	h.click(left, h.rowY(0, "master"), tea.MouseButtonLeft)
+	h.click(left, h.rowY(0, "master"), tea.MouseButtonLeft)
+	move := func(x, y int) {
+		h.m.View()
+		h.send(tea.MouseMsg{X: x, Y: y, Button: tea.MouseButtonRight, Action: tea.MouseActionMotion})
+	}
+	release := func() { h.send(tea.MouseMsg{X: left, Button: tea.MouseButtonRight, Action: tea.MouseActionRelease}) }
+	marked := func(set map[string]bool) string { return strings.Join(slices.Sorted(maps.Keys(set)), " ") }
+	sel := h.m.panes[0].selected
+
+	// One fast move skips rows on screen; they are marked all the same.
+	h.click(left, h.rowY(0, "f02"), tea.MouseButtonRight)
+	move(left, h.rowY(0, "f05"))
+	move(left, h.rowY(0, "f03")) // back over marked rows: they stay
+	release()
+	if got := marked(sel); got != "f02 f03 f04 f05" || h.cursorName(0) != "f03" {
+		t.Fatalf("drag down and back: marked %q, cursor %q", got, h.cursorName(0))
+	}
+	// Starting on a marked row unmarks.
+	h.click(left, h.rowY(0, "f04"), tea.MouseButtonRight)
+	move(left, h.rowY(0, "f05"))
+	release()
+	if got := marked(sel); got != "f02 f03" {
+		t.Fatalf("unmarking drag: marked %q", got)
+	}
+	// Moving without a held button after the release marks nothing.
+	move(left, h.rowY(0, "f08"))
+	if got := marked(sel); got != "f02 f03" {
+		t.Fatalf("motion after release: marked %q", got)
+	}
+	// Below the pane it reaches further and the pane scrolls along.
+	h.click(left, h.rowY(0, "f10"), tea.MouseButtonRight)
+	move(left, 2+h.m.paneHeight()+2)
+	release()
+	h.m.View()
+	p := h.m.panes[0]
+	if p.offset == 0 || p.cursor < p.offset {
+		t.Fatalf("no scroll: offset %d cursor %d", p.offset, p.cursor)
+	}
+	for k := 11; k <= p.cursor; k++ { // row k is f(k-1): the up row is first
+		if !sel[p.rows[k].name] {
+			t.Fatalf("%s not marked (cursor at %s)", p.rows[k].name, h.cursorName(0))
+		}
+	}
+	// In a node list it marks @dest.
+	right := 70
+	h.click(right, h.rowY(1, "master"), tea.MouseButtonRight)
+	move(right, h.rowY(1, "s1"))
+	release()
+	if got := marked(h.m.dest); got != "master s1" {
+		t.Fatalf("node list drag: @dest %q", got)
 	}
 }

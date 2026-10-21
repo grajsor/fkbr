@@ -455,7 +455,7 @@ MARKING
 MOUSE
   click          move there (in either pane or the jobs)
   double-click   open, like Enter
-  right-click    mark or unmark
+  right-click    mark or unmark; hold and drag for more rows
   wheel          move up or down; scroll a dialog
   scrollbar      click above or below the thumb: a page; drag it
   key bar        a click presses that key

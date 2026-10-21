@@ -87,10 +87,13 @@ type model struct {
 	active int
 	// lastExclude prefills the next copy or sync dialog's exclude field.
 	lastExclude string
-	// lastClick, dlgBox and drag serve the mouse (mouse.go, scrollbar.go).
+	// lastClick, dlgBox and drag serve the mouse (mouse.go, scrollbar.go);
+	// markOn and markRow a right-button drag that marks rows.
 	lastClick click
 	dlgBox    box
 	drag      drag
+	markOn    bool
+	markRow   int
 
 	nodes    map[string]api.Node
 	jobs     map[string]api.Job

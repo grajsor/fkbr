@@ -10,8 +10,9 @@ import (
 
 // The mouse does what keys do. In the panes and the jobs panel a click
 // moves the cursor (and the focus) there and a double click opens (Enter);
-// a right click marks or unmarks the row under it, as in Norton Commander;
-// the wheel moves the cursor. A click on the key bar presses that key. In
+// a right click marks or unmarks the row under it, as in Norton Commander,
+// and dragging with it held does the same to every row it passes; the
+// wheel moves the cursor. A click on the key bar presses that key. In
 // a dialog the wheel scrolls, a click outside closes it (Esc), a click on
 // a hint ("Enter start · Tab next field · Esc cancel") presses that key,
 // one on a setting ("if exists:", "zstd:", ...) toggles it, and one on a
@@ -111,7 +112,9 @@ func (m *model) rowClick(i, line int, b tea.MouseButton) tea.Cmd {
 	if b == tea.MouseButtonRight {
 		m.lastClick = click{}
 		if r := p.current(); r != nil && !r.up && p.level != levelRoots {
-			toggle(m.marks(p), r.name)
+			set := m.marks(p)
+			toggle(set, r.name)
+			m.drag, m.markOn, m.markRow = dragMark0+drag(i), set[r.name], row
 			m.destStatus(p)
 		}
 		return nil
@@ -120,6 +123,40 @@ func (m *model) rowClick(i, line int, b tea.MouseButton) tea.Cmd {
 		return m.enter(i)
 	}
 	return nil
+}
+
+// markTo carries a right-button drag in pane i to screen line y: every row
+// from the last one it reached to the one there gets the state the first
+// row got. Above or below the pane it reaches that much further, and the
+// pane scrolls with the cursor.
+func (m *model) markTo(i, y int) tea.Cmd {
+	p := m.panes[i]
+	if len(p.rows) == 0 || p.level == levelRoots {
+		return nil
+	}
+	skip := 0
+	if p.err != "" {
+		skip = 1 // the error line above the rows
+	}
+	last := min(m.markRow, len(p.rows)-1) // the pane may have reloaded
+	row := max(0, min(len(p.rows)-1, p.offset+y-2-skip))
+	set := m.marks(p)
+	step := 1
+	if row < last {
+		step = -1
+	}
+	for k := last + step; k != row+step; k += step {
+		switch r := p.rows[k]; {
+		case r.up:
+		case m.markOn:
+			set[r.name] = true
+		default:
+			delete(set, r.name)
+		}
+	}
+	m.markRow, p.cursor = row, row
+	m.destStatus(p)
+	return m.maybeLoadMore(i)
 }
 
 func (m *model) jobClick(line int, b tea.MouseButton) tea.Cmd {

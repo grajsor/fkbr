@@ -71,7 +71,8 @@ func (st *styles) bar(h, n, off int) []string {
 	return out
 }
 
-// drag says what a held left button moves: a pane's list or a dialog.
+// drag says what a held button moves: a pane's list or a dialog (left),
+// or the marking in a pane (right).
 type drag int
 
 const (
@@ -79,6 +80,8 @@ const (
 	dragPane0
 	dragPane1
 	dragDialog
+	dragMark0
+	dragMark1
 )
 
 // paneBarClick handles a click on pane i's scrollbar at track line; false
@@ -127,6 +130,8 @@ func (m *model) dragTo(y int) tea.Cmd {
 		return (line*(n-1) + (h-1)/2) / (h - 1)
 	}
 	switch m.drag {
+	case dragMark0, dragMark1:
+		return m.markTo(int(m.drag-dragMark0), y)
 	case dragPane0, dragPane1:
 		i := int(m.drag - dragPane0)
 		p := m.panes[i]
