@@ -170,16 +170,6 @@ fkbr/
 ├── docs/{protocol.md,api.md}  Makefile  go.mod
 ```
 
-## Milestones
-
-1. **Core and protocol:** config, `localfs`, the `transport` interface plus `nfsmailbox` (inboxes, atomic writes, node registry, heartbeat), the `api` interface, `engine` with browse, `api/local`. CLI: `fkbr nodes`, `fkbr ls node:root/path`. Static cross-built binary.
-2. **Point-to-point transfer:** `bundle`, `receive`, chunking, quota, cancel/resume. CLI `get` and `put`.
-3. **Fan-out:** multi-target manifests, per-target acks, lag detach and catch-up, groups, `accept_writes_from`.
-4. **Daemon and remote API:** `fkbr daemon`, JSON-RPC over a unix socket, the event stream, a systemd unit.
-5. **TUI** on `api.Client`.
-6. **Inventory and sync:** the scanner, snapshots, incremental and mirror plans, fan-out sync, dry-run, delete caps.
-7. **Hardening:** failure injection, benchmarks with 1 master and 3+ slaves, docs. The web UI is a follow-up on the same API.
-
 ## Changes from the ChatGPT design
 
 - Per-node single-consumer inboxes instead of a shared claim queue. This scales to N nodes with no locks.

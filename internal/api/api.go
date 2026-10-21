@@ -1,10 +1,6 @@
 // Package api is the boundary between the fkbr engine and its frontends
-// (CLI, TUI, web). Frontends import only this package; the types here are
+// (CLI, TUI). Frontends import only this package; the types here are
 // plain JSON-serialisable DTOs so they can cross a socket unchanged.
-//
-// The Service interface grows milestone by milestone (jobs, sync plans,
-// event subscriptions). Milestone 1 added node discovery and browsing,
-// milestone 2 point-to-point transfers.
 package api
 
 import (
