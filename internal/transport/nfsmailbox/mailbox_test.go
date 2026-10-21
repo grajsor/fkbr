@@ -360,7 +360,7 @@ func TestPruneJobWithVanishedDetachedTarget(t *testing.T) {
 		t.Fatal(err)
 	}
 	past := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(filepath.Join(share, "jobs", j.ID, "job.json"), past, past)
+	backdateJob(share, j.ID, past)
 	if err := a.PruneJobs(ctx, time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -380,7 +380,7 @@ func TestPruneJobWithForgottenSource(t *testing.T) {
 	b.PutStatus(ctx, j.ID, &api.JobStatus{Node: "b", Role: api.RoleSource, State: api.JobRunning})
 	a.PutStatus(ctx, j.ID, &api.JobStatus{Node: "a", Role: api.RoleTarget, State: api.JobFailed})
 	past := time.Now().Add(-2 * time.Hour)
-	os.Chtimes(filepath.Join(share, "jobs", j.ID, "job.json"), past, past)
+	backdateJob(share, j.ID, past)
 	if err := a.PruneJobs(ctx, time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -434,5 +434,80 @@ func TestLayoutHeals(t *testing.T) {
 	os.RemoveAll(filepath.Join(share, "nodes", "a"))
 	if _, err := a.Heartbeat(ctx, "w1 1 a"); !errors.Is(err, transport.ErrNotRegistered) {
 		t.Fatalf("heartbeat with the entry removed: %v", err)
+	}
+}
+
+// backdateJob makes a job's record and statuses look written at t.
+func backdateJob(share, id string, t time.Time) {
+	dir := filepath.Join(share, "jobs", id)
+	os.Chtimes(filepath.Join(dir, "job.json"), t, t)
+	des, _ := os.ReadDir(filepath.Join(dir, "status"))
+	for _, de := range des {
+		os.Chtimes(filepath.Join(dir, "status", de.Name()), t, t)
+	}
+	os.Chtimes(filepath.Join(dir, "status"), t, t)
+}
+
+// A job that just ended stays a little even with -keep 0, so the CLI that
+// follows it can read how it ended; one without its record goes later.
+func TestPruneFloors(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	j := &api.Job{ID: "000000000000000000000007", Request: api.TransferRequest{SrcNode: "a", DstNodes: []string{"a"}}}
+	a.CreateJob(ctx, j)
+	a.PutStatus(ctx, j.ID, &api.JobStatus{Node: "a", Role: api.RoleSource, State: api.JobDone})
+	a.PutStatus(ctx, j.ID, &api.JobStatus{Node: "a", Role: api.RoleTarget, State: api.JobDone})
+	if err := a.PruneJobs(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.GetJob(ctx, j.ID); err != nil {
+		t.Fatalf("a job that ended a moment ago was pruned: %v", err)
+	}
+	backdateJob(share, j.ID, time.Now().Add(-2*time.Minute))
+	if err := a.PruneJobs(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.GetJob(ctx, j.ID); err == nil {
+		t.Fatal("a job that ended two minutes ago survived -keep 0")
+	}
+	// half pruned: a status landed after the record went
+	orphan := filepath.Join(share, "jobs", "000000000000000000000008")
+	os.MkdirAll(filepath.Join(orphan, "status"), 0o777)
+	a.PruneJobs(ctx, 0)
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatal("a fresh folder without its record was pruned at once")
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(filepath.Join(orphan, "status"), old, old)
+	os.Chtimes(orphan, old, old)
+	a.PruneJobs(ctx, 0)
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatal("an old job folder without its record was never pruned")
+	}
+}
+
+// A sync's path lists stay while a job that reads them runs, however old.
+func TestPruneKeepsPlansInUse(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	for _, id := range []string{"plan1", "plan2"} {
+		w, _ := a.CreateBlob(ctx, "plans/"+id+"/copy-1")
+		w.Write([]byte("\"x\"\n"))
+		w.Commit(nil)
+		old := time.Now().Add(-3 * time.Hour)
+		os.Chtimes(filepath.Join(share, "blobs", "plans", id, "copy-1"), old, old)
+		os.Chtimes(filepath.Join(share, "blobs", "plans", id), old, old)
+	}
+	j := &api.Job{ID: "000000000000000000000009", Request: api.TransferRequest{SrcNode: "a", DstNodes: []string{"a"}, SyncPlan: "plan1"}}
+	a.CreateJob(ctx, j)
+	a.PutStatus(ctx, j.ID, &api.JobStatus{Node: "a", Role: api.RoleSource, State: api.JobRunning})
+	if err := a.PruneBlobs(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(share, "blobs", "plans", "plan1")); err != nil {
+		t.Errorf("the plan of a running job was pruned: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(share, "blobs", "plans", "plan2")); !os.IsNotExist(err) {
+		t.Errorf("an old unused plan survived: %v", err)
 	}
 }

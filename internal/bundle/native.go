@@ -38,7 +38,10 @@ import (
 // byte is an error.
 const (
 	nativeMagic = "FKB2"
-	maxNameLen  = 4096
+	// MaxNameLen bounds an entry's path inside a chunk. Paths longer than
+	// PATH_MAX (4096) are legal (made one directory at a time), so the
+	// bound is far above it; Writer.Add refuses longer ones per item.
+	MaxNameLen  = 64 << 10
 	maxLinkLen  = 4096
 	maxFileSize = 1 << 62
 	kindEnd     = 0
@@ -158,7 +161,7 @@ func readName(br *bufio.Reader, prev string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	n, err := uvarint(br, maxNameLen-shared, "name length")
+	n, err := uvarint(br, MaxNameLen-shared, "name length")
 	if err != nil {
 		return "", err
 	}

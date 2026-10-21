@@ -218,3 +218,16 @@ func TestCheckRoots(t *testing.T) {
 		l.Close()
 	}
 }
+
+func TestMtimeRange(t *testing.T) {
+	dir := t.TempDir()
+	lo, hi := MtimeRange(dir) // tmpfs/ext4/xfs with bigtime: no limit
+	t.Logf("range of %s: %d..%d", dir, lo, hi)
+	des, _ := os.ReadDir(dir)
+	if len(des) != 0 {
+		t.Fatalf("probe left %v behind", des)
+	}
+	if hi != 0 && hi < 2147483647e9 || lo != 0 && lo > -2147483648e9 {
+		t.Errorf("implausible range %d..%d", lo, hi)
+	}
+}

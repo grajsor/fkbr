@@ -186,6 +186,12 @@ var ErrUnsupported = errors.New("unsupported file type")
 // concern only this item and the bundle remains usable; any other error is
 // fatal for the writer.
 func (w *Writer) Add(it Item) error {
+	if len(it.Name) > MaxNameLen {
+		return &ItemError{it.Name[:64] + "…", fmt.Errorf("path of %d bytes is longer than %d: not copied", len(it.Name), MaxNameLen)}
+	}
+	if len(it.Entry.LinkTarget) > maxLinkLen {
+		return &ItemError{it.Name, fmt.Errorf("symlink target of %d bytes is longer than %d: not copied", len(it.Entry.LinkTarget), maxLinkLen)}
+	}
 	switch it.Entry.Type {
 	case api.TypeDir, api.TypeSymlink:
 		if err := w.open(); err != nil {

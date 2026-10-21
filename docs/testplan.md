@@ -113,7 +113,37 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 |---|---|---|
 | CentOS 7 (kernel 3.10) to Rocky 10, x86-64 and ARM64 | Same results everywhere | lab |
 | Nodes on another protocol version on the same share | Refused, with what to do | auto |
-| Mixed builds of the same protocol | Work together; older builds lack newer checks | **todo** |
+| Mixed builds of the same protocol | Work together; older builds lack newer checks | lab (178113d with the robust-test fixes, 2026-10-21) |
+
+## 8. Robust test (2026-10-21)
+
+Five hours on the lab with everything at once: a bad network (netem
+delay, loss, reorder, 10 Mbit, NAS cuts, route flapping), process chaos
+and clock skew, odd data on FAT, exFAT and casefold ext4, 45-job storms,
+and a vandalised share. About 2,100 trees were checked against their
+sources: no file content was ever lost or corrupted. It found 17 problems;
+each now has a test (`internal/engine/robust_test.go` unless named) and
+was checked again on the lab with new-build nodes.
+
+| Found | Fixed | Test |
+|---|---|---|
+| A path over 4096 bytes failed the whole copy | Bound 64 KiB, longer ones skipped and reported | `TestPathLongerThanPathMax` |
+| Sync lost names that are not valid UTF-8 (two failed the plan, a mirror "deleted" one without doing it) | Lossless form in snapshots and requests (`api.EncodeName`) | `TestNamesNotUTF8`, `TestNamesSurviveJSON` |
+| A target in two job groups kept install times on folders | Each group carries the folders it installs into | `TestSyncTwoGroupsFolderMtimes` |
+| Mtimes the target cannot store (XFS without bigtime) clamped silently, synced again every run | Targets probe their range; the plan compares within it; the receiver says so | `TestPlanClampedMtimes`, `TestMtimeNotStoredNoted` |
+| A busy node on a slow link looked offline | Bulk writes synced every ~2 s of data | `TestBulkWritesSyncOnTheWay`; lab: 0 of 36 samples offline at 10 Mbit (before 11 of 36, 61 s) |
+| A restart right after SIGTERM exited, node down | New worker waits for a stopping one | `TestRestartWaitsForStoppingWorker`; lab |
+| SIGTERM did not stop a receiving job | Stops between chunks and entries | `TestStoppingTargetLetsGoBetweenChunks` |
+| Job times and IDs from a skewed host's clock | Share clock | `TestNowIsTheSharesClock`; lab (+2 h) |
+| FAT/exFAT stored `dir.` as `dir` | Refused | `TestTrailingDotStrippedRefused` |
+| exFAT: one non-UTF-8 name failed the copy | Refused like other names | `TestRefusedNameRemovalFails` |
+| Syncs to FAT/exFAT/casefold never came out empty | Plan leaves out what the target cannot store | `TestPlanNamesTheTargetCannotStore` |
+| `-exclude cache/` did not keep `CACHE` on a case-insensitive target | Excludes match case-insensitively there | `TestWithKey` |
+| `prune -keep 0` broke running syncs and left orphan job folders | Floors, plans in use kept, orphans pruned | `TestPruneFloors`, `TestPruneKeepsPlansInUse` |
+| Jobs waited forever for a gone target and held the source's slot | Offline last target detached; gone targets end the job | `TestOfflineLastTargetDetached`, `TestTargetGoneAfterSourceFinished` |
+| A damaged `info.json` hid a running node for good | Heartbeat re-registers; `forget` removes such an entry | `TestDamagedRegistryEntry` |
+| A CLI without a running node created folders on the share | Only a registered node creates its folders | `TestVisitorLeavesNoFolders` |
+| One unwritable inbox failed the whole fan-out | Notify retried; others carry on | `TestNotifyFailureIsNotFatal` |
 
 ## How to run the lab tests
 

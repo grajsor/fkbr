@@ -34,6 +34,25 @@ type Header struct {
 	// 2), no permission bits (FAT, SMB, NTFS).
 	MtimeStep int64 `json:"mtime_step,omitempty"`
 	NoModes   bool  `json:"no_modes,omitempty"`
+	// MtimeMin, MtimeMax (ns, 0: none) are where the filesystem clamps
+	// mtimes it cannot store (see localfs.MtimeRange); only target scans
+	// probe for them.
+	MtimeMin int64 `json:"mtime_min,omitempty"`
+	MtimeMax int64 `json:"mtime_max,omitempty"`
+	// Names: which names it refuses or folds together (FAT, exFAT,
+	// casefold); only target scans set it.
+	Names *api.NameRules `json:"names,omitempty"`
+}
+
+// storable is mtime m as the scanned filesystem would store it.
+func (h *Header) storable(m int64) int64 {
+	if h.MtimeMax != 0 && m > h.MtimeMax {
+		return h.MtimeMax
+	}
+	if h.MtimeMin != 0 && m < h.MtimeMin {
+		return h.MtimeMin
+	}
+	return m
 }
 
 // Entry types in snapshots. TypeError marks a path whose metadata or
@@ -95,7 +114,16 @@ func NewWriter(w io.Writer, h Header) (*Writer, error) {
 	return sw, sw.enc.Encode(h)
 }
 
-func (w *Writer) Write(e *Entry) error { return w.enc.Encode(e) }
+func (w *Writer) Write(e *Entry) error {
+	// Names that are not valid UTF-8 would come back as other names (see
+	// api.EncodeName).
+	if p, l := api.EncodeName(e.P), api.EncodeName(e.L); p != e.P || l != e.L {
+		c := *e
+		c.P, c.L = p, l
+		e = &c
+	}
+	return w.enc.Encode(e)
+}
 
 // Close flushes the snapshot; it does not close the underlying writer.
 func (w *Writer) Close() error {
@@ -155,6 +183,7 @@ func (r *Reader) raw() (*Entry, error) {
 	if err := json.Unmarshal(r.sc.Bytes(), &e); err != nil {
 		return nil, fmt.Errorf("snapshot line: %w", err)
 	}
+	e.P, e.L = api.DecodeName(e.P), api.DecodeName(e.L)
 	return &e, nil
 }
 

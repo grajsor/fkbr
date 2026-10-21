@@ -50,7 +50,9 @@ only while it runs:
   starts and then every half `keep_done`.
 - If no node runs, nothing is removed until one starts again. Use
   `fkbr SHARE prune` to clean up right away; `prune -keep 0` removes
-  everything finished. Running jobs are never touched.
+  everything finished, except jobs that ended in the last minute and sync
+  plans younger than ten minutes. Running jobs, and the plans they use,
+  are never touched.
 - Quitting a TUI that ran the node itself removes the machine from the
   share, unless an unfinished job still needs it or a daemon had
   registered the machine before (say, the daemon crashed and you started

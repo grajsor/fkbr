@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -133,6 +134,13 @@ func (e *Engine) removeLocal(req api.RemoveRequest) (*api.RemoveResult, error) {
 	base, err := localfs.CleanRel(req.Base)
 	if err != nil {
 		return nil, err
+	}
+	for _, r := range e.fs.Roots() {
+		if r.ID == req.Root {
+			if n := localfs.Names(filepath.Join(r.Path, filepath.FromSlash(base))); n.Fold {
+				ex = ex.WithKey(n.Key) // as the target's scan matched them
+			}
+		}
 	}
 	res := &api.RemoveResult{}
 	for _, raw := range req.Paths {
@@ -289,4 +297,23 @@ func (e *Engine) serveFileOp(ctx context.Context, m *transport.Message) error {
 		}
 	}
 	return e.tr.Reply(ctx, m, &transport.Reply{Final: true, Body: body})
+}
+
+// dstPath is where dir (relative to root) is, or its nearest existing
+// parent: what filesystem a destination is on.
+func (e *Engine) dstPath(rootID, dir string) string {
+	for _, r := range e.fs.Roots() {
+		if r.ID != rootID {
+			continue
+		}
+		p := filepath.Join(r.Path, filepath.FromSlash(dir))
+		for p != r.Path {
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+			p = filepath.Dir(p)
+		}
+		return r.Path
+	}
+	return "."
 }

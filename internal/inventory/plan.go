@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 )
 
 // Target is one destination snapshot plus what it can preserve, so that
@@ -39,6 +40,10 @@ type Sink interface {
 type TargetStats struct {
 	Copy, CopyBytes, Replace, Delete, Unchanged int64
 	Kept                                        int64 // newer on the target (KeepNewer)
+	// Refused counts entries the target's filesystem cannot store (see
+	// api.NameRules), left out of the plan; what is below a refused
+	// folder is not counted.
+	Refused int64
 }
 
 type PlanStats struct {
@@ -61,6 +66,9 @@ func (s *PlanStats) problem(format string, args ...any) {
 type openDir struct {
 	e             *Entry
 	changed, sent uint64
+	// names: per target with folding name rules, the names this folder
+	// will hold there, by api.NameRules.Key.
+	names []map[string]string
 }
 
 type planner struct {
@@ -77,6 +85,10 @@ type planner struct {
 	srcUnknown []string
 	// deleted: per target, the top-most directory being removed.
 	deleted []string
+	// refusedDir: per target, the top-most folder it cannot store; refusals
+	// keeps a few examples per target.
+	refusedDir []string
+	refusals   [][]string
 }
 
 // Plan merges the source snapshot with every target snapshot in one pass.
@@ -86,10 +98,12 @@ func Plan(src *Reader, targets []Target, opts PlanOptions, sink Sink) (*PlanStat
 	}
 	p := &planner{
 		targets: targets, opts: opts, sink: sink,
-		stats:   &PlanStats{Targets: make([]TargetStats, len(targets))},
-		cur:     make([]*Entry, len(targets)),
-		srcRd:   src,
-		deleted: make([]string, len(targets)),
+		stats:      &PlanStats{Targets: make([]TargetStats, len(targets))},
+		cur:        make([]*Entry, len(targets)),
+		srcRd:      src,
+		deleted:    make([]string, len(targets)),
+		refusedDir: make([]string, len(targets)),
+		refusals:   make([][]string, len(targets)),
 	}
 	var err error
 	if p.src, err = next(src); err != nil {
@@ -112,7 +126,84 @@ func Plan(src *Reader, targets []Target, opts PlanOptions, sink Sink) (*PlanStat
 	if err := p.closeDirs(""); err != nil {
 		return nil, err
 	}
+	var lines []string
+	for i, t := range targets {
+		if n := p.stats.Targets[i].Refused; n > 0 {
+			lines = append(lines, fmt.Sprintf("%s: %d entries cannot be stored on its %s and are left out, e.g. %s",
+				t.Node, n, t.Snap.Header.Names.FS, strings.Join(p.refusals[i], "; ")))
+		}
+	}
+	p.stats.Problems = append(lines, p.stats.Problems...)
 	return p.stats, nil
+}
+
+// cannotStore says why target i cannot hold source entry path, which it
+// does not have yet: a name its filesystem refuses, or one it would take
+// for a name already there (README and readme on FAT).
+func (p *planner) cannotStore(i int, path string, s *Entry) string {
+	r := p.targets[i].Snap.Header.Names
+	if r == nil || path == "." {
+		return ""
+	}
+	if r.NoSymlinks && s.T == TypeSymlink {
+		return "no symlinks on " + r.FS
+	}
+	base := path[strings.LastIndexByte(path, '/')+1:]
+	if why := r.Refuses(base); why != "" {
+		return why
+	}
+	if m := p.namesIn(i, parent(path), false); m != nil {
+		if other, ok := m[r.Key(base)]; ok && other != base {
+			return fmt.Sprintf("the same name as %q there", other)
+		}
+	}
+	return ""
+}
+
+// remember records that target i will hold path (see cannotStore).
+func (p *planner) remember(i int, path string) {
+	r := p.targets[i].Snap.Header.Names
+	if r == nil || !r.Fold || path == "." {
+		return
+	}
+	if m := p.namesIn(i, parent(path), true); m != nil {
+		base := path[strings.LastIndexByte(path, '/')+1:]
+		if _, ok := m[r.Key(base)]; !ok {
+			m[r.Key(base)] = base
+		}
+	}
+}
+
+// namesIn returns target i's name set of source folder dir, if it is the
+// folder being merged.
+func (p *planner) namesIn(i int, dir string, create bool) map[string]string {
+	if len(p.dirs) == 0 {
+		return nil
+	}
+	top := &p.dirs[len(p.dirs)-1]
+	if top.e.P != dir {
+		return nil
+	}
+	if top.names == nil {
+		if !create {
+			return nil
+		}
+		top.names = make([]map[string]string, len(p.targets))
+	}
+	if top.names[i] == nil && create {
+		top.names[i] = map[string]string{}
+	}
+	return top.names[i]
+}
+
+func (p *planner) refuse(i int, path string, s *Entry, why string) {
+	p.stats.Targets[i].Refused++
+	if len(p.refusals[i]) < 5 {
+		p.refusals[i] = append(p.refusals[i], fmt.Sprintf("%q (%s)", path, why))
+	}
+	if s.T == TypeDir {
+		p.refusedDir[i] = path
+	}
 }
 
 func next(r *Reader) (*Entry, error) {
@@ -226,8 +317,26 @@ func (p *planner) step(path string) (err error) {
 			}
 			p.deleted[i] = ""
 		}
+		if p.refusedDir[i] != "" {
+			if under(path, p.refusedDir[i]) {
+				continue // inside a folder the target cannot store
+			}
+			p.refusedDir[i] = ""
+		}
+		why := ""
+		if s != nil && d == nil {
+			why = p.cannotStore(i, path, s)
+		}
+		// What the folder will hold on the target: the source's entry, or
+		// a target entry the plan leaves there.
+		if s != nil && why == "" || d != nil && (s != nil || !p.opts.Mirror || srcUnknown || d.T == TypeError || d.T == TypeDir && t.Holders[path]) {
+			p.remember(i, path)
+		}
 		ts := &p.stats.Targets[i]
 		switch {
+		case why != "":
+			p.refuse(i, path, s, why)
+			continue
 		case s == nil && d == nil:
 			// unreadable/special source entry absent on target
 		case s == nil:
@@ -295,10 +404,11 @@ func (p *planner) step(path string) (err error) {
 // newerThere reports whether target entry d is newer than source entry s,
 // by more than what the target's filesystem can tell apart.
 func newerThere(s, d *Entry, t Target) bool {
+	sm := t.Snap.Header.storable(s.M)
 	if step := t.Snap.Header.MtimeStep; step > 1 {
-		return d.M-s.M >= step*1e9
+		return d.M-sm >= step*1e9
 	}
-	return sec(d.M) > sec(s.M)
+	return sec(d.M) > sec(sm)
 }
 
 // sec truncates an mtime to whole seconds, the precision compared.
@@ -309,9 +419,10 @@ func sec(ns int64) int64 { return ns / 1e9 }
 func (p *planner) differs(s, d *Entry, t Target) bool {
 	h := &t.Snap.Header
 	modeDiff := !h.NoModes && s.Mo&0o1777 != d.Mo&0o1777 // setuid/setgid depend on target policy
-	timeDiff := sec(s.M) != sec(d.M)
+	sm := h.storable(s.M)                                // what the target can hold at best
+	timeDiff := sec(sm) != sec(d.M)
 	if h.MtimeStep > 1 {
-		timeDiff = max(s.M-d.M, d.M-s.M) >= h.MtimeStep*1e9
+		timeDiff = max(sm-d.M, d.M-sm) >= h.MtimeStep*1e9
 	}
 	switch s.T {
 	case TypeFile:

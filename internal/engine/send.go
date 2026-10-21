@@ -97,6 +97,10 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	s.log.Info("sending", "paths", what, "from", req.SrcRoot, "to", strings.Join(req.DstNodes, ","),
 		"dest", req.DstRoot+"/"+req.DstDir, "zstd", req.Compress, "resume_after", s.resumeFrom)
 	err = s.run(ctx)
+	if errors.Is(err, errNoTargets) {
+		s.status.note("every target was detached; nothing more to send (catch them up later)")
+		err = nil
+	}
 	switch {
 	case ctx.Err() != nil:
 		return ctx.Err()
@@ -130,10 +134,14 @@ func (s *sender) active() []string {
 
 func (s *sender) run(ctx context.Context) error {
 	e := s.e
-	// Tell every target to start consuming. Duplicates are harmless.
+	// Tell every target to start consuming. Duplicates are harmless. One
+	// that cannot be told now (its inbox unwritable for a moment) is told
+	// again with those that have not started (check), and dropped like
+	// them if it never starts: it must not fail the others.
 	for _, d := range s.active() {
 		if err := s.notify(ctx, d); err != nil {
-			return err
+			s.log.Warn("notify failed; asking again later", "target", d, "err", err)
+			s.status.note("could not ask %s to start yet: %v", d, err)
 		}
 	}
 	s.lastNotify = time.Now()
@@ -407,6 +415,9 @@ func (s *sender) check(ctx context.Context, force bool) error {
 	for _, d := range j.Detached {
 		s.detached[d.Node] = true
 	}
+	if len(s.active()) == 0 {
+		return errNoTargets
+	}
 	renotify := time.Since(s.lastNotify) > renotifyEvery
 	for _, d := range s.active() {
 		st := roleState(j, api.RoleTarget, d)
@@ -437,6 +448,9 @@ func (s *sender) check(ctx context.Context, force bool) error {
 	}
 	return nil
 }
+
+// errNoTargets: every target was detached; the source is done.
+var errNoTargets = errors.New("no targets left")
 
 // renotifyEvery is how often a target that has not started is notified
 // again.
@@ -543,6 +557,17 @@ func (s *sender) detachLaggards(ctx context.Context, total int) error {
 		}
 	}
 	active := s.active()
+	if len(active) == 1 {
+		// The last target is not dropped for being slow, but one that has
+		// been offline for detach_after is: the job would hold this node's
+		// job slot until it came back (the job ends partial; catch it up
+		// later).
+		d := active[0]
+		if idle := time.Since(s.progress[d]); !s.online[d] && idle > s.e.cfg.Transfer.DetachAfter {
+			return s.detach(ctx, d, fmt.Sprintf("offline for %s", idle.Round(time.Second)))
+		}
+		return nil
+	}
 	if len(active) < 2 {
 		return nil
 	}
@@ -584,7 +609,7 @@ func (s *sender) detachLaggards(ctx context.Context, total int) error {
 }
 
 func (s *sender) detach(ctx context.Context, node, reason string) error {
-	d := api.Detached{Node: node, Reason: reason, Chunks: s.acks[node], At: time.Now().UTC()}
+	d := api.Detached{Node: node, Reason: reason, Chunks: s.acks[node], At: s.e.now()}
 	if err := s.e.st.Detach(ctx, s.job.ID, d); err != nil {
 		return err
 	}

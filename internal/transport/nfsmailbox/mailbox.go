@@ -68,6 +68,25 @@ type Mailbox struct {
 	refreshedAt map[string]time.Time
 	refreshSeq  atomic.Uint64
 	openedUp    sync.Once
+	// offset is the share's clock minus this host's (ns), from mtimes the
+	// NFS server set (see Now).
+	offset atomic.Int64
+	// registered: this mailbox is a node's (Register was called), so it has
+	// its own folders on the share. A client that only looks (a CLI
+	// command without a running node) creates none of them.
+	registered atomic.Bool
+}
+
+// Now is the current time by the share's clock: job IDs and times made
+// with it sort right whatever this host's clock says. It is measured when
+// the share is opened and on every heartbeat.
+func (m *Mailbox) Now() time.Time { return time.Now().Add(time.Duration(m.offset.Load())) }
+
+// measureOffset records the server clock, as an mtime the server just set
+// (st), against the local time around the write.
+func (m *Mailbox) measureOffset(before time.Time, server time.Time) {
+	local := before.Add(time.Since(before) / 2)
+	m.offset.Store(int64(server.Sub(local)))
 }
 
 // refreshEvery throttles directory refreshes per directory.
@@ -135,6 +154,10 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 	if err := m.checkProtocol(); err != nil {
 		return nil, err
 	}
+	before := time.Now()
+	if now, err := m.serverNow(); err == nil {
+		m.measureOffset(before, now)
+	}
 	return m, nil
 }
 
@@ -166,12 +189,12 @@ func (m *Mailbox) Self() string { return m.self }
 // share heals instead of failing until every node restarts. It never
 // recreates a job's directories: a pruned job stays gone.
 func (m *Mailbox) layout() error {
-	for _, d := range []string{
-		"tmp", "nodes", "inbox", "reply",
-		m.inbox(m.self, "new"), m.inbox(m.self, "cur"), m.inbox(m.self, "failed"),
-		filepath.Join("reply", m.self),
-		filepath.Join("nodes", m.self),
-	} {
+	dirs := []string{"tmp", "nodes", "inbox", "reply"}
+	if m.registered.Load() {
+		dirs = append(dirs, m.inbox(m.self, "new"), m.inbox(m.self, "cur"), m.inbox(m.self, "failed"),
+			filepath.Join("reply", m.self), filepath.Join("nodes", m.self))
+	}
+	for _, d := range dirs {
 		if err := mkdir(m.path(d)); err != nil {
 			return err
 		}
@@ -212,6 +235,10 @@ func (m *Mailbox) Register(_ context.Context, info api.NodeInfo) error {
 	if err != nil {
 		return err
 	}
+	m.registered.Store(true)
+	if err := m.layout(); err != nil {
+		return err
+	}
 	return m.write(m.path("nodes", m.self, "info.json"), data)
 }
 
@@ -226,14 +253,48 @@ func (m *Mailbox) Heartbeat(_ context.Context, token string) (string, error) {
 		}
 	}
 	// Creating and writing a new file lets the NFS server stamp the mtime.
+	before := time.Now()
 	if err := m.write(p, []byte(token+"\n")); err != nil {
 		return other, err
 	}
-	// The entry may have been removed under us; the caller registers again.
-	if ok, err := m.listed(m.path("nodes", m.self), "info.json"); err == nil && !ok {
+	if fi, err := os.Stat(p); err == nil {
+		m.measureOffset(before, fi.ModTime())
+	}
+	// The entry may have been removed or damaged under us (readers skip an
+	// entry they cannot parse, so the node would be invisible): the caller
+	// registers again.
+	ok, err := m.listed(m.path("nodes", m.self), "info.json")
+	if err == nil && !ok {
 		return other, transport.ErrNotRegistered
 	}
+	if err == nil {
+		var info api.NodeInfo
+		if data, err := os.ReadFile(m.path("nodes", m.self, "info.json")); err == nil && (json.Unmarshal(data, &info) != nil || info.ID != m.self) {
+			return other, transport.ErrNotRegistered
+		}
+	}
 	return other, nil
+}
+
+// StaleEntry reports whether node has a registry folder that Nodes leaves
+// out (its info.json is missing or cannot be read) and how long ago it
+// last heartbeat (-1: never).
+func (m *Mailbox) StaleEntry(node string) (bool, time.Duration) {
+	if !config.ValidID(node) {
+		return false, 0
+	}
+	m.fresh(m.path("nodes"))
+	if _, err := os.Stat(m.path("nodes", node)); err != nil {
+		return false, 0
+	}
+	now, err := m.serverNow()
+	if err != nil {
+		return false, 0
+	}
+	if fi, err := os.Stat(m.path("nodes", node, "heartbeat")); err == nil {
+		return true, now.Sub(fi.ModTime())
+	}
+	return true, -1
 }
 
 // serverNow returns the current time according to the share's clock.
@@ -349,7 +410,12 @@ func (m *Mailbox) Send(_ context.Context, msg *transport.Message) error {
 
 func (m *Mailbox) AwaitReplies(ctx context.Context, reqID string, fn func(*transport.Reply) error) error {
 	dir := m.path("reply", m.self, reqID)
-	defer os.RemoveAll(dir)
+	defer func() {
+		os.RemoveAll(dir)
+		if !m.registered.Load() {
+			os.Remove(filepath.Dir(dir)) // a visitor leaves nothing (only if empty)
+		}
+	}()
 	t := time.NewTicker(m.opts.Poll)
 	defer t.Stop()
 	for seq := 0; ; {
@@ -554,6 +620,9 @@ func (m *Mailbox) Prune(_ context.Context, maxAge time.Duration) error {
 		m.path("reply", m.self), // abandoned reply dirs (requester crashed)
 	} {
 		des, err := os.ReadDir(d)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue // not a registered node here (or not yet)
+		}
 		if err != nil {
 			errs = append(errs, err)
 			continue

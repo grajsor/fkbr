@@ -16,7 +16,26 @@ import (
 )
 
 // Set is a parsed list of patterns. A nil *Set matches nothing.
-type Set struct{ pats []pattern }
+type Set struct {
+	pats []pattern
+	// key, if set, is applied to names before matching (see WithKey).
+	key func(string) string
+}
+
+// WithKey returns s matching names as key(name) against patterns made with
+// key: a case-insensitive filesystem holds CACHE where the pattern says
+// cache, and to it they are one name.
+func (s *Set) WithKey(key func(string) string) *Set {
+	if s == nil {
+		return nil
+	}
+	c := &Set{key: key}
+	for _, p := range s.pats {
+		p.glob = key(p.glob)
+		c.pats = append(c.pats, p)
+	}
+	return c
+}
 
 type pattern struct {
 	glob     string
@@ -60,6 +79,9 @@ func New(patterns []string) (*Set, error) {
 func (s *Set) Match(rel string, dir bool) bool {
 	if s == nil || rel == "." || rel == "" {
 		return false
+	}
+	if s.key != nil {
+		rel = s.key(rel)
 	}
 	base := path.Base(rel)
 	for _, p := range s.pats {

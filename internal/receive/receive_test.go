@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -391,5 +392,120 @@ func TestUnplaceableNameRefused(t *testing.T) {
 	}
 	if res.Errors != 1 || len(res.Problems) != 1 || !strings.Contains(res.Problems[0], "big.bin") {
 		t.Errorf("want one error for big.bin: %+v", res)
+	}
+}
+
+// An mtime the filesystem cannot store (here 1900: ext4 stops at
+// 1901-12-13, XFS without bigtime at 1901 and 2038) is clamped by the
+// kernel without an error; the commit says so.
+func TestMtimeNotStoredNoted(t *testing.T) {
+	_, dstDir, _, dst := setup(t)
+	if lo, hi := localfs.MtimeRange(dstDir); lo == 0 && hi == 0 {
+		t.Skip("this filesystem stores 1900 and 2100")
+	}
+	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC).UnixNano()
+	now := time.Now().UnixNano()
+	for name, m := range map[string]int64{"old": old, "new": now} {
+		h := &bundle.Header{Name: name, Entry: api.Entry{Type: api.TypeFile, Size: 1, Mode: 0o644, MtimeNs: m, UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}, Length: 1}
+		if err := r.Apply(h, strings.NewReader("x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Problems) != 1 || !strings.Contains(res.Problems[0], "mtime not stored on 1 files") || !strings.Contains(res.Problems[0], "old: 1900-01-01") {
+		t.Errorf("want one note about old: %q", res.Problems)
+	}
+}
+
+// FAT and exFAT store "dir." as "dir" (and vfat "f." as "f") without an
+// error: such entries are refused, not merged with a real "dir".
+func TestTrailingDotStrippedRefused(t *testing.T) {
+	strip := func(name string) string { return strings.TrimRight(name, ". ") }
+	origMk, origOpen := mkdirStaged, openStaged
+	mkdirStaged = func(r *os.Root, name string, perm fs.FileMode) error {
+		return origMk(r, path.Join(path.Dir(name), strip(path.Base(name))), perm)
+	}
+	openStaged = func(d *os.Root, name string, flag int, perm fs.FileMode) (*os.File, error) {
+		return origOpen(d, strip(name), flag, perm)
+	}
+	t.Cleanup(func() { mkdirStaged, openStaged = origMk, origOpen })
+	_, dstDir, _, dst := setup(t)
+	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	me := func(typ api.EntryType, size int64) api.Entry {
+		return api.Entry{Type: typ, Size: size, Mode: 0o755, MtimeNs: 1e18, UID: uint32(os.Getuid()), GID: uint32(os.Getgid())}
+	}
+	for _, it := range []struct {
+		name string
+		typ  api.EntryType
+	}{{"dir.", api.TypeDir}, {"dir./in", api.TypeFile}, {"f.", api.TypeFile}, {"ok", api.TypeFile}} {
+		h := &bundle.Header{Name: it.name, Entry: me(it.typ, 0)}
+		if it.typ == api.TypeFile {
+			h.Entry.Size, h.Length = 1, 1
+		}
+		if err := r.Apply(h, strings.NewReader("x")); err != nil {
+			t.Fatalf("%s: %v", it.name, err)
+		}
+	}
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"dir", "f"} {
+		if _, err := os.Lstat(filepath.Join(dstDir, p)); !os.IsNotExist(err) {
+			t.Errorf("%s: installed under the altered name (%v)", p, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "ok")); err != nil {
+		t.Errorf("ok: %v", err)
+	}
+	if res.Errors != 2 {
+		t.Errorf("want dir. and f. refused: %+v", res)
+	}
+}
+
+// exFAT answers EPERM when asked to remove a name it cannot hold (one that
+// is not valid UTF-8): refusing it must not fail the whole job.
+func TestRefusedNameRemovalFails(t *testing.T) {
+	origOpen, origRm := openStaged, removeStaged
+	openStaged = func(d *os.Root, name string, flag int, perm fs.FileMode) (*os.File, error) {
+		if strings.HasPrefix(name, "bad") { // what exFAT really answers
+			return nil, &fs.PathError{Op: "openat", Path: name, Err: syscall.EPERM}
+		}
+		return origOpen(d, name, flag, perm)
+	}
+	removeStaged = func(r *os.Root, name string) error {
+		if strings.Contains(name, "bad") {
+			return &fs.PathError{Op: "removeat", Path: name, Err: syscall.EPERM}
+		}
+		return origRm(r, name)
+	}
+	t.Cleanup(func() { openStaged, removeStaged = origOpen, origRm })
+	_, dstDir, _, dst := setup(t)
+	r, err := New(dst, "job1", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, n := range []string{"good1", "bad\xe9", "good2"} {
+		h := &bundle.Header{Name: n, Entry: api.Entry{Type: api.TypeFile, Size: 1, Mode: 0o644, MtimeNs: 1e18}, Length: 1}
+		if err := r.Apply(h, strings.NewReader("x")); err != nil {
+			t.Fatalf("%q: %v", n, err)
+		}
+	}
+	res, err := r.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dstDir, "good2")); err != nil || res.Errors != 1 {
+		t.Errorf("good2: %v; %+v", err, res)
 	}
 }

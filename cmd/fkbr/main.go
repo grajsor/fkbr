@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"fkbr/internal/api"
 	"fkbr/internal/api/local"
@@ -417,7 +419,12 @@ func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger, leave 
 		if aerr := <-apiErr; err == nil {
 			err = aerr
 		}
-		os.Remove(cfg.Socket)
+		// A worker started while this one stopped may listen there already.
+		if sc, err := net.DialTimeout("unix", cfg.Socket, 200*time.Millisecond); err == nil {
+			sc.Close()
+		} else {
+			os.Remove(cfg.Socket)
+		}
 		// Leave nothing behind locally once our lock is released; never
 		// touch a lock another process holds.
 		if !errors.Is(err, engine.ErrWorkerRunning) {

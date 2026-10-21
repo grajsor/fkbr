@@ -23,6 +23,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 	"unsafe"
 
 	"fkbr/internal/api"
@@ -49,6 +50,9 @@ type Options struct {
 	// Hide is the share's path inside the root, if it is there; nothing is
 	// written into it (see config.Root.Hide).
 	Hide string
+	// NoModes: the destination filesystem has no permission bits (FAT,
+	// SMB); modes are not set (vfat refuses some, e.g. sticky folders).
+	NoModes bool
 }
 
 // Result summarises a commit.
@@ -81,6 +85,10 @@ type Receiver struct {
 	ownerFails, setidLost int64
 	// dirsNotChowned counts directories left owned by us on purpose.
 	dirsNotChowned int64
+	// mtimeLost counts files whose mtime the filesystem did not store
+	// (beyond its range: XFS without bigtime stops at 2038), one example.
+	mtimeLost    int64
+	mtimeExample string
 	// dir is the staging directory files were last written to, kept open:
 	// files arrive grouped by directory, and a name relative to an open
 	// directory resolves in one step instead of one per path component.
@@ -208,6 +216,11 @@ func (r *Receiver) Apply(h *bundle.Header, data io.Reader) error {
 		return nil
 	}
 	err := r.apply(h, data)
+	// exFAT answers EPERM to every call with a name that is not valid
+	// UTF-8 (create, stat, unlink): it cannot hold that name.
+	if err != nil && errors.Is(err, syscall.EPERM) && !utf8.ValidString(path.Base(h.Name)) {
+		err = entryError{err}
+	}
 	if err != nil && isEntryError(err) {
 		return r.refuse(h.Name, err)
 	}
@@ -260,8 +273,50 @@ func (r *Receiver) refuse(name string, cause error) error {
 	if errors.Is(cause, errClashed) {
 		return nil
 	}
-	return r.root.RemoveAll(path.Join(r.tree, name))
+	p := path.Join(r.tree, name)
+	if errors.Is(cause, errNameAltered) {
+		// What was created is the shortened name; it is ours (a staged
+		// entry of that name would have been a clash already).
+		if base := strings.TrimRight(path.Base(p), ". "); base != "" { // never the folder itself ("...")
+			if err := removeStaged(r.root, path.Join(path.Dir(p), base)); err != nil {
+				return err
+			}
+		}
+	}
+	if err := removeStaged(r.root, p); err != nil {
+		// exFAT answers EPERM for a name it cannot hold: then nothing by
+		// that name was staged, and the entry is just refused.
+		if _, lerr := r.root.Lstat(p); lerr != nil {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
+
+// Staging operations tests replace to act like FAT and exFAT.
+var (
+	removeStaged = (*os.Root).RemoveAll
+	mkdirStaged  = (*os.Root).MkdirAll
+)
+
+// altered reports whether creating name in dir (in staging) stored another
+// name: FAT and exFAT drop a trailing dot (FAT also trailing spaces)
+// without an error, so "dir." would land as "dir", merged with a real
+// "dir". Only names ending in a dot or space are checked (a listing per
+// such name).
+func (r *Receiver) altered(dir, name string) bool {
+	if !strings.HasSuffix(name, ".") && !strings.HasSuffix(name, " ") {
+		return false
+	}
+	return !r.hasName(dir, name)
+}
+
+// errNameAltered: the filesystem stored the name without its trailing dots
+// or spaces.
+var errNameAltered = errors.New("this filesystem stores the name without its trailing dot or space")
+
+func errAltered(name string) error { return entryError{fmt.Errorf("%s: %w", name, errNameAltered)} }
 
 type refusal struct {
 	Name string `json:"name"`
@@ -319,7 +374,13 @@ func (r *Receiver) apply(h *bundle.Header, data io.Reader) error {
 		if _, err := d.Lstat(path.Base(p)); err == nil && h.Offset == 0 && !r.hasName(path.Dir(p), path.Base(p)) {
 			return errClash(h.Name)
 		}
-		return r.applyFile(d, path.Base(p), h, data)
+		if err := r.applyFile(d, path.Base(p), h, data); err != nil {
+			return err
+		}
+		if h.Offset == 0 && r.altered(path.Dir(p), path.Base(p)) {
+			return errAltered(h.Name) // refuse removes what it became
+		}
+		return nil
 	}
 	if h.Name != "." {
 		if err := r.root.MkdirAll(path.Dir(p), 0o700); err != nil {
@@ -331,10 +392,13 @@ func (r *Receiver) apply(h *bundle.Header, data io.Reader) error {
 		if _, err := r.root.Lstat(p); err == nil && h.Name != "." && !r.hasName(path.Dir(p), path.Base(p)) {
 			return errClash(h.Name)
 		}
-		if err := r.root.MkdirAll(p, 0o700); err != nil {
+		if err := mkdirStaged(r.root, p, 0o700); err != nil {
 			return err
 		}
-		line, _ := json.Marshal(dirRecord{h.Name, h.Entry})
+		if h.Name != "." && r.altered(path.Dir(p), path.Base(p)) {
+			return errAltered(h.Name)
+		}
+		line, _ := json.Marshal(dirRecord{api.EncodeName(h.Name), h.Entry})
 		return r.appendLine("dirs", line)
 	case api.TypeSymlink:
 		if err := r.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -364,7 +428,7 @@ func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.
 	if errors.Is(err, fs.ErrPermission) {
 		// Replay of a file already completed and given to its owner: we
 		// may not write to it any more, but the staging dir is ours.
-		if err = d.Remove(name); err == nil {
+		if rerr := d.Remove(name); rerr == nil {
 			f, err = openStaged(d, name, os.O_WRONLY|os.O_CREATE, 0o600)
 		}
 	}
@@ -386,7 +450,7 @@ func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.
 		}
 		// Through the open file: each path-based call would resolve the
 		// whole staging path again, one component at a time.
-		if err := r.setFileMeta(f, h.Entry); err != nil {
+		if err := r.setFileMeta(f, h.Name, h.Entry); err != nil {
 			f.Close()
 			return err
 		}
@@ -396,13 +460,22 @@ func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.
 
 // setFileMeta is setMeta for a regular file that is open for writing, in
 // the same order: mode, mtime, owner, setuid/setgid again after chown.
-func (r *Receiver) setFileMeta(f *os.File, e api.Entry) error {
+func (r *Receiver) setFileMeta(f *os.File, name string, e api.Entry) error {
 	m := r.mode(e.Mode)
-	if err := f.Chmod(m); err != nil {
+	if err := r.chmod(func() error { return f.Chmod(m) }); err != nil {
 		return err
 	}
 	if err := futimes(f, e.MtimeNs); err != nil {
 		return err
+	}
+	if fi, err := f.Stat(); err == nil {
+		// More than FAT's 2-second steps: clamped or wrapped.
+		if d := fi.ModTime().UnixNano() - e.MtimeNs; d > 2e9 || d < -2e9 {
+			if r.mtimeLost++; r.mtimeExample == "" {
+				r.mtimeExample = fmt.Sprintf("%s: %s stored as %s", name,
+					time.Unix(0, e.MtimeNs).UTC().Format(time.DateOnly), fi.ModTime().UTC().Format(time.DateOnly))
+			}
+		}
 	}
 	ok := false
 	if r.opts.Chown {
@@ -479,7 +552,7 @@ func (r *Receiver) setDirMeta(p string, e api.Entry) error {
 	if r.opts.ChownDirs || !r.opts.Chown {
 		return r.setMeta(p, e)
 	}
-	if err := r.root.Chmod(p, r.mode(e.Mode)); err != nil {
+	if err := r.chmod(func() error { return r.root.Chmod(p, r.mode(e.Mode)) }); err != nil {
 		return err
 	}
 	t := time.Unix(0, e.MtimeNs)
@@ -499,7 +572,7 @@ func (r *Receiver) setDirMeta(p string, e api.Entry) error {
 // which needs root or CAP_FOWNER.
 func (r *Receiver) setMeta(p string, e api.Entry) error {
 	m := r.mode(e.Mode)
-	if err := r.root.Chmod(p, m); err != nil {
+	if err := r.chmod(func() error { return r.root.Chmod(p, m) }); err != nil {
 		return err
 	}
 	t := time.Unix(0, e.MtimeNs)
@@ -512,6 +585,14 @@ func (r *Receiver) setMeta(p string, e api.Entry) error {
 		}
 	}
 	return nil
+}
+
+// chmod runs a mode change, unless the filesystem has no modes to set.
+func (r *Receiver) chmod(do func() error) error {
+	if r.opts.NoModes {
+		return nil
+	}
+	return do()
 }
 
 // mode converts Unix mode bits to a FileMode for Chmod, stripping
@@ -575,6 +656,9 @@ func (r *Receiver) Commit() (*Result, error) {
 	}
 	if r.setidLost > 0 {
 		res.problem("setuid/setgid bits not restored on %d files (needs root or CAP_FOWNER)", r.setidLost)
+	}
+	if r.mtimeLost > 0 {
+		res.problem("mtime not stored on %d files: outside what this filesystem can hold (e.g. %s)", r.mtimeLost, r.mtimeExample)
 	}
 	if err := r.root.RemoveAll(r.base); err != nil {
 		return res, err
@@ -804,7 +888,7 @@ func (r *Receiver) applyDirMeta(res *Result, created map[string]bool) error {
 	for sc.Scan() {
 		var d dirRecord
 		if json.Unmarshal(sc.Bytes(), &d) == nil {
-			recs[d.Name] = d.Entry
+			recs[api.DecodeName(d.Name)] = d.Entry
 		}
 	}
 	if err := sc.Err(); err != nil {

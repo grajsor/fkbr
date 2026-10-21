@@ -74,3 +74,22 @@ func FuzzExclude(f *testing.F) {
 		}
 	})
 }
+
+func TestWithKey(t *testing.T) {
+	s, _ := New([]string{"cache/", "*.TMP", "Sub/x"})
+	f := s.WithKey(strings.ToLower)
+	for _, c := range []struct {
+		p   string
+		dir bool
+	}{{"CACHE", true}, {"a/Cache", true}, {"x.tmp", false}, {"SUB/X", false}} {
+		if !f.Match(c.p, c.dir) {
+			t.Errorf("%s not matched case-insensitively", c.p)
+		}
+		if s.Match(c.p, c.dir) && c.p != "x.tmp" {
+			t.Errorf("%s matched by the exact set", c.p)
+		}
+	}
+	if f.Match("CACHE", false) {
+		t.Error("cache/ is for folders only")
+	}
+}

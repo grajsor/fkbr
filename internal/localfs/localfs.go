@@ -13,10 +13,14 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
+	"unsafe"
 
 	"fkbr/internal/api"
 	"fkbr/internal/config"
+	"fkbr/internal/mountinfo"
 )
 
 // FS is what the engine needs from the local filesystem. Tests may fake it.
@@ -351,9 +355,7 @@ func ProbeDACOverride(dir string) bool {
 	if os.Geteuid() == 0 {
 		return true
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return false
-	}
+	defer probeDir(dir)()
 	d, err := os.MkdirTemp(dir, ".dac-probe-*")
 	if err != nil {
 		return false
@@ -379,9 +381,7 @@ func ProbeChown(dir string) bool {
 	if os.Geteuid() == 0 {
 		return true
 	}
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return false
-	}
+	defer probeDir(dir)()
 	f, err := os.CreateTemp(dir, ".chown-probe-*")
 	if err != nil {
 		return false
@@ -391,6 +391,19 @@ func ProbeChown(dir string) bool {
 	defer os.Remove(name)
 	// Giving a file to root is never allowed without CAP_CHOWN.
 	return os.Lchown(filepath.Clean(name), 0, -1) == nil
+}
+
+// probeDir makes dir for a probe; the function it returns removes it again
+// if the probe created it (a CLI command that runs no node leaves no state
+// dir behind).
+func probeDir(dir string) func() {
+	if _, err := os.Stat(dir); err == nil {
+		return func() {}
+	}
+	if os.MkdirAll(dir, 0o700) != nil {
+		return func() {}
+	}
+	return func() { os.Remove(dir) }
 }
 
 // Limits says what the filesystem holding path cannot store: mtimes only
@@ -408,4 +421,105 @@ func Limits(path string) (mtimeStep int64, noModes bool) {
 		return 0, true
 	}
 	return 0, false
+}
+
+// Probe times: far outside 1901..2038 (32-bit seconds), inside 64-bit ones.
+var (
+	probeLate  = time.Date(2100, 1, 1, 0, 0, 0, 0, time.UTC)
+	probeEarly = time.Date(1900, 1, 1, 0, 0, 0, 0, time.UTC)
+)
+
+var mtimeRanges sync.Map // st_dev -> [2]int64
+
+// MtimeRange says which mtimes the filesystem holding dir can store, as
+// the values it clamps to (ns; 0: no limit found). XFS without bigtime,
+// ext4 with 128-byte inodes and others stop at 2038-01-19 and 1901-12-13
+// and store anything beyond as the limit, silently. It probes once per
+// filesystem with a temporary file in dir, so dir must be writable.
+func MtimeRange(dir string) (lo, hi int64) {
+	var st syscall.Stat_t
+	if syscall.Stat(dir, &st) != nil {
+		return 0, 0
+	}
+	if v, ok := mtimeRanges.Load(st.Dev); ok {
+		r := v.([2]int64)
+		return r[0], r[1]
+	}
+	f, err := os.CreateTemp(dir, ".fkbr-mtime-probe-*")
+	if err != nil {
+		return 0, 0
+	}
+	name := f.Name()
+	f.Close()
+	defer os.Remove(name)
+	stored := func(t time.Time) (int64, bool) {
+		if os.Chtimes(name, t, t) != nil {
+			return 0, false
+		}
+		fi, err := os.Stat(name)
+		if err != nil {
+			return 0, false
+		}
+		return fi.ModTime().UnixNano(), true
+	}
+	h, ok1 := stored(probeLate)
+	l, ok2 := stored(probeEarly)
+	if !ok1 || !ok2 {
+		return 0, 0
+	}
+	if h == probeLate.UnixNano() {
+		h = 0
+	}
+	if l == probeEarly.UnixNano() {
+		l = 0
+	}
+	mtimeRanges.Store(st.Dev, [2]int64{l, h})
+	return l, h
+}
+
+// Names says which names the filesystem holding path refuses or folds
+// together (see api.NameRules): vfat, exfat, or an ext4 folder with
+// casefolding on.
+func Names(path string) api.NameRules {
+	var st syscall.Statfs_t
+	if syscall.Statfs(path, &st) != nil {
+		return api.NameRules{}
+	}
+	switch uint32(st.Type) {
+	case 0x4d44:
+		n := api.NameRules{FS: "vfat", Fold: true, NoSymlinks: true}
+		if m := mountinfo.Of(path); m != nil {
+			_, utf := m.Opts["utf8"]
+			switch cs := m.Opts["iocharset"]; {
+			case utf || cs == "utf8":
+				n.UTF8 = true
+			case cs == "ascii":
+				n.ASCII = true
+			}
+		}
+		return n
+	case 0x2011bab0:
+		return api.NameRules{FS: "exfat", Fold: true, UTF8: true, NoSymlinks: true}
+	case 0xef53:
+		if casefolded(path) {
+			return api.NameRules{FS: "casefold", Fold: true, Form: true}
+		}
+	}
+	return api.NameRules{}
+}
+
+// casefolded reports whether directory path has ext4's casefold flag
+// (chattr +F), which its new subdirectories inherit.
+func casefolded(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	const fsIocGetflags, fsCasefoldFl = 0x80086601, 0x40000000
+	var flags int32
+	if _, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), fsIocGetflags, uintptr(unsafe.Pointer(&flags))); errno != 0 {
+		return false
+	}
+	return flags&fsCasefoldFl != 0
 }

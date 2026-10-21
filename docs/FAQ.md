@@ -94,7 +94,7 @@ Run the same version on every machine. If the versions do not fit together, fkbr
 Start one with `-node othername`.
 
 **"already running on this host"?**
-Another user (or `sudo`) already runs fkbr here under that name. Use that one, or start yours with `-node othername`.
+Another user (or `sudo`) already runs fkbr here under that name. Use that one, or start yours with `-node othername`. Started right after stopping the old one? Then it waits until the old one has stopped.
 
 **Two copies into the same folder at once?**
 Safe. Every file arrives whole. If both copies have the same file, you get one of them; which one is not defined.
@@ -112,7 +112,7 @@ The name holds a character your terminal could act on, like an escape or a line 
 Click to move, double-click to open, right-click to mark, wheel or scrollbar to scroll. In a dialog, click Enter, Esc or an option. To select text, hold Shift (or start with `-mouse=false`).
 
 **Copy to a USB stick (FAT)?**
-Works. Names FAT cannot hold (`a:b`, or `README` next to `readme`) are skipped and reported; the rest arrives. Sync knows FAT keeps times in 2-second steps and has no permissions.
+Works, also exFAT. Names the stick cannot hold (`a:b`, `name.`, symlinks, or `README` next to `readme`) are skipped and reported; the rest arrives. Sync knows this, so it does not try them again, and an exclude like `cache/` also keeps `CACHE` there.
 
 **Different users on each machine?**
 That works. fkbr opens its folders on the share to everyone, so keep the share where only your machines can reach it.
@@ -125,7 +125,7 @@ Running machines put back what they need within seconds. Copies that were runnin
 
 **Tidy up right now?**
 `./fkbr /mnt/nfs/somedir prune -keep 0`
-Removes everything finished. Copies still running are left alone.
+Removes everything finished (what ended in the last minute stays a little longer). Copies still running are left alone.
 
 **Uninstall?**
 Delete the file, `/mnt/nfs/somedir`, and fkbr's files in `/tmp` (`/tmp/fkbr*`).

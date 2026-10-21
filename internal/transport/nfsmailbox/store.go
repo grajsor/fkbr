@@ -23,6 +23,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"fkbr/internal/api"
@@ -175,7 +176,7 @@ func (m *Mailbox) SetComplete(_ context.Context, id string, chunks int) error {
 
 type chunkWriter struct {
 	m    *Mailbox
-	f    *os.File
+	f    *syncedFile
 	dir  string
 	seq  int
 	done bool
@@ -193,7 +194,7 @@ func (m *Mailbox) CreateChunk(_ context.Context, id string, seq int) (transport.
 	if err != nil {
 		return nil, err
 	}
-	return &chunkWriter{m: m, f: f, dir: dir, seq: seq}, nil
+	return &chunkWriter{m: m, f: newSyncedFile(f), dir: dir, seq: seq}, nil
 }
 
 func (w *chunkWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
@@ -308,6 +309,60 @@ func (m *Mailbox) RemoveJobData(_ context.Context, id string) error {
 // unstartedJobAge is when a job record that no node ever started is pruned.
 const unstartedJobAge = 24 * time.Hour
 
+// Floors under any keep (prune -keep 0 included): a job that just ended
+// stays a minute, so the CLI that follows it reads how it ended, and
+// plans, scans and job folders without a record stay ten minutes, so a
+// sync being planned or applied keeps them.
+var (
+	minFinishedAge = time.Minute
+	minBlobAge     = 10 * time.Minute
+)
+
+// jobFinished reports whether nothing will change in j any more: every
+// participant ended, or is a detached target or a forgotten node.
+func jobFinished(j *api.Job, registered []string) bool {
+	if len(j.Participants) == 0 {
+		return false
+	}
+	for _, p := range j.Participants {
+		stale := (p.Role == api.RoleTarget && j.IsDetached(p.Node)) || !slices.Contains(registered, p.Node)
+		if !p.State.Terminal() && !stale {
+			return false
+		}
+	}
+	return true
+}
+
+// newestEntry is the latest mtime of dir's entries. Not of dir itself: the
+// refresh trick (Options.Refresh) bumps a directory's mtime on every read.
+func newestEntry(dir string) time.Time {
+	var newest time.Time
+	des, _ := os.ReadDir(dir)
+	for _, de := range des {
+		if strings.HasPrefix(de.Name(), ".r-") {
+			continue
+		}
+		if fi, err := de.Info(); err == nil && fi.ModTime().After(newest) {
+			newest = fi.ModTime()
+		}
+	}
+	return newest
+}
+
+// removeRacing is os.RemoveAll for a share directory others may still
+// write into (a status landing as a job is pruned): it tries again, and
+// what is left the next prune removes (see the orphan rule in PruneJobs).
+func removeRacing(dir string) error {
+	err := os.RemoveAll(dir)
+	if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+		time.Sleep(100 * time.Millisecond)
+		if err = os.RemoveAll(dir); errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+			return nil
+		}
+	}
+	return err
+}
+
 func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	des, err := os.ReadDir(m.path("jobs"))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -328,7 +383,16 @@ func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	}
 	var errs []error
 	for _, de := range des {
-		fi, err := os.Stat(m.path("jobs", de.Name(), "job.json"))
+		dir := m.path("jobs", de.Name())
+		fi, err := os.Stat(filepath.Join(dir, "job.json"))
+		if errors.Is(err, fs.ErrNotExist) {
+			// A folder without its record: half pruned (a status written
+			// as it went), or recreated by a late writer. Nobody reads it.
+			if validJobID(de.Name()) == nil && now.Sub(newestEntry(dir)) > max(maxAge, minBlobAge) {
+				errs = append(errs, removeRacing(dir))
+			}
+			continue
+		}
 		if err != nil {
 			continue
 		}
@@ -343,17 +407,12 @@ func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 		// A job nobody ever picked up has no statuses; give it a day.
 		if len(j.Participants) == 0 {
 			if age > unstartedJobAge {
-				errs = append(errs, os.RemoveAll(m.path("jobs", de.Name())))
+				errs = append(errs, removeRacing(dir))
 			}
 			continue
 		}
-		finished := true
-		for _, p := range j.Participants {
-			stale := (p.Role == api.RoleTarget && j.IsDetached(p.Node)) || !slices.Contains(registered, p.Node)
-			finished = finished && (p.State.Terminal() || stale)
-		}
-		if finished {
-			errs = append(errs, os.RemoveAll(m.path("jobs", de.Name())))
+		if jobFinished(j, registered) && now.Sub(newestEntry(filepath.Join(dir, "status"))) >= minFinishedAge {
+			errs = append(errs, removeRacing(dir))
 		}
 	}
 	return errors.Join(errs...)

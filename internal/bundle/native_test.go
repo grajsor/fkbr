@@ -77,7 +77,7 @@ func TestNativeRejectsHostileChunks(t *testing.T) {
 		"prefix too long":     nativeChunk(entry(kindDir, 0, "d", 0o755, 0, 0), entry(kindFile, 9, "x", 0o644, 0, 0, 0, 0, 0), end),
 		"NUL in name":         nativeChunk(entry(kindFile, 0, "a\x00b", 0o644, 0, 0, 0, 0, 0), end),
 		"empty name":          nativeChunk(entry(kindFile, 0, "", 0o644, 0, 0, 0, 0, 0), end),
-		"name too long":       nativeChunk(entry(kindFile, 0, strings.Repeat("x", maxNameLen+1), 0o644, 0, 0, 0, 0, 0), end),
+		"name too long":       nativeChunk(entry(kindFile, 0, strings.Repeat("x", MaxNameLen+1), 0o644, 0, 0, 0, 0, 0), end),
 		"mode out of range":   nativeChunk(entry(kindFile, 0, "f", 0o170777, 0, 0, 0, 0, 0), end),
 		"uid out of range":    nativeChunk(entry(kindFile, 0, "f", 0o644, 1<<33, 0, 0, 0, 0), end),
 		"offset past end":     nativeChunk(entry(kindFile, 0, "f", 0o644, 0, 0, 10, 11, 0), end),

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,6 +141,18 @@ func (e *Engine) Forget(ctx context.Context, node string) error {
 		}
 		return e.tr.Unregister(ctx, node)
 	}
+	// An entry nobody can read (damaged info.json) is not listed: forget
+	// it too, once its heartbeat is stale.
+	if s, ok := e.tr.(interface {
+		StaleEntry(string) (bool, time.Duration)
+	}); ok {
+		if exists, age := s.StaleEntry(node); exists {
+			if age >= 0 && age < e.cfg.OfflineAfter {
+				return fmt.Errorf("%w: %s heartbeats (its registry entry cannot be read); stop it first", api.ErrNotAllowed, node)
+			}
+			return e.tr.Unregister(ctx, node)
+		}
+	}
 	return fmt.Errorf("%w: %q", api.ErrUnknownNode, node)
 }
 
@@ -230,18 +243,28 @@ func (e *Engine) requireOnline(ctx context.Context, node string) error {
 	return fmt.Errorf("%w: %q", api.ErrUnknownNode, node)
 }
 
+// now is the share's clock where the transport knows it (a host's own
+// clock may be off: IDs and job times must sort with everyone else's).
+func (e *Engine) now() time.Time {
+	if c, ok := e.tr.(interface{ Now() time.Time }); ok {
+		return c.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
 func (e *Engine) newMessage(to, typ string, body any) (*transport.Message, error) {
 	b, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
+	now := e.now()
 	return &transport.Message{
 		Protocol: api.ProtocolVersion,
-		ID:       id.New(),
+		ID:       id.At(now),
 		Type:     typ,
 		From:     e.Self(),
 		To:       to,
-		Created:  time.Now().UTC(),
+		Created:  now,
 		Body:     b,
 	}, nil
 }
@@ -250,11 +273,18 @@ func (e *Engine) newMessage(to, typ string, body any) (*transport.Message, error
 // inbox until ctx is cancelled. Only one worker may run per node; a lock in
 // the local state dir enforces that.
 func (e *Engine) Run(ctx context.Context) error {
-	lock, err := lockWorker(e.cfg.StateDir)
+	lock, waitedFor, err := lockWorker(e.cfg.StateDir, e.log)
 	if err != nil {
 		return err
 	}
 	defer lock.release()
+	if waitedFor > 0 {
+		// It released the lock; let it exit before the registry check
+		// below takes its entry for a live second worker.
+		for i := 0; i < 50 && processAlive(waitedFor); i++ {
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 	ctx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	// Runs after the jobs below have paused, while the lock is still held,
@@ -337,6 +367,7 @@ func (e *Engine) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			e.log.Info("worker stopping", "node", e.Self())
+			lock.state("stopping") // a new worker waits for us (lockWorker)
 			stopped = true
 			return nil
 		case err := <-conflict:
@@ -391,7 +422,7 @@ func (e *Engine) heartbeat(ctx context.Context, done chan<- struct{}, conflict c
 		case <-t.C:
 			other, err := e.tr.Heartbeat(ctx, e.info.Instance)
 			if errors.Is(err, transport.ErrNotRegistered) {
-				e.log.Warn("this node's registry entry was removed; registering again")
+				e.log.Warn("this node's registry entry is missing or unreadable; registering again")
 				err = e.tr.Register(ctx, e.info)
 			}
 			if err != nil {
@@ -598,18 +629,68 @@ type workerLock struct {
 	lastTouch time.Time
 }
 
-func lockWorker(stateDir string) (*workerLock, error) {
+func lockWorker(stateDir string, log *slog.Logger) (l *workerLock, waitedFor int, err error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	l := &workerLock{path: filepath.Join(stateDir, "worker.lock"), lastTouch: time.Now()}
-	if err := l.take(); err != nil {
-		if errors.Is(err, ErrLockLost) {
-			return nil, fmt.Errorf("%w (lock %s)", ErrWorkerRunning, l.path)
+	l = &workerLock{path: filepath.Join(stateDir, "worker.lock"), lastTouch: time.Now()}
+	// A worker that is stopping (SIGTERM; it pauses its jobs, which can
+	// take a while) holds the lock a little longer: wait for it, so a
+	// restart right after a stop does not fail.
+	var deadline, nextLog time.Time
+	for {
+		err = l.take()
+		if !errors.Is(err, ErrLockLost) {
+			break
 		}
-		return nil, err
+		pid, stopping := lockHolder(l.path)
+		if !stopping {
+			return nil, 0, fmt.Errorf("%w (lock %s)", ErrWorkerRunning, l.path)
+		}
+		now := time.Now()
+		if deadline.IsZero() {
+			deadline = now.Add(stopWait)
+		}
+		if now.After(deadline) {
+			return nil, 0, fmt.Errorf("%w: it has been stopping for %s (pid %d; lock %s)", ErrWorkerRunning, stopWait, pid, l.path)
+		}
+		if now.After(nextLog) {
+			log.Info("waiting for the previous worker to stop", "pid", pid)
+			nextLog = now.Add(10 * time.Second)
+		}
+		waitedFor = pid
+		time.Sleep(200 * time.Millisecond)
 	}
-	return l, nil
+	if err != nil {
+		return nil, 0, err
+	}
+	return l, waitedFor, nil
+}
+
+// stopWait is how long a new worker waits for a stopping one.
+var stopWait = 2 * time.Minute
+
+// lockHolder reads the lock file: the holder's PID and whether it said it
+// is stopping (see workerLock.state).
+func lockHolder(path string) (pid int, stopping bool) {
+	b, _ := os.ReadFile(path)
+	f := strings.Fields(string(b))
+	if len(f) == 2 {
+		pid, _ = strconv.Atoi(f[1])
+		return pid, f[0] == "stopping"
+	}
+	return 0, false
+}
+
+// state writes "running <pid>" or "stopping <pid>" into the lock file.
+func (l *workerLock) state(s string) {
+	if len(l.files) == 0 {
+		return
+	}
+	f := l.files[len(l.files)-1]
+	if f.Truncate(0) == nil {
+		f.WriteAt([]byte(fmt.Sprintf("%s %d\n", s, os.Getpid())), 0)
+	}
 }
 
 // take opens the lock path and flocks it, failing with ErrLockLost if
@@ -623,12 +704,19 @@ func (l *workerLock) take() error {
 		f.Close()
 		return ErrLockLost
 	}
-	var st syscall.Stat_t
+	var st, now syscall.Stat_t
 	if err := syscall.Fstat(int(f.Fd()), &st); err != nil {
 		f.Close()
 		return err
 	}
+	// The worker we waited for may have removed the path before it let
+	// go: then this lock is on a deleted file. Take the path again.
+	if err := syscall.Stat(l.path, &now); err != nil || now.Ino != st.Ino {
+		f.Close()
+		return l.take()
+	}
 	l.files, l.ino = append(l.files, f), st.Ino
+	l.state("running")
 	return nil
 }
 

@@ -14,6 +14,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/bundle"
+	"fkbr/internal/localfs"
 	"fkbr/internal/product"
 	"fkbr/internal/receive"
 )
@@ -44,7 +45,9 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	if err != nil {
 		return status.finish(ctx, api.JobFailed, err)
 	}
+	_, noModes := localfs.Limits(e.dstPath(req.DstRoot, req.DstDir))
 	rcv, err := receive.New(root, id, req.DstDir, receive.Options{
+		NoModes:    noModes,
 		Conflict:   req.Conflict,
 		Chown:      e.info.ChownCapable,
 		ChownDirs:  e.info.ChownCapable && e.info.DACOverride,
@@ -126,6 +129,11 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 	ride := &rideOut{log: log}
 	srcGone := &goneWatch{e: e, node: src}
 	for {
+		// Staged chunks may keep coming; a stopping worker must not apply
+		// them all before it lets go (the job resumes on restart).
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		raw, err := e.st.ChunkMeta(ctx, src, id, next)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) && ride.retry(ctx, err) {
 			continue
@@ -240,12 +248,18 @@ func (e *Engine) readChunk(ctx context.Context, src, id string, meta *bundle.Chu
 	h := sha256.New()
 	cr := &countingReader{r: io.TeeReader(ra, h)}
 	applyErr := bundle.Read(cr, meta.Compressed, func(hd *bundle.Header, data io.Reader) error {
+		if err := ctx.Err(); err != nil {
+			return err // staging the chunk again on restart is harmless
+		}
 		status.st.Bytes += hd.Length
 		if hd.Entry.Type != api.TypeFile || hd.Last() {
 			status.st.Files++ // provisional; Commit sets the real counts
 		}
 		return rcv.Apply(hd, data)
 	})
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 	// Hash the whole stored chunk (including trailers, or the rest after a
 	// parse error, so corruption is reported as such).
 	if _, err := io.Copy(io.Discard, cr); err != nil {

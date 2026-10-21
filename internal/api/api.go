@@ -467,6 +467,9 @@ type SyncTarget struct {
 	Delete    int64  `json:"delete"`  // removals (mirror), collapsed to top-level
 	Unchanged int64  `json:"unchanged"`
 	Kept      int64  `json:"kept,omitempty"` // newer there, kept (KeepNewer)
+	// Refused: entries its filesystem cannot store (FAT names, case
+	// clashes), left out; Problems says which.
+	Refused int64 `json:"refused,omitempty"`
 	// OverLimit is set when Delete exceeds the plan's max deletes.
 	OverLimit bool `json:"over_limit,omitempty"`
 }

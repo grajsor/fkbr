@@ -40,6 +40,9 @@ type scanRequest struct {
 	Path     string   `json:"path"`
 	Checksum bool     `json:"checksum"`
 	Exclude  []string `json:"exclude,omitempty"`
+	// Target: the scan is of a destination, which may probe what its
+	// filesystem can store (it writes a temporary file).
+	Target bool `json:"target,omitempty"`
 }
 
 func snapshotBlob(planID, node string) string { return "scans/" + planID + "/" + node + ".snap" }
@@ -64,11 +67,20 @@ func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(i
 				base = r.Path
 			}
 			h.MtimeStep, h.NoModes = localfs.Limits(base)
+			if req.Target && r.Writable {
+				h.MtimeMin, h.MtimeMax = localfs.MtimeRange(base)
+			}
+			if n := localfs.Names(base); req.Target && n != (api.NameRules{}) {
+				h.Names = &n
+			}
 		}
 	}
 	ex, err := exclude.New(req.Exclude)
 	if err != nil {
 		return nil, err
+	}
+	if h.Names != nil && h.Names.Fold {
+		ex = ex.WithKey(h.Names.Key) // what is excluded here, whatever its case
 	}
 	// The folders above what is left out: a mirror must not delete them
 	// whole (they would take the excluded entries along).
@@ -126,6 +138,7 @@ func (e *Engine) serveScan(ctx context.Context, m *transport.Message) error {
 	if err := json.Unmarshal(m.Body, &req); err != nil {
 		return err
 	}
+	req.Path = api.DecodeName(req.Path)
 	seq := 0
 	reply := func(st inventory.ScanStats, final bool) error {
 		b, _ := json.Marshal(st)
@@ -156,7 +169,9 @@ func (e *Engine) scan(ctx context.Context, node string, req scanRequest) (*inven
 		}
 		return st, err
 	}
-	msg, err := e.newMessage(node, transport.TypeScan, req)
+	wire := req
+	wire.Path = api.EncodeName(req.Path)
+	msg, err := e.newMessage(node, transport.TypeScan, wire)
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +267,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 	}
 
 	plan := &api.SyncPlan{
-		ID: id.New(), Created: time.Now().UTC(), Initiator: e.Self(), Request: req,
+		ID: id.At(e.now()), Created: e.now(), Initiator: e.Self(), Request: req,
 		MaxDeletes: maxDel, Skipped: offline,
 	}
 	// Scan everything in parallel.
@@ -268,7 +283,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			stats[i], errs[i] = e.scan(ctx, n, scanRequest{PlanID: plan.ID, Root: root, Path: path, Checksum: req.Checksum, Exclude: req.Exclude})
+			stats[i], errs[i] = e.scan(ctx, n, scanRequest{PlanID: plan.ID, Root: root, Path: path, Checksum: req.Checksum, Exclude: req.Exclude, Target: i > 0})
 		}()
 	}
 	wg.Wait()
@@ -329,7 +344,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		ts := ps.Targets[i]
 		plan.Targets = append(plan.Targets, api.SyncTarget{
 			Node: t, Copy: ts.Copy, CopyBytes: ts.CopyBytes, Replace: ts.Replace,
-			Delete: ts.Delete, Unchanged: ts.Unchanged, Kept: ts.Kept,
+			Delete: ts.Delete, Unchanged: ts.Unchanged, Kept: ts.Kept, Refused: ts.Refused,
 			OverLimit: maxDel >= 0 && ts.Delete+ts.Replace > int64(maxDel),
 		})
 		todo = append(todo, fmt.Sprintf("%s:copy=%d,delete=%d", t, ts.Copy, ts.Delete))
@@ -497,6 +512,9 @@ type listWriter struct {
 	mask    uint64
 	entries int64
 	bytes   int64
+	// dirs are the directories in this list; parents those its entries are
+	// installed into (see planSink.commit).
+	dirs, parents map[string]bool
 }
 
 func (l *listWriter) add(p string) error {
@@ -532,9 +550,16 @@ func (s *planSink) Copy(mask uint64, ent *inventory.Entry) error {
 			return err
 		}
 		g.mask = mask
+		g.dirs, g.parents = map[string]bool{}, map[string]bool{}
 		s.groups[mask] = g
 	}
 	g.bytes += ent.S
+	if ent.T == inventory.TypeDir {
+		g.dirs[ent.P] = true
+	}
+	if ent.P != "." {
+		g.parents[path.Dir(ent.P)] = true
+	}
 	return g.add(inventory.Join(s.plan.Request.SrcPath, ent.P))
 }
 
@@ -551,7 +576,45 @@ func (s *planSink) Delete(i int, p string) error {
 }
 
 func (s *planSink) commit() error {
+	// A target that needs entries of several target sets gets one job per
+	// set, and the jobs install into the same folders at the same time.
+	// A folder's mtime is set after a job's own installs, so every job that
+	// installs into a folder also carries that folder: whichever finishes
+	// last leaves the source's mtime (else the next sync is not empty).
+	groupsOf := make([]int, len(s.targets))
+	for m := range s.groups {
+		for i := range s.targets {
+			if m&(1<<uint(i)) != 0 {
+				groupsOf[i]++
+			}
+		}
+	}
 	var errs []error
+	for m, g := range s.groups {
+		shared := false
+		for i := range s.targets {
+			shared = shared || m&(1<<uint(i)) != 0 && groupsOf[i] > 1
+		}
+		if !shared {
+			continue
+		}
+		// Up to the top: a job may create a missing folder on the way (in
+		// staging), which changes the folder above it too.
+		var add []string
+		for p := range g.parents {
+			for ; !g.dirs[p]; p = path.Dir(p) {
+				g.dirs[p] = true
+				add = append(add, p)
+				if p == "." {
+					break
+				}
+			}
+		}
+		slices.Sort(add)
+		for _, p := range add {
+			errs = append(errs, g.add(inventory.Join(s.plan.Request.SrcPath, p)))
+		}
+	}
 	for _, l := range s.all() {
 		if err := l.buf.Flush(); err != nil {
 			errs = append(errs, err)

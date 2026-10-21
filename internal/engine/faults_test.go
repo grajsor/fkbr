@@ -33,6 +33,8 @@ type faultStore struct {
 	eioWriteAt, eioReadSeq, eioReads int
 	eioWriteHit                      bool
 	eioReadHits                      int
+	// openDelay makes every chunk slow to open (a slow share).
+	openDelay time.Duration
 }
 
 type eioWriter struct{ transport.ChunkWriter }
@@ -77,6 +79,7 @@ func (r *flipReader) Read(p []byte) (int, error) {
 }
 
 func (f *faultStore) OpenChunk(ctx context.Context, src, id string, seq int) (io.ReadCloser, error) {
+	time.Sleep(f.openDelay)
 	f.mu.Lock()
 	if seq == f.eioReadSeq && (f.eioReads < 0 || f.eioReadHits < f.eioReads) {
 		f.eioReadHits++
@@ -338,7 +341,9 @@ func TestPruneAtStartup(t *testing.T) {
 	os.Chtimes(filepath.Join(share, "jobs", old.ID, "job.json"), past, past)
 	for _, role := range []api.Role{api.RoleSource, api.RoleTarget} {
 		a.st.PutStatus(context.Background(), old.ID, &api.JobStatus{Node: "a", Role: role, State: api.JobDone})
+		os.Chtimes(filepath.Join(share, "jobs", old.ID, "status", "a."+string(role)+".json"), past, past)
 	}
+	os.Chtimes(filepath.Join(share, "jobs", old.ID, "status"), past, past)
 	runWorker(t, a)
 	if _, err := a.Job(context.Background(), old.ID); !errors.Is(err, api.ErrUnknownJob) {
 		t.Fatalf("old job survived startup prune: %v", err)

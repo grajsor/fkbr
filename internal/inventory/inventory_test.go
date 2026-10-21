@@ -11,6 +11,8 @@ import (
 
 	"fkbr/internal/config"
 	"fkbr/internal/localfs"
+
+	"fkbr/internal/api"
 )
 
 const t0 = int64(1_700_000_000_000_000_000)
@@ -370,5 +372,73 @@ func TestPlanKeepNewer(t *testing.T) {
 	Plan(src(), []Target{{Node: "t", Snap: dst()}}, PlanOptions{}, s)
 	if s.copies["newer-there"] == 0 {
 		t.Error("without KeepNewer a newer target file must be replaced")
+	}
+}
+
+// A target that clamps mtimes beyond 2038 (XFS without bigtime) holds the
+// clamped value: that is as good as it gets, not a reason to copy again.
+func TestPlanClampedMtimes(t *testing.T) {
+	const max32 = int64(1<<31-1) * 1e9
+	late := file("late", 1)
+	late.M = 4102444800 * 1e9 // 2100-01-01
+	early := file("early", 1)
+	early.M = -2208988800 * 1e9 // 1900-01-01
+	clampedLate, clampedEarly := late, early
+	clampedLate.M, clampedEarly.M = max32, -(1<<31)*1e9
+	h := Header{Node: "xfs", MtimeMin: -(1 << 31) * 1e9, MtimeMax: max32}
+	s := newSink()
+	Plan(snap(t, dir("."), early, late), []Target{{Node: "xfs", Snap: snapH(t, h, dir("."), clampedEarly, clampedLate)}}, PlanOptions{}, s)
+	if len(s.copies) != 0 {
+		t.Errorf("clamped mtimes copied again: %v", s.copies)
+	}
+	s = newSink()
+	Plan(snap(t, dir("."), early, late), []Target{{Node: "xfs", Snap: snapH(t, h, dir("."), clampedEarly, clampedLate)}}, PlanOptions{KeepNewer: true}, s)
+	if len(s.copies) != 0 {
+		t.Errorf("-u: clamped mtimes copied again: %v", s.copies)
+	}
+	s = newSink()
+	Plan(snap(t, dir("."), early, late), []Target{{Node: "ext4", Snap: snapH(t, Header{Node: "ext4"}, dir("."), clampedEarly, clampedLate)}}, PlanOptions{}, s)
+	if s.copied(1) != ".,early,late" {
+		t.Errorf("a target that can store them must get them: %q", s.copied(1))
+	}
+}
+
+// A FAT target cannot store some names, and takes README and readme for
+// one name: the plan leaves those out (and says so) instead of planning
+// them again on every run.
+func TestPlanNamesTheTargetCannotStore(t *testing.T) {
+	link := Entry{P: "link", T: TypeSymlink, L: "fine", M: t0}
+	src := snap(t, dir("."), file("README", 1), dir("bad."), file("bad./in", 1), file("fine", 1), link,
+		file("q?x", 1), file("readme", 1), file("tr ", 1), file("\xc3\xa9t\xc3\xa9", 1))
+	h := Header{Node: "fat", MtimeStep: 2, NoModes: true, Names: &api.NameRules{FS: "vfat", Fold: true, ASCII: true, NoSymlinks: true}}
+	s := newSink()
+	st, err := Plan(src, []Target{{Node: "fat", Snap: snapH(t, h, dir("."))}}, PlanOptions{}, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := s.copied(1); got != ".,README,fine" {
+		t.Errorf("copied %q, want .,README,fine", got)
+	}
+	if st.Targets[0].Refused != 6 || len(st.Problems) == 0 || !strings.Contains(st.Problems[0], "6 entries cannot be stored on its vfat") {
+		t.Errorf("refused %d, problems %q", st.Targets[0].Refused, st.Problems)
+	}
+	// The target already holds Readme: a source readme is the same name.
+	s = newSink()
+	Plan(snap(t, dir("."), file("Readme", 1), file("readme", 1)), []Target{{Node: "fat", Snap: snapH(t, h, dir("."), file("Readme", 1))}}, PlanOptions{}, s)
+	if len(s.copies) != 0 {
+		t.Errorf("readme next to the target's Readme: %v", s.copies)
+	}
+	// casefold ext4: é in NFC and NFD are one name, invalid UTF-8 is fine.
+	cf := Header{Node: "ci", Names: &api.NameRules{FS: "casefold", Fold: true, Form: true}}
+	s = newSink()
+	st, _ = Plan(snap(t, dir("."), file("cafe\xcc\x81", 1), file("caf\xc3\xa9", 1), file("x\xff", 1)), []Target{{Node: "ci", Snap: snapH(t, cf, dir("."))}}, PlanOptions{}, s)
+	if got := s.copied(1); got != ".,cafe\xcc\x81,x\xff" || st.Targets[0].Refused != 1 {
+		t.Errorf("casefold: copied %q, refused %d", got, st.Targets[0].Refused)
+	}
+	// A mirror deletes the target's README first, so readme can come.
+	s = newSink()
+	Plan(snap(t, dir("."), file("readme", 1)), []Target{{Node: "fat", Snap: snapH(t, h, dir("."), file("README", 1))}}, PlanOptions{Mirror: true}, s)
+	if s.copies["readme"] == 0 || len(s.deletes[0]) != 1 {
+		t.Errorf("mirror over a case-only rename: copies %v deletes %v", s.copies, s.deletes)
 	}
 }

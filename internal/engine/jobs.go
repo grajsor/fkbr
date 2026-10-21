@@ -111,8 +111,8 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	req.DstNodes = append(targets, offline...)
 	slices.Sort(req.DstNodes)
 
-	now := time.Now().UTC()
-	job := &api.Job{ID: id.New(), Initiator: e.Self(), Created: now, Request: req, CatchUpOf: catchUpOf}
+	now := e.now()
+	job := &api.Job{ID: id.At(now), Initiator: e.Self(), Created: now, Request: req, CatchUpOf: catchUpOf}
 	for _, d := range offline {
 		job.Detached = append(job.Detached, api.Detached{Node: d, Reason: "offline at submit", At: now})
 	}
@@ -257,15 +257,51 @@ func (e *Engine) Job(ctx context.Context, id string) (*api.Job, error) {
 		return nil, err
 	}
 	normalize(j)
+	e.goneTargets(ctx, []*api.Job{j}, nil)
 	return j, nil
 }
 
 func (e *Engine) Jobs(ctx context.Context) ([]api.Job, error) {
 	js, err := e.st.ListJobs(ctx)
+	var ps []*api.Job
 	for i := range js {
 		normalize(&js[i])
+		ps = append(ps, &js[i])
 	}
+	e.goneTargets(ctx, ps, nil)
 	return js, err
+}
+
+// goneTargets shows a target as detached when the source is done but the
+// target never said so and is gone: forgotten, or offline for longer than
+// detach_after (it died after its last ack). Nothing else would ever end
+// such a job. If the target comes back, it installs and the job is done.
+func (e *Engine) goneTargets(ctx context.Context, js []*api.Job, nodes []api.Node) {
+	for _, j := range js {
+		if j.State.Terminal() || roleState(j, api.RoleSource, "") != api.JobDone {
+			continue
+		}
+		if nodes == nil {
+			var err error
+			if nodes, err = e.tr.Nodes(ctx); err != nil {
+				return
+			}
+		}
+		for _, p := range j.Participants {
+			if p.Role != api.RoleTarget || p.State.Terminal() || j.IsDetached(p.Node) {
+				continue
+			}
+			i := slices.IndexFunc(nodes, func(n api.Node) bool { return n.ID == p.Node })
+			switch {
+			case i < 0:
+				j.Detached = append(j.Detached, api.Detached{Node: p.Node, Reason: "forgotten before it finished", Chunks: p.Chunks})
+			case !nodes[i].Online && nodes[i].LastSeen > e.cfg.Transfer.DetachAfter:
+				j.Detached = append(j.Detached, api.Detached{Node: p.Node, Chunks: p.Chunks,
+					Reason: fmt.Sprintf("offline for %s after the source finished", nodes[i].LastSeen.Round(time.Second))})
+			}
+		}
+		normalize(j)
+	}
 }
 
 func (e *Engine) Cancel(ctx context.Context, id string) error {
@@ -420,7 +456,7 @@ func (w *statusWriter) put(ctx context.Context, force bool) {
 		return
 	}
 	w.last = time.Now()
-	w.st.Updated = w.last.UTC()
+	w.st.Updated = w.e.now()
 	if w.before != nil {
 		w.before(&w.st)
 	}

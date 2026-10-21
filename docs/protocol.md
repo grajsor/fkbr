@@ -50,7 +50,10 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
 4. **One consumer per inbox.** Only node `<id>` reads `inbox/<id>/`, so
    there are no claim races and NFS locks are never used. On the node itself,
    a `flock` on local disk (`state_dir/worker.lock`) keeps a second worker
-   from starting.
+   from starting. The lock file says `running <pid>` or, once the worker
+   got SIGTERM and pauses its jobs, `stopping <pid>`: a worker started
+   meanwhile waits for it (up to 2 minutes) instead of giving up. A
+   stopping worker stops consuming after the chunk in hand.
 5. **Claiming.** The worker renames `new/X` to `cur/X` before processing,
    then deletes it, or moves it to `failed/` (pruned after `keep_done`).
    After a crash, anything left in
@@ -68,8 +71,13 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
    own probe file to `tmp/` and compares the two mtimes, which both come from
    the server clock. Host clock skew therefore doesn't matter. A node counts
    as offline when its heartbeat is older than `offline_after`. The
-   heartbeat runs on its own, so a slow request does not delay it. Pruning
-   judges ages the same way, by mtimes against the server clock.
+   heartbeat runs on its own, so a slow request does not delay it. Bulk
+   writes (chunks, snapshots, path lists) are synced after about 2 s worth
+   of data at the measured rate (4 to 64 MiB), so on a slow link the
+   heartbeat never queues behind a whole chunk in the NFS client. Pruning
+   judges ages the same way, by mtimes against the server clock, and job
+   IDs and times use the server clock too: each node keeps the offset of
+   its own clock from the mtime of its heartbeat.
 
    The heartbeat file holds the worker's instance token (`w1 <start ns>
    <random>`), also published in `info.json` with the worker's `pid` and the
@@ -79,11 +87,13 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
    inbox and install into their own directories). A crashed worker's entry
    can be replaced at once. If a heartbeat finds another worker's token,
    the worker that started later stops, without leaving the registry.
-   A heartbeat that finds the node's `info.json` gone registers it again,
+   A heartbeat that finds the node's `info.json` gone or unreadable registers it again,
    and a write, probe or inbox read that finds `tmp/` or one of the node's
    own directories gone recreates them, so a share cleaned up under
    running nodes heals. Entries in `nodes/` that cannot be read are left
-   out of the node list.
+   out of the node list; `forget` removes one once its heartbeat is stale.
+   A process that only looks (a CLI command where no node runs) creates
+   none of its node's directories.
 8. **Leaving.** A node is removed from the registry (its `nodes/`,
    `inbox/`, `reply/` and `data/` directories) in three ways: `forget` by
    any node once it is offline; by any running node when it has been
@@ -201,8 +211,9 @@ bytes plus the part of its name that differs. (The tar format used before
 protocol 2 cost about 1.5 KiB per entry.)
 
 A receiver trusts nothing in a chunk: names are cleaned (no absolute
-paths, nothing climbing above the bundle root, no NUL, at most 4096
-bytes), the shared prefix cannot be longer than the previous name, mode,
+paths, nothing climbing above the bundle root, no NUL, at most 64 KiB:
+paths may be longer than PATH_MAX; the sender skips and reports longer
+ones), the shared prefix cannot be longer than the previous name, mode,
 IDs, sizes and offsets are range-checked, a segment must lie inside its
 file, link targets are at most 4096 bytes, and an unknown kind, missing
 data, a missing end byte or data after it is an error. The sha256 in the
@@ -229,13 +240,19 @@ for final acks), it drops a target that is holding things up:
 - it has made no progress for `transfer.detach_after`, or
 - it reported `failed`.
 
-The last active target is never dropped. With a single target, a failure
-fails the job and an offline target makes the job wait (cancel it to
-stop). A target that was forgotten (gone from the registry for
+The last active target is not dropped for being slow or failing (a
+failure then fails the job), but it is once it has been offline for
+`transfer.detach_after`: the job ends `partial` and frees the source's
+job slot; `catchup` sends it later. A source with no active target left
+is done. A target that was forgotten (gone from the registry for
 `offline_after`) is dropped too; if it was the last one, the job fails. A
 target whose source was forgotten fails the same way. A target that has
 not started (no status yet) is sent its receive request again every
-minute, in case the first one was lost. A detached target that notices (immediately, or when it comes back)
+minute, in case the first one was lost or could not be written (an
+unwritable inbox delays that target, nothing else). When the source is
+done but a target never said so and is forgotten or offline for longer
+than `detach_after`, the job reads as `partial` with that target
+detached; if it comes back, it installs and the job is done. A detached target that notices (immediately, or when it comes back)
 discards its staging area and reports `detached`. Nothing partial is ever
 installed. A job that finished for some targets but detached others ends
 `partial`.
@@ -269,7 +286,15 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    Progress comes back as non-final reply parts every 2 seconds. A scan
    fails if a node sends no progress for 4 × `request_timeout`. An entry
    that cannot be read is recorded as type `e`; a directory whose listing
-   failed is followed by an `e` line for itself.
+   failed is followed by an `e` line for itself. Names that are not valid
+   UTF-8 are stored as NUL + base64 of their bytes (JSON would turn them
+   into U+FFFD); the same form carries such names in every request.
+   A target's header says what its filesystem cannot store: mtimes beyond
+   the range it clamps to (probed once per filesystem with a temporary
+   file: XFS without bigtime stops at 2038), and its name rules (vfat,
+   exFAT, ext4 casefold: forbidden characters, trailing dots, ASCII only,
+   no symlinks, names equal but for case or Unicode form). Excludes match
+   case-insensitively there.
 2. **Plan.** One streaming k-way merge of the source snapshot with all
    target snapshots. Paths compare component-wise (`a/x` < `a-b`), which
    matches walk order, so memory stays flat: 1M entries took 16 MB. Per
@@ -283,12 +308,17 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    A directory whose contents change on a target gets its own entry
    re-sent, so its mtime is restored and the next plan converges to
    nothing. Nothing is ever deleted below a source path that could not be
-   read.
+   read. Mtimes are compared as the target can store them, and entries
+   the target cannot store (by its name rules) are left out, counted
+   (`refused`) and listed once as a plan problem.
 3. **Groups.** Each entry goes into the path list for the exact set of
    targets that need it (`blobs/plans/<plan>/copy-<mask>`). Entries needed
    by several targets are thus bundled once and fanned out. Deletions go
    to `delete-<node>`. Paths are JSON-quoted, one per line. The plan
-   record is `plans/<plan>/plan.json`.
+   record is `plans/<plan>/plan.json`. A target in several groups gets one
+   job per group, running at the same time; each such group also lists the
+   folders its entries go into (up to the top), so whichever job finishes
+   last restores their mtimes.
 4. **Apply.** Removals beyond `max_deletes` on any target block the apply
    unless it is forced. Deletions run first, in batches of 1000 through
    ordinary `remove` requests. Then each group becomes a transfer job with
@@ -298,7 +328,11 @@ is one-way, in `incremental` mode (copy new and changed entries) or
 
 Offline members of a `@role` destination are skipped and listed; the
 next sync catches them up. Plans and snapshots are pruned after
-`keep_done` (default 1h) by running nodes, or on demand with `prune`.
+`keep_done` (default 1h) by running nodes, or on demand with `prune`;
+never while an unfinished job uses them, and never younger than ten
+minutes (`prune -keep 0` included), so a sync being planned or applied
+keeps them. Finished jobs stay at least a minute after their last
+status, so the CLI that follows one reads how it ended.
 
 ## Mount recommendations
 

@@ -34,7 +34,7 @@ func blobPath(m *Mailbox, name string) (string, error) {
 }
 
 type blobWriter struct {
-	f    *os.File
+	f    *syncedFile
 	dest string
 	done bool
 }
@@ -51,7 +51,7 @@ func (m *Mailbox) CreateBlob(_ context.Context, name string) (transport.ChunkWri
 	if err != nil {
 		return nil, err
 	}
-	return &blobWriter{f: f, dest: dest}, nil
+	return &blobWriter{f: newSyncedFile(f), dest: dest}, nil
 }
 
 func (w *blobWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
@@ -91,7 +91,7 @@ func (m *Mailbox) OpenBlob(_ context.Context, name string) (io.ReadCloser, error
 	return os.Open(p)
 }
 
-func (m *Mailbox) PruneBlobs(_ context.Context, maxAge time.Duration) error {
+func (m *Mailbox) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	kinds, err := os.ReadDir(m.path("blobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -103,7 +103,20 @@ func (m *Mailbox) PruneBlobs(_ context.Context, maxAge time.Duration) error {
 	if err != nil {
 		return fmt.Errorf("nfsmailbox: probe: %w", err)
 	}
-	cutoff := now.Add(-maxAge)
+	cutoff := now.Add(-max(maxAge, minBlobAge))
+	// A sync's transfers read their path lists while they run, however
+	// long that takes.
+	inUse := map[string]bool{}
+	if jobs, err := m.ListJobs(ctx); err == nil {
+		registered, _ := m.listNames(m.path("nodes"))
+		for i := range jobs {
+			if p := jobs[i].Request.SyncPlan; p != "" && !jobFinished(&jobs[i], registered) {
+				inUse[p] = true
+			}
+		}
+	} else {
+		return err // not knowing which are in use, delete nothing
+	}
 	var errs []error
 	for _, k := range kinds {
 		ids, err := os.ReadDir(m.path("blobs", k.Name()))
@@ -112,8 +125,8 @@ func (m *Mailbox) PruneBlobs(_ context.Context, maxAge time.Duration) error {
 		}
 		for _, id := range ids {
 			dir := m.path("blobs", k.Name(), id.Name())
-			if newestMtime(dir).Before(cutoff) {
-				errs = append(errs, os.RemoveAll(dir))
+			if !inUse[id.Name()] && newestMtime(dir).Before(cutoff) {
+				errs = append(errs, removeRacing(dir))
 			}
 		}
 	}
