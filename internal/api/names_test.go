@@ -27,6 +27,12 @@ func TestNamesSurviveJSON(t *testing.T) {
 	if out.Paths[0] != "caf\xe9" || out.Paths[1] != "ok" || out.Base != "b\xe9" || in.Paths[0] != "caf\xe9" {
 		t.Fatalf("got %q / %q, input changed: %q", out.Paths, out.Base, in.Paths)
 	}
+	sp := ScanProgress{Node: "n", Dir: "a/caf\xe9"}
+	b, _ = json.Marshal(sp)
+	var sp2 ScanProgress
+	if err := json.Unmarshal(b, &sp2); err != nil || sp2 != sp {
+		t.Fatalf("scan progress: %+v %v", sp2, err)
+	}
 	e := Entry{Name: "x\xe9", LinkTarget: "y\xe9", Type: TypeSymlink}
 	b, _ = json.Marshal(e)
 	var e2 Entry

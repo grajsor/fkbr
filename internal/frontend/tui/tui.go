@@ -394,7 +394,12 @@ func (m *model) applyEvent(ev api.Event) tea.Cmd {
 		}
 	case api.EventScan:
 		if s := ev.Scan; s != nil && !s.Done {
-			m.setStatus(fmt.Sprintf("scanning %s: %d entries, %s", s.Node, s.Entries, humanSize(s.Bytes)), false)
+			text := fmt.Sprintf("scanning %s: %d entries, %s", s.Node, s.Entries, humanSize(s.Bytes))
+			if s.Dir != "" {
+				// The deepest part of the folder says the most.
+				text += ", in " + fitLeft(rootPath(s.Dir), max(12, m.width-runewidth.StringWidth(text)-5))
+			}
+			m.setStatus(text, false)
 		}
 	case api.EventJobGone:
 		delete(m.jobs, ev.JobID)
@@ -1281,6 +1286,14 @@ func (m *model) renderPanes(h int) string {
 		}
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, boxes[0], boxes[1])
+}
+
+// rootPath shows a root-relative path as fkbr's paths read: "/a/b".
+func rootPath(rel string) string {
+	if rel == "." {
+		return "/"
+	}
+	return "/" + rel
 }
 
 // fitLeft keeps the end of s (the deepest path part) if it is too long.

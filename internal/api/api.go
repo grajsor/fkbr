@@ -538,4 +538,6 @@ type ScanProgress struct {
 	Entries int64  `json:"entries"`
 	Bytes   int64  `json:"bytes"`
 	Done    bool   `json:"done"`
+	// Dir is the folder being scanned (root-relative), while not done.
+	Dir string `json:"dir,omitempty"`
 }

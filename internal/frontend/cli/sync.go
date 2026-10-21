@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 	"text/tabwriter"
 
@@ -156,10 +158,15 @@ func planWithProgress(ctx context.Context, c api.Client, req api.SyncRequest) (*
 					}
 					seen[ev.Scan.Node] = *ev.Scan
 					var parts []string
-					for n, s := range seen {
+					for _, n := range slices.Sorted(maps.Keys(seen)) {
+						s := seen[n]
 						st := fmt.Sprintf("%s %d entries", n, s.Entries)
 						if s.Done {
 							st += " ✓"
+						} else if s.Dir == "." {
+							st += " in /"
+						} else if s.Dir != "" {
+							st += " in /" + s.Dir
 						}
 						parts = append(parts, st)
 					}

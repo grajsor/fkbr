@@ -3,6 +3,7 @@ package inventory
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -21,6 +22,26 @@ type ScanStats struct {
 	Bytes   int64 `json:"bytes"`
 	Errors  int64 `json:"errors"`
 	Missing bool  `json:"missing"`
+	// Dir is the folder the scan is in (root-relative), for progress.
+	Dir string `json:"dir,omitempty"`
+}
+
+func (s ScanStats) MarshalJSON() ([]byte, error) {
+	type plain ScanStats
+	p := plain(s)
+	p.Dir = api.EncodeName(s.Dir)
+	return json.Marshal(p)
+}
+
+func (s *ScanStats) UnmarshalJSON(b []byte) error {
+	type plain ScanStats
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	p.Dir = api.DecodeName(p.Dir)
+	*s = ScanStats(p)
+	return nil
 }
 
 // ScanOptions configure Scan.
@@ -97,6 +118,10 @@ func Scan(fsys localfs.FS, root, base string, h Header, opts ScanOptions, out io
 		st.Entries++
 		if opts.Progress != nil && time.Since(last) >= opts.Interval {
 			last = time.Now()
+			st.Dir = rel
+			if e.Type != api.TypeDir {
+				st.Dir = path.Dir(rel)
+			}
 			opts.Progress(*st)
 		}
 		return w.Write(ent)
@@ -104,6 +129,7 @@ func Scan(fsys localfs.FS, root, base string, h Header, opts ScanOptions, out io
 	if err != nil {
 		return nil, err
 	}
+	st.Dir = ""
 	return st, w.Close()
 }
 

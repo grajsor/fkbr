@@ -2,6 +2,7 @@ package inventory
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -292,6 +293,44 @@ func TestScanRealTree(t *testing.T) {
 	st, err = Scan(fsys, "r", "nope", Header{}, ScanOptions{}, &buf)
 	if err != nil || !st.Missing {
 		t.Fatalf("missing: %+v %v", st, err)
+	}
+}
+
+// Progress says which folder the scan is in (the TUI shows it), and the
+// folder survives the share's JSON even when its name is not UTF-8.
+func TestScanProgressDir(t *testing.T) {
+	root := t.TempDir()
+	for _, p := range []string{"base/a/x", "base/b\xe9/y", "base/z"} {
+		os.MkdirAll(filepath.Dir(filepath.Join(root, p)), 0o755)
+		os.WriteFile(filepath.Join(root, p), nil, 0o644)
+	}
+	fsys, err := localfs.Open([]config.Root{{ID: "r", Path: root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer fsys.Close()
+	var dirs []string
+	var buf bytes.Buffer
+	st, err := Scan(fsys, "r", "base", Header{}, ScanOptions{Progress: func(st ScanStats) {
+		b, err := json.Marshal(st)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var back ScanStats
+		if err := json.Unmarshal(b, &back); err != nil {
+			t.Fatal(err)
+		}
+		dirs = append(dirs, back.Dir)
+	}}, &buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "base,base/a,base/a,base/b\xe9,base/b\xe9,base"
+	if got := strings.Join(dirs, ","); got != want {
+		t.Errorf("progress dirs:\n got %q\nwant %q", got, want)
+	}
+	if st.Dir != "" {
+		t.Errorf("final stats still name a folder: %q", st.Dir)
 	}
 }
 

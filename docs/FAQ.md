@@ -47,6 +47,9 @@ Yes, a sync makes the target match the source. Add `-u` (Ctrl+N in the TUI) to k
 **Leave out the folders `jobs` and `plugins` and all `.json` files?**
 In the TUI's "exclude" field, type `jobs/ plugins/ *.json`: spaces between, no quotes. The `/` at the end means folders only. This leaves them out at any depth; for only the ones at the top of what you sync, type `/jobs/ /plugins/ *.json`. In the CLI, quote each one: `-exclude 'jobs/' -exclude 'plugins/' -exclude '*.json'`.
 
+**A sync plan takes long?**
+The status line shows which machine it scans and in which folder. A folder that should be left out but shows up there needs an exclude.
+
 **See what a sync will delete?**
 `fkbr /mnt/nfs/xfer sync -n -mirror /src hostb:/dst` lists it (add `-v` for everything). In the TUI, F4 shows the first ones; press `l` for all.
 

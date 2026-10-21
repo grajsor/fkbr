@@ -552,16 +552,16 @@ func TestQQuits(t *testing.T) {
 func TestJobDetailsLayout(t *testing.T) {
 	created := time.Date(2026, 10, 19, 16, 27, 57, 0, time.Local)
 	j := &api.Job{ID: "j1", State: api.JobDone, Created: created,
-		Request: api.TransferRequest{SrcNode: "jenkins1", SrcRoot: "files", Paths: []string{"plugins"}, DstNodes: []string{"ci5", "ci4"}, DstRoot: "files", DstDir: "userContent"},
+		Request: api.TransferRequest{SrcNode: "builder1", SrcRoot: "files", Paths: []string{"release"}, DstNodes: []string{"ci5", "ci4"}, DstRoot: "files", DstDir: "incoming"},
 		Participants: []api.JobStatus{ // as listed from the share: targets first
 			{Node: "ci5", Role: api.RoleTarget, State: api.JobDone, Files: 6721, Bytes: 2 << 30, Chunks: 19,
 				Problems: []string{"16:29:10 ownership not preserved on 6721 entries (needs root or CAP_CHOWN)"}, Updated: created.Add(72 * time.Second)},
-			{Node: "jenkins1", Role: api.RoleSource, State: api.JobDone, Files: 6721, Bytes: 2 << 30, Chunks: 19, Updated: created.Add(70 * time.Second)},
+			{Node: "builder1", Role: api.RoleSource, State: api.JobDone, Files: 6721, Bytes: 2 << 30, Chunks: 19, Updated: created.Add(70 * time.Second)},
 			{Node: "ci4", Role: api.RoleTarget, State: api.JobRunning, Phase: "receiving", Problems: []string{"old note without a time"}},
 		}}
 	d := jobDetails(j)
 	table := d[strings.Index(d, "NODE"):]
-	src, t4, t5 := strings.Index(table, "jenkins1  source"), strings.Index(table, "ci4 "), strings.Index(table, "ci5 ")
+	src, t4, t5 := strings.Index(table, "builder1  source"), strings.Index(table, "ci4 "), strings.Index(table, "ci5 ")
 	if src < 0 || t4 < 0 || t5 < 0 || !(src < t4 && t4 < t5) {
 		t.Fatalf("participants not ordered source, then targets by name:\n%s", d)
 	}
@@ -948,5 +948,24 @@ func TestMoveRefusesExclude(t *testing.T) {
 	h.key("enter")
 	if len(h.f.submits) != 0 || !strings.Contains(d.err, "exclude") {
 		t.Fatalf("move with exclude: submits %+v, err %q", h.f.submits, d.err)
+	}
+}
+
+// The scan status names the folder, keeping a dot-folder's dot and the
+// deep end of a long path.
+func TestScanStatusShowsFolder(t *testing.T) {
+	h := newHarness(t)
+	h.m.applyEvent(api.Event{Type: api.EventScan, Scan: &api.ScanProgress{Node: "qb", Entries: 7, Dir: ".cache/x"}})
+	if want := "scanning qb: 7 entries, 0, in /.cache/x"; h.m.status != want {
+		t.Errorf("status %q, want %q", h.m.status, want)
+	}
+	deep := strings.Repeat("deep/", 40) + "end"
+	h.m.applyEvent(api.Event{Type: api.EventScan, Scan: &api.ScanProgress{Node: "qb", Dir: deep}})
+	if !strings.HasSuffix(h.m.status, "/end") || !strings.Contains(h.m.status, "in …") || runewidth.StringWidth(h.m.status) > 120 {
+		t.Errorf("long folder: %q", h.m.status)
+	}
+	h.m.applyEvent(api.Event{Type: api.EventScan, Scan: &api.ScanProgress{Node: "qb", Dir: "."}})
+	if !strings.HasSuffix(h.m.status, ", in /") {
+		t.Errorf("top folder: %q", h.m.status)
 	}
 }

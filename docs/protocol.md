@@ -296,7 +296,9 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    target, and scans in parallel. Each node walks its directory and writes
    a snapshot to `blobs/scans/<plan>/<node>.snap`: zstd-compressed JSON lines in
    walk order (depth-first, names sorted per directory), after a header.
-   Progress comes back as non-final reply parts every 2 seconds. A scan
+   Progress comes back as non-final reply parts every 2 seconds (entries,
+   bytes, errors, and `dir`: the folder the walk is in, root-relative;
+   older builds send none). A scan
    fails if a node sends no progress for 4 × `request_timeout`. An entry
    that cannot be read is recorded as type `e`; a directory whose listing
    failed is followed by an `e` line for itself. Names that are not valid

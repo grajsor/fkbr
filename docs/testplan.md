@@ -113,7 +113,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 |---|---|---|
 | CentOS 7 (kernel 3.10) to Rocky 10, x86-64 and ARM64 | Same results everywhere | lab |
 | Nodes on another protocol version on the same share | Refused, with what to do | auto |
-| Mixed builds of the same protocol | Work together; older builds lack newer checks | lab (178113d with the robust-test fixes, 2026-10-21) |
+| Mixed builds of the same protocol | Work together; older builds lack newer checks | lab (f9ac962 with the robust-test fixes, 2026-10-21) |
 
 ## 8. Robust test (2026-10-21)
 
@@ -145,7 +145,7 @@ was checked again on the lab with new-build nodes.
 | A CLI without a running node created folders on the share | Only a registered node creates its folders | `TestVisitorLeavesNoFolders` |
 | One unwritable inbox failed the whole fan-out | Notify retried; others carry on | `TestNotifyFailureIsNotFatal` |
 
-A second, 90-minute run on the fixed build (8c3c20b) checked the 17 again
+A second, 90-minute run on the fixed build (da7f98f) checked the 17 again
 (none came back) and found 4 more, fixed the same way:
 
 | Found | Fixed | Test |

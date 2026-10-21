@@ -160,7 +160,7 @@ func (e *Engine) serveScan(ctx context.Context, m *transport.Message) error {
 func (e *Engine) scan(ctx context.Context, node string, req scanRequest) (*inventory.ScanStats, error) {
 	report := func(st inventory.ScanStats, done bool) {
 		e.broadcast(api.Event{Type: api.EventScan, Time: time.Now().UTC(), Scan: &api.ScanProgress{
-			PlanID: req.PlanID, Node: node, Entries: st.Entries, Bytes: st.Bytes, Done: done}})
+			PlanID: req.PlanID, Node: node, Entries: st.Entries, Bytes: st.Bytes, Done: done, Dir: st.Dir}})
 	}
 	if node == e.Self() {
 		st, err := e.scanLocal(ctx, req, func(st inventory.ScanStats) { report(st, false) })

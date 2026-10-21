@@ -281,3 +281,21 @@ func (n NameRules) Key(name string) string {
 	}
 	return name
 }
+
+func (s ScanProgress) MarshalJSON() ([]byte, error) {
+	type plain ScanProgress
+	p := plain(s)
+	p.Dir = EncodeName(s.Dir)
+	return json.Marshal(p)
+}
+
+func (s *ScanProgress) UnmarshalJSON(b []byte) error {
+	type plain ScanProgress
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	p.Dir = DecodeName(p.Dir)
+	*s = ScanProgress(p)
+	return nil
+}
