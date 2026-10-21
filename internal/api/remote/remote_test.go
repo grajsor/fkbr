@@ -226,7 +226,8 @@ func TestContract(t *testing.T) {
 }
 
 func TestSocketSelfHeals(t *testing.T) {
-	defer func(c time.Duration) { SocketCheckInterval = c }(SocketCheckInterval)
+	oldCheck := SocketCheckInterval // restored after the server stops
+	t.Cleanup(func() { SocketCheckInterval = oldCheck })
 	SocketCheckInterval = 20 * time.Millisecond
 	share := t.TempDir()
 	master, _ := newEngine(t, share, "master")

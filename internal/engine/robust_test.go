@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -631,5 +632,47 @@ func TestStaleStagingSwept(t *testing.T) {
 		if kept := err == nil; kept != keep {
 			t.Errorf("%s: kept=%v, want %v", id, kept, keep)
 		}
+	}
+}
+
+// lostEntry reports the registry entry missing on the first heartbeat, as
+// if info.json was damaged right after Register.
+type lostEntry struct {
+	transport.Transport
+	hits atomic.Int32
+}
+
+func (l *lostEntry) Heartbeat(ctx context.Context, token string) (string, error) {
+	if l.hits.Add(1) == 1 {
+		return "", transport.ErrNotRegistered
+	}
+	return l.Transport.Heartbeat(ctx, token)
+}
+
+// A worker whose entry was damaged between Register and its first
+// heartbeat stopped ("heartbeat: registry entry missing", seen once under
+// -race in TestDamagedRegistryEntry); it registers again instead.
+func TestEntryLostAtStart(t *testing.T) {
+	share := t.TempDir()
+	cfg := nodeCfg(t, share, "a")
+	fsys, err := localfs.Open(cfg.Roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb, err := nfsmailbox.Open(share, "a", nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lost := &lostEntry{Transport: mb}
+	a := New(cfg, fsys, lost, mb, Options{Version: "test"})
+	t.Cleanup(func() { a.Close() })
+	runWorker(t, a)
+	if lost.hits.Load() < 2 {
+		t.Fatalf("heartbeats: %d", lost.hits.Load())
+	}
+	select {
+	case <-a.Ready():
+	case <-time.After(5 * time.Second):
+		t.Fatal("worker never ready")
 	}
 }

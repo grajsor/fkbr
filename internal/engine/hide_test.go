@@ -57,7 +57,8 @@ func TestShareInsideRoot(t *testing.T) {
 // A node whose shared directory is deleted stops, saying why, instead of
 // failing every transfer into a directory that is gone.
 func TestWorkerStopsWhenRootDeleted(t *testing.T) {
-	defer func(d time.Duration) { rootCheckInterval = d }(rootCheckInterval)
+	oldCheck := rootCheckInterval // restored after the workers stop
+	t.Cleanup(func() { rootCheckInterval = oldCheck })
 	rootCheckInterval = 20 * time.Millisecond
 	a, aroot := node(t, t.TempDir(), "a")
 	done := make(chan error, 1)

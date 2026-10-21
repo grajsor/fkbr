@@ -335,8 +335,17 @@ func (e *Engine) Run(ctx context.Context) error {
 		return fmt.Errorf("register: %w", err)
 	}
 	// A token found now was left by the entry the check above allowed (a
-	// crashed worker); only tokens written after this one count.
-	if _, err := e.tr.Heartbeat(ctx, e.info.Instance); err != nil {
+	// crashed worker); only tokens written after this one count. An entry
+	// damaged or removed since Register is written again, as the
+	// heartbeat loop does.
+	_, err = e.tr.Heartbeat(ctx, e.info.Instance)
+	for try := 0; errors.Is(err, transport.ErrNotRegistered) && try < 3; try++ {
+		e.log.Warn("this node's registry entry is missing or unreadable; registering again")
+		if err = e.tr.Register(ctx, e.info); err == nil {
+			_, err = e.tr.Heartbeat(ctx, e.info.Instance)
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("heartbeat: %w", err)
 	}
 	e.log.Info("worker started", "node", e.Self(), "roots", len(e.info.Roots), "chown", e.info.ChownCapable)

@@ -1,6 +1,7 @@
 package product
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -27,7 +28,15 @@ func TestVersion(t *testing.T) {
 }
 
 // In a checkout commit.txt holds the placeholder, which must not count.
+// In a zip or tar.gz from git archive it holds the commit instead.
 func TestArchivedCommitInCheckout(t *testing.T) {
+	raw, _ := os.ReadFile("commit.txt")
+	if !strings.HasPrefix(string(raw), "$Format") {
+		if c := ArchivedCommit(); len(c) < 7 {
+			t.Fatalf("archive with commit.txt %q: ArchivedCommit = %q", raw, c)
+		}
+		t.Skipf("not a checkout: commit.txt holds %q", strings.TrimSpace(string(raw)))
+	}
 	if c := ArchivedCommit(); c != "" {
 		t.Fatalf("ArchivedCommit in a checkout = %q", c)
 	}

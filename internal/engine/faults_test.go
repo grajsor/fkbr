@@ -116,7 +116,8 @@ func buildFaulty(t *testing.T, cfg *config.Config) (*Engine, *faultStore) {
 }
 
 func TestShareFullRetries(t *testing.T) {
-	defer func(d time.Duration) { noSpaceWait = d }(noSpaceWait)
+	oldWait := noSpaceWait // restored after the workers stop (t.Cleanup runs after defers)
+	t.Cleanup(func() { noSpaceWait = oldWait })
 	noSpaceWait = 50 * time.Millisecond
 	share := t.TempDir()
 	mcfg := nodeCfg(t, share, "master")
@@ -264,7 +265,8 @@ func TestTransientCorruptionRetried(t *testing.T) {
 }
 
 func TestLockSelfHealsAndStaysFresh(t *testing.T) {
-	defer func(c, tch time.Duration) { lockCheckInterval, lockTouchInterval = c, tch }(lockCheckInterval, lockTouchInterval)
+	oldCheck, oldTouch := lockCheckInterval, lockTouchInterval // restored after the worker stops
+	t.Cleanup(func() { lockCheckInterval, lockTouchInterval = oldCheck, oldTouch })
 	lockCheckInterval, lockTouchInterval = 20*time.Millisecond, 50*time.Millisecond
 	share := t.TempDir()
 	cfg := nodeCfg(t, share, "a")
@@ -289,7 +291,8 @@ func TestLockSelfHealsAndStaysFresh(t *testing.T) {
 }
 
 func TestLockLostStopsWorker(t *testing.T) {
-	defer func(c time.Duration) { lockCheckInterval = c }(lockCheckInterval)
+	oldCheck := lockCheckInterval // restored after the worker stops
+	t.Cleanup(func() { lockCheckInterval = oldCheck })
 	lockCheckInterval = 50 * time.Millisecond
 	share := t.TempDir()
 	cfg := nodeCfg(t, share, "a")
@@ -346,10 +349,11 @@ func TestPruneAtStartup(t *testing.T) {
 		os.Chtimes(filepath.Join(share, "jobs", old.ID, "status", "a."+string(role)+".json"), past, past)
 	}
 	os.Chtimes(filepath.Join(share, "jobs", old.ID, "status"), past, past)
-	runWorker(t, a)
-	if _, err := a.Job(context.Background(), old.ID); !errors.Is(err, api.ErrUnknownJob) {
-		t.Fatalf("old job survived startup prune: %v", err)
-	}
+	runWorker(t, a) // returns once the node is online; the prune runs right after
+	waitUntil(t, func() bool {
+		_, err := a.Job(context.Background(), old.ID)
+		return errors.Is(err, api.ErrUnknownJob)
+	}, "old job pruned at startup")
 }
 
 // shortTransient makes I/O error retries fast for a test.
