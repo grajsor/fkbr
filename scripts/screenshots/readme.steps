@@ -1,8 +1,11 @@
-wait 2
-# main: web01 on the left with two marked files, backup01's copy of the site on the right
+wait 3
+# main: web01's site on the left with two marked files, backup01's copy of
+# it on the right. Node lists start with this node (ops01), then by name.
+keys down down down down enter
+wait 1
 keys down down down enter
 wait 1
-keys tab enter
+keys tab down enter
 wait 1
 keys down down enter
 wait 1
@@ -10,7 +13,7 @@ keys down enter
 wait 1
 keys down enter
 wait 1
-keys tab down down down down down insert insert
+keys tab down down down down insert insert
 wait 0.5
 shot fkbr-main
 keys f5
@@ -33,7 +36,7 @@ wait 1
 keys tab
 keys f9
 shot fkbr-jobs
-# the viewer: build01's Jenkins job config, highlighted
+# the viewer: build01's build config, highlighted
 keys esc f2 home down down enter
 wait 1
 keys down down down enter

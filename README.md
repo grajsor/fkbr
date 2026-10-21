@@ -1,125 +1,133 @@
 # fkbr
 
-fkbr is a file commander and sync tool for hosts that share nothing but an
-NFS mount. Nodes never connect to each other. They exchange requests and
-data through a directory on the shared mount.
+fkbr copies and syncs files between Linux hosts that share only an NFS
+mount. The hosts never connect to each other: requests and data pass
+through a directory on the share. It ships as a single static binary with
+a dual-pane TUI and a scriptable CLI.
 
-- One static binary (x86-64 or ARM64) for any Linux with kernel 3.10 or
-  newer; it needs no glibc. Nothing is installed: no package, service,
-  system user or config in `/etc`.
-- A dual-pane TUI, Norton Commander style, where either pane can browse any
-  node. Copy, move, mkdir, delete and view work on any node.
-- A swarm, not a hierarchy: start `fkbr /mnt/nfs/dir` on each host and it
-  joins. Copies go to one node, a list, or every node (`@all`). Data is
-  staged once and every target reads it. Slow or offline targets are
-  detached and can catch up later.
-- About as fast as tar through the same share, and faster when copying to
-  several machines at once (`docs/benchmarks.md`).
-- Sync of millions of files: streaming scans with flat memory, incremental
-  or mirror mode, dry-run plans, and a delete limit.
-- Crash-safe: atomic publication on the share, chunk checksums, and
-  resumable jobs. Transfers are staged and installed only when complete.
-  Tested on a lab of five hosts by killing, freezing and restarting nodes
-  mid-transfer, cutting hosts off the NFS server, and deleting parts of
-  the share under running nodes (`docs/testplan.md`).
+## Features
 
-## What it looks like
+- **Nothing to install.** One static binary for x86-64 or ARM64. It runs
+  on any Linux with kernel 3.10 or newer and does not depend on glibc. No
+  package, service, system user or files in `/etc`.
+- **No master.** Each host that runs `fkbr /mnt/nfs/xfer` joins as a node
+  named after its hostname. Copy to one node, a list of nodes, or all of
+  them (`@all`).
+- **Fan-out.** Data is staged on the share once and read by every target.
+  Slow or offline targets are detached and can catch up later.
+- **Dual-pane TUI** in the style of Norton Commander. Either pane browses
+  any node; copy, move, sync, view, create and delete work on any node,
+  with live job progress.
+- **Sync** in one direction, incremental or mirror, over millions of files
+  with flat memory use. Every sync is planned as a dry run you confirm.
+  Excludes, keep-newer and a delete limit protect the target.
+- **Fast.** About as fast as tar through the same share, and faster when
+  copying to several hosts (`docs/benchmarks.md`).
+- **Crash-safe.** Atomic writes on the share, checksummed chunks and
+  resumable jobs. Files are installed only after the whole transfer has
+  arrived. Tested by killing, freezing and restarting nodes mid-transfer,
+  cutting hosts off the NFS server, and deleting parts of the share under
+  running nodes (`docs/testplan.md`).
 
-Five nodes on one share. On the left, two files on web01 are selected; on
-the right is backup01, where an earlier copy of web01's site arrived:
+## Screenshots
+
+Five nodes on one share. Two files are marked on web01 (left); backup01
+(right) holds an earlier copy of web01's site.
 
 ![Two panes: web01 and backup01, with the jobs panel below](docs/screenshots/fkbr-main.png)
 
-F5 copies the selection. The destination defaults to the other pane, or
-to the nodes marked with Insert in a node list (`@dest`); you can also
-type `n1,n2` or press Ctrl+A for every node:
+**Copy (F5).** The destination defaults to the other pane, or to the
+nodes marked with Insert in a node list (`@dest`). Type `n1,n2` for a
+list, or press Ctrl+A for all nodes. Excludes are optional.
 
 ![The copy dialog](docs/screenshots/fkbr-copy.png)
 
-Any pane can show any node. F9 moves to the jobs panel:
+**Jobs (F9).** Either pane can show any node. The jobs panel lists running
+and finished jobs.
 
 ![db01 and backup01, with the jobs panel focused](docs/screenshots/fkbr-jobs.png)
 
-Enter on a job shows its details while it runs: progress, rate and ETA,
-and what each node is doing:
+**Job details (Enter).** Progress, rate and ETA, and what each node is
+doing, updated live.
 
 ![Details of a running copy of three database dumps to four nodes](docs/screenshots/fkbr-progress.png)
 
-F4 syncs: the other side is made to match this pane, the whole folder or
-just the marked folders, after a dry run you confirm. F1 explains every key.
+**View (F3).** Shows a file from any node, with XML and JSON highlighted.
 
-F3 shows a file from any node, with XML and JSON highlighted:
+![The viewer showing a build configuration on build01](docs/screenshots/fkbr-view.png)
 
-![The viewer showing a Jenkins job config.xml from build01](docs/screenshots/fkbr-view.png)
+**Sync (F4)** makes the other side match this pane: the whole folder, or
+only the marked folders, after a dry run you confirm. **F1** lists every
+key.
 
 ## Quick start
 
-New here? Read `docs/FAQ.md`. It takes a minute.
-
-Build it on any machine with Go ≥ 1.25 (it cross-compiles):
+Build with Go 1.25 or newer. `make` cross-compiles both architectures:
 
 ```
-make               # dist/fkbr-linux-amd64 and dist/fkbr-linux-arm64, static
+make    # dist/fkbr-linux-amd64 and dist/fkbr-linux-arm64
 ```
 
-Copy the binary to each host. On each host, `cd` to the directory you want
-to share and point fkbr at a directory on the NFS mount:
+Copy the binary to each host. On each host, change to the directory to
+share and start fkbr with a directory on the NFS mount:
 
 ```
 cd /srv/data
 fkbr /mnt/nfs/xfer
 ```
 
-That's all. The host registers itself in `/mnt/nfs/xfer` as a node named
-after its hostname, shares the current directory with everything below it,
-and opens the TUI. Every host that does the same joins the swarm. There
-are no masters or slaves: copy to one node, a list (`hostb,hostc`), or
-every other node (`@all`; Ctrl+A in the TUI's copy dialog). Quitting the
-TUI leaves the swarm again; `fkbr /mnt/nfs/xfer daemon` keeps a host in it.
+The host joins as a node, shares the current directory and everything
+below it, and opens the TUI. Quitting the TUI leaves the swarm;
+`fkbr /mnt/nfs/xfer daemon` keeps the host in it without a terminal.
 
-From another shell on the same host, commands go through the running
-node:
+Before first use, run `fkbr /mnt/nfs/xfer check` on each host. It checks
+the mount options, atomic rename on the share, clock skew and node-name
+uniqueness.
+
+## Command line
+
+Commands use the node running on the same host (TUI or daemon):
 
 ```
-fkbr /mnt/nfs/xfer nodes
-fkbr /mnt/nfs/xfer cp /reports @all:/incoming
-fkbr /mnt/nfs/xfer cp hostb:/logs/app.log /
-fkbr /mnt/nfs/xfer sync -mirror -n /site hostb,hostc:/site
+fkbr /mnt/nfs/xfer nodes                                    # nodes and their state
+fkbr /mnt/nfs/xfer cp /reports @all:/incoming               # copy to every node
+fkbr /mnt/nfs/xfer cp hostb:/logs/app.log /                 # fetch from a node
+fkbr /mnt/nfs/xfer sync -mirror -n /site hostb,hostc:/site  # preview a mirror
+fkbr /mnt/nfs/xfer jobs                                     # running and recent jobs
 ```
 
-Run `fkbr /mnt/nfs/xfer check` on each host first. It checks the NFS mount
-options, atomic rename on the share, clock skew and node-name uniqueness.
-Options such as `-node`, `-ro`, `-root id=/path` and `-roles` are covered
-in `docs/operations.md`. `fkbr version` prints the release and commit
-(`fkbr v1.0 f0c0e0b`).
+`docs/operations.md` covers every command and option (`-node`, `-ro`,
+`-root id=/path`, `-roles`, ...). `fkbr version` prints the release and
+the commit it was built from.
 
 ## Documentation
 
-- `docs/FAQ.md`: the shortest way to get going
-- `docs/operations.md`: running nodes, commands, TUI keys, sync, privileges,
-  and what fkbr leaves on a host
+- `docs/FAQ.md`: short answers to common questions; start here
+- `docs/operations.md`: running nodes, commands, TUI keys, sync,
+  privileges, and what fkbr leaves on a host
 - `docs/protocol.md`: the on-share protocol (mailboxes, chunks, fan-out,
   sync)
 - `docs/benchmarks.md`: measured performance
 - `docs/testplan.md`: what could break, how it is tested, and the results
-- `examples/config.yaml`: every option, if you prefer a config file to flags
+- `examples/config.yaml`: every option, for those who prefer a config file
+  to flags
 
 ## Development
 
 ```
-make test         # unit, integration and failure-injection tests
-make test-race    # needs a 48-bit VMA kernel (not a Raspberry Pi 5)
+make test                    # unit, integration and failure-injection tests
+make test-race               # needs a kernel with a 48-bit VMA (not a Raspberry Pi 5)
 make vet
-scripts/bench.sh  # 1 master + N slaves on one machine
-scripts/screenshots/take.sh  # retake docs/screenshots (needs pyte, pillow)
+scripts/bench.sh             # 1 source + N targets on one machine
+scripts/screenshots/take.sh  # retake docs/screenshots (needs pyte and pillow)
 ```
 
-The layers:
-- **Frontends:** `internal/frontend/{cli,tui}`, which only use
-  `internal/api`.
+The code is layered:
+
+- **Frontends:** `internal/frontend/{cli,tui}`, using only `internal/api`.
 - **API:** `internal/api`, with an in-process client (`api/local`) and a
   Unix-socket client (`api/remote`).
-- **Engine:** `internal/engine`, which handles jobs, fan-out and sync.
+- **Engine:** `internal/engine`: jobs, fan-out and sync.
 - **Subsystems:** `transport/nfsmailbox`, `bundle`, `receive`, `inventory`
   and `localfs`.
 

@@ -54,35 +54,26 @@ f $U/artifacts/fkbr-linux-arm64 9568416 "2026-10-19 09:55"
 f $U/artifacts/SHA256SUMS 166 "2026-10-19 09:55"
 mkdir -p $U/workspace/src $U/cache
 cat > $U/workspace/config.xml <<'XML'
-<?xml version='1.1' encoding='UTF-8'?>
-<project>
+<?xml version="1.0" encoding="UTF-8"?>
+<pipeline name="site">
   <!-- nightly build of the web site, published to web01 -->
   <description>Builds and packages the site</description>
-  <keepDependencies>false</keepDependencies>
-  <scm class="hudson.plugins.git.GitSCM" plugin="git@5.5.2">
-    <userRemoteConfigs>
-      <hudson.plugins.git.UserRemoteConfig>
-        <url>ssh://git@scm.example.com/web/site.git</url>
-      </hudson.plugins.git.UserRemoteConfig>
-    </userRemoteConfigs>
-    <branches>
-      <hudson.plugins.git.BranchSpec>
-        <name>*/main</name>
-      </hudson.plugins.git.BranchSpec>
-    </branches>
-  </scm>
-  <triggers>
-    <hudson.triggers.TimerTrigger>
-      <spec>H 2 * * *</spec>
-    </hudson.triggers.TimerTrigger>
-  </triggers>
-  <builders>
-    <hudson.tasks.Shell>
-      <command>make release VERSION=$BUILD_NUMBER</command>
-    </hudson.tasks.Shell>
-  </builders>
-  <concurrentBuild>false</concurrentBuild>
-</project>
+  <source type="git">
+    <url>ssh://git@scm.example.com/web/site.git</url>
+    <branch>main</branch>
+  </source>
+  <schedule cron="0 2 * * *" timezone="UTC"/>
+  <steps>
+    <step name="test">make test</step>
+    <step name="build">make release VERSION=${BUILD_NUMBER}</step>
+    <step name="package">tar -C dist -c . | zstd -19 > site.tar.zst</step>
+  </steps>
+  <publish>
+    <target node="web01" path="releases/${DATE}"/>
+    <keep>14</keep>
+  </publish>
+  <concurrent>false</concurrent>
+</pipeline>
 XML
 touch -d "2026-10-16 15:20" $U/workspace/config.xml
 
