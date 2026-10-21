@@ -26,6 +26,7 @@ var (
 	ErrUnknownJob  = errors.New("unknown job")
 	ErrReadOnly    = errors.New("root is read-only")
 	ErrNotAllowed  = errors.New("not allowed")
+	ErrNotFound    = errors.New("no such file or directory")
 )
 
 // Root is a local directory a node exposes under a stable ID. Peers only

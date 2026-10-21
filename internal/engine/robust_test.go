@@ -676,3 +676,41 @@ func TestEntryLostAtStart(t *testing.T) {
 		t.Fatal("worker never ready")
 	}
 }
+
+// A copy of a named source path that does not exist failed nothing: the job
+// ended done with one error. It fails now, before anything is sent.
+func TestMissingSourcePathFails(t *testing.T) {
+	share := t.TempDir()
+	a, aroot := node(t, share, "a")
+	b, broot := node(t, share, "b")
+	runWorker(t, a)
+	runWorker(t, b)
+	os.WriteFile(aroot+"/here", []byte("x"), 0o644)
+	ctx := context.Background()
+	// on the source itself: refused before a job exists
+	_, err := a.Submit(ctx, api.TransferRequest{SrcRoot: "data", Paths: []string{"gone"}, DstNodes: []string{"b"}, DstRoot: "data", DstDir: "in"})
+	if !errors.Is(err, api.ErrNotFound) {
+		t.Fatalf("local submit: %v", err)
+	}
+	// from elsewhere: the source fails the job; with one of two missing,
+	// nothing arrives
+	id, err := b.Submit(ctx, api.TransferRequest{SrcNode: "a", SrcRoot: "data", Paths: []string{"here", "gone"}, DstNodes: []string{"b"}, DstRoot: "data", DstDir: "in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, b, id, 30*time.Second)
+	if j.State != api.JobFailed || !strings.Contains(roleError(j, api.RoleSource), "gone") {
+		t.Fatalf("job: %s %+v", j.State, j.Participants)
+	}
+	if _, err := os.Stat(broot + "/in/here"); !os.IsNotExist(err) {
+		t.Fatalf("something arrived: %v", err)
+	}
+	// existing paths still copy
+	id, err = b.Submit(ctx, api.TransferRequest{SrcNode: "a", SrcRoot: "data", Paths: []string{"here"}, DstNodes: []string{"b"}, DstRoot: "data", DstDir: "in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, b, id, 30*time.Second); j.State != api.JobDone {
+		t.Fatalf("copy of an existing path: %s", j.State)
+	}
+}

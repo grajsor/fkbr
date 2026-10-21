@@ -16,6 +16,7 @@ var errorCodes = []struct {
 	{ErrUnknownJob, "unknown_job"},
 	{ErrReadOnly, "read_only"},
 	{ErrNotAllowed, "not_allowed"},
+	{ErrNotFound, "not_found"},
 }
 
 // ErrorCode returns the code of the sentinel err wraps, or "".

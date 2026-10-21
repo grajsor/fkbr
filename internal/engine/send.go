@@ -90,6 +90,9 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 			return s.status.finish(ctx, api.JobFailed, err)
 		}
 	}
+	if err := e.missingPaths(req); err != nil {
+		return s.status.finish(ctx, api.JobFailed, err)
+	}
 	what := summary(req.Paths, 3)
 	if req.SyncPlan != "" {
 		what = fmt.Sprintf("%s (sync, %d entries)", req.BaseDir, req.PathsCount)
@@ -365,6 +368,26 @@ func (s *sender) walkSource(ctx context.Context, recs chan<- walkRec, stop <-cha
 		if err := visit(p); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// missingPaths fails a copy or move whose named source path does not
+// exist, before anything is sent: like cp, but nothing is copied. A sync's
+// transfer lists entries its plan saw, and one that vanished since is a
+// per-entry problem instead ("vanished since it was planned").
+func (e *Engine) missingPaths(req api.TransferRequest) error {
+	if req.SyncPlan != "" || req.PathsBlob != "" {
+		return nil
+	}
+	var missing []string
+	for _, p := range req.Paths {
+		if _, err := e.fs.Stat(req.SrcRoot, p); errors.Is(err, fs.ErrNotExist) {
+			missing = append(missing, p)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("%w: %s:%s", api.ErrNotFound, req.SrcRoot, summary(missing, 3))
 	}
 	return nil
 }

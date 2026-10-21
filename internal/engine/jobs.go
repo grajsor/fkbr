@@ -110,6 +110,13 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	}
 	req.DstNodes = append(targets, offline...)
 	slices.Sort(req.DstNodes)
+	if req.SrcNode == e.Self() {
+		// Here, a missing source path is refused before a job exists; on
+		// another node the source fails the job (missingPaths in send.go).
+		if err := e.missingPaths(req); err != nil {
+			return "", err
+		}
+	}
 
 	now := e.now()
 	job := &api.Job{ID: id.At(now), Initiator: e.Self(), Created: now, Request: req, CatchUpOf: catchUpOf}

@@ -131,9 +131,12 @@ write policy.
 ## Transfers
 
 1. **Submit.** Any node (the initiator) validates the request against the
-   registry: nodes online, roots exist, the destination root is writable.
-   It writes `jobs/<job>/job.json` and sends `send` to the source node.
-2. **Produce.** The source sends `receive` to each target, then walks the
+   registry: nodes online, roots exist, the destination root is writable;
+   when it is the source, the named paths exist. It writes
+   `jobs/<job>/job.json` and sends `send` to the source node.
+2. **Produce.** A source that does not find a named path fails the job
+   before it sends anything (a sync's transfer instead notes entries that
+   vanished since the plan). The source sends `receive` to each target, then walks the
    source paths (lexical, depth-first) into a bundle: a sequence of chunks,
    each complete in itself (zstd optional). The first chunk holds about
    4 MiB and each next one twice as much, up to `chunk_size`, so targets

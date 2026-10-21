@@ -155,6 +155,7 @@ A second, 90-minute run on the fixed build (8c3c20b) checked the 17 again
 | A target restarted while it was being detached kept the job's staging for good | Swept at every prune | `TestStaleStagingSwept` |
 | A job whose source was forgotten stayed `running` though every target was done | Shown done (or failed) | `TestSourceGoneAfterTargetsFinished` |
 | A registry entry damaged between a worker's Register and its first heartbeat stopped the worker (found by `-race` on rhel10) | Registers again, as the heartbeat loop does | `TestEntryLostAtStart` |
+| A copy of a source path that does not exist ended `done` with one error (seen in the regression pass; asked for) | Refused at submit on the source, or the source fails the job before sending | `TestMissingSourcePathFails` |
 
 ## How to run the lab tests
 
