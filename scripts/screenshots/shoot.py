@@ -20,7 +20,7 @@ KEYS = {
     "up": b"\x1b[A", "down": b"\x1b[B", "enter": b"\r", "tab": b"\t",
     "insert": b"\x1b[2~", "esc": b"\x1b", "bs": b"\x7f", "home": b"\x1b[H",
     "f1": b"\x1bOP", "f2": b"\x1bOQ", "f3": b"\x1bOR", "f4": b"\x1bOS", "f5": b"\x1b[15~",
-    "f9": b"\x1b[20~", "ctrlc": b"\x03", "ctrla": b"\x01",
+    "f9": b"\x1b[20~", "ctrlc": b"\x03", "ctrla": b"\x01", "ctrlo": b"\x0f",
 }
 NAMED = {  # xterm defaults, for 16-colour output
     "black": (0, 0, 0), "red": (205, 0, 0), "green": (0, 205, 0), "brown": (205, 205, 0),

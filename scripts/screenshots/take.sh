@@ -28,5 +28,6 @@ run() { # steps file; screens.txt shows the text of each shot
 }
 stage; run "$H/readme.steps"
 stage; run "$H/progress.steps"   # a fresh demo, so the copy is the only running job
+stage; run "$H/sync.steps"       # a fresh TUI: the header ticker starts after 30 s
 stop
 echo "screenshots in $OUT; screen text in /tmp/fkbr-demo-screens.txt"

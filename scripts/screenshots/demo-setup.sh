@@ -94,5 +94,10 @@ cd $D/web01
 "$BIN" -node web01 "$D/share" sync -z /releases build01:/workspace/releases > /dev/null || true
 plan=$("$BIN" -node web01 "$D/share" sync -n /releases build01:/workspace/releases | awk '/apply with/{print $NF}')
 [ -n "$plan" ] && "$BIN" -node web01 "$D/share" sync -plan "$plan" > /dev/null || true
+# The site has changed since that copy, and backup01's copy holds a page
+# the site dropped: a sync has something to show.
+f $W/site/contact.html 7168 "2026-10-19 09:20"
+f $W/site/css/main.css 25088 "2026-10-19 09:20"
+f $K/incoming/web01/site/promo-2026-09.html 11264 "2026-09-01 08:00"
 "$BIN" -node web01 "$D/share" nodes
 "$BIN" -node web01 "$D/share" jobs 2>/dev/null | head -5 || true

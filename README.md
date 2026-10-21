@@ -42,6 +42,14 @@ list, or press Ctrl+A for all nodes. Excludes are optional.
 
 ![The copy dialog](docs/screenshots/fkbr-copy.png)
 
+**Sync (F4).** Makes the other side match this pane: the whole folder, or
+only the marked folders. Every sync starts as a dry run that shows what
+each target would copy, replace and delete; nothing changes until you
+confirm. Here web01's site is mirrored to all four other nodes, and
+backup01 would lose a page the site no longer has.
+
+![The sync plan for a mirror to four nodes](docs/screenshots/fkbr-sync.png)
+
 **Jobs (F9).** Either pane can show any node. The jobs panel lists running
 and finished jobs.
 
@@ -56,9 +64,7 @@ doing, updated live.
 
 ![The viewer showing a build configuration on build01](docs/screenshots/fkbr-view.png)
 
-**Sync (F4)** makes the other side match this pane: the whole folder, or
-only the marked folders, after a dry run you confirm. **F1** lists every
-key.
+**F1** lists every key.
 
 ## Quick start
 

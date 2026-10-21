@@ -1,0 +1,20 @@
+wait 3
+# web01's site on the left, backup01's older copy of it on the right
+keys down down down down enter
+wait 1
+keys down down down enter
+wait 1
+keys tab down enter
+wait 1
+keys down down enter
+wait 1
+keys down enter
+wait 1
+keys down enter
+wait 1
+# mirror the site to every other node: the plan is shown, not applied
+keys tab f4
+wait 1
+keys ctrla ctrlo enter
+wait 4
+shot fkbr-sync
