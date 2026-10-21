@@ -43,4 +43,6 @@ keys down down down enter
 wait 1
 keys down down down f3
 wait 1
+# scrolled a little way in: the percentage and the scrollbar show where
+keys down down down down down down down down down down down down
 shot fkbr-view

@@ -18,6 +18,10 @@ a dual-pane TUI and a scriptable CLI.
 - **Dual-pane TUI** in the style of Norton Commander. Either pane browses
   any node; copy, move, sync, view, create and delete work on any node,
   with live job progress.
+- **Full mouse support.** Click to move, double-click to open, right-click
+  to mark, and scroll with the wheel or drag the scrollbars. The function
+  key bar and every dialog option are clickable. Hold Shift to select
+  text, or start with `-mouse=false`.
 - **Sync** in one direction, incremental or mirror, over millions of files
   with flat memory use. Every sync is planned as a dry run you confirm.
   Excludes, keep-newer and a delete limit protect the target.

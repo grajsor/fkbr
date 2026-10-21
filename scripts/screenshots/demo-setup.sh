@@ -68,10 +68,33 @@ cat > $U/workspace/config.xml <<'XML'
     <step name="build">make release VERSION=${BUILD_NUMBER}</step>
     <step name="package">tar -C dist -c . | zstd -19 > site.tar.zst</step>
   </steps>
+  <environment>
+    <var name="NODE_ENV">production</var>
+    <var name="CDN_BASE">https://cdn.example.com/site</var>
+    <var name="SOURCE_MAPS">false</var>
+  </environment>
+  <artifacts>
+    <include>dist/**</include>
+    <include>site.tar.zst</include>
+    <exclude>dist/**/*.map</exclude>
+  </artifacts>
+  <checks>
+    <check name="links" command="make linkcheck" failBuild="true"/>
+    <check name="size" command="make sizecheck" maxBytes="5242880"/>
+    <check name="a11y" command="make a11y" failBuild="false"/>
+  </checks>
   <publish>
     <target node="web01" path="releases/${DATE}"/>
+    <target node="backup01" path="incoming/web01/releases"/>
     <keep>14</keep>
+    <symlink name="current" to="releases/${DATE}"/>
   </publish>
+  <notify>
+    <email to="web-team@example.com" on="failure"/>
+    <chat channel="#web-builds" on="always"/>
+  </notify>
+  <timeout minutes="30"/>
+  <retry count="1" on="network"/>
   <concurrent>false</concurrent>
 </pipeline>
 XML
