@@ -12,7 +12,7 @@ Tested on CentOS 7, Rocky 8, 9 and 10, and Debian 12.
 |---|---|---|
 | wherever you copied it | the binary (any name) and optionally `fkbr.yaml` beside it | yours |
 | `/tmp/fkbr-<uid>-<node>/` | worker lock and API socket; `node.log` when the TUI runs the node | lock and socket removed on clean exit; the log stays (at most 2 × 1 MiB) |
-| `<root>/.fkbr-tmp/` in a destination root | staging for a transfer in progress | removed when the transfer ends |
+| `<root>/.fkbr-tmp/` in a destination root | staging for a transfer in progress | removed when the transfer ends; leftovers of a node that was down are removed at its next prune |
 | the share directory you pass | node registry; finished job records, sync plans and failed requests | records pruned after `keep_done` (1h), see below |
 
 Nothing is written to `/etc`, `/var` or your home directory, and fkbr never

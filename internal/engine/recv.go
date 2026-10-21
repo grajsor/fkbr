@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"path"
 	"slices"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"fkbr/internal/localfs"
 	"fkbr/internal/product"
 	"fkbr/internal/receive"
+	"fkbr/internal/transport"
 )
 
 func (e *Engine) runReceive(ctx context.Context, id string) error {
@@ -327,4 +329,67 @@ func (e *Engine) acceptWrite(ctx context.Context, initiator string) error {
 		return fmt.Errorf("%w: %s does not accept writes from %s", api.ErrNotAllowed, e.Self(), initiator)
 	}
 	return nil
+}
+
+// staleStagingAge is how old the staging of a job the share no longer
+// knows must be before it is swept (a margin, not a rule: such a job was
+// pruned at least a minute after it finished).
+var staleStagingAge = 10 * time.Minute
+
+// sweepStaging removes staging (<root>/.fkbr-tmp/<job>) that no receive
+// will ever use again: the job is gone from the share, this node was
+// detached from it, or this node's part of it has ended. A receive only
+// cleans its own staging when it runs, so a target that was down while
+// it was detached, or forgotten, kept it for good (robust test 2, F3).
+func (e *Engine) sweepStaging(ctx context.Context) {
+	for _, r := range e.fs.Roots() {
+		if !r.Writable {
+			continue
+		}
+		root, err := e.fs.WritableRoot(r.ID)
+		if err != nil {
+			continue
+		}
+		f, err := root.Open(receive.StagingDir)
+		if err != nil {
+			continue
+		}
+		des, _ := f.ReadDir(-1)
+		f.Close()
+		for _, de := range des {
+			id := de.Name()
+			if !de.IsDir() || len(id) != 24 || ctx.Err() != nil {
+				continue
+			}
+			e.jobsMu.Lock()
+			busy := e.running[transport.TypeReceive+"/"+id]
+			e.jobsMu.Unlock()
+			if busy {
+				continue
+			}
+			why := ""
+			j, err := e.st.GetJob(ctx, id)
+			switch {
+			case errors.Is(err, api.ErrUnknownJob):
+				if fi, err := de.Info(); err == nil && time.Since(fi.ModTime()) > staleStagingAge {
+					why = "job no longer on the share"
+				}
+			case err != nil:
+			case j.IsDetached(e.Self()):
+				why = "detached from the job"
+			case roleState(j, api.RoleTarget, e.Self()).Terminal():
+				why = "its part of the job has ended"
+			}
+			if why == "" {
+				continue
+			}
+			p := path.Join(receive.StagingDir, id)
+			if err := root.RemoveAll(p); err != nil {
+				e.log.Warn("could not remove old staging", "root", r.ID, "job", id, "err", err)
+				continue
+			}
+			root.Remove(receive.StagingDir) // only when it is empty
+			e.log.Info("removed old staging", "root", r.ID, "job", id, "why", why)
+		}
+	}
 }

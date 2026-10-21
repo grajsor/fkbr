@@ -447,6 +447,7 @@ func (e *Engine) prune(ctx context.Context) {
 	if err := e.Prune(ctx, e.cfg.KeepDone); err != nil {
 		e.log.Warn("prune failed", "err", err)
 	}
+	e.sweepStaging(ctx)
 }
 
 func (e *Engine) Prune(ctx context.Context, keep time.Duration) error {

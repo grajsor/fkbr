@@ -145,6 +145,16 @@ was checked again on the lab with new-build nodes.
 | A CLI without a running node created folders on the share | Only a registered node creates its folders | `TestVisitorLeavesNoFolders` |
 | One unwritable inbox failed the whole fan-out | Notify retried; others carry on | `TestNotifyFailureIsNotFatal` |
 
+A second, 90-minute run on the fixed build (8c3c20b) checked the 17 again
+(none came back) and found 4 more, fixed the same way:
+
+| Found | Fixed | Test |
+|---|---|---|
+| A sync's target scan changed the target folder's mtime (the mtime probe above; even on `sync -n`) | The probe puts the folder's times back | `TestMtimeRange` |
+| A source back from a NAS stall detached a target that had already said done; the job ended partial | A done target counts as finished, whatever its acks | `TestDoneTargetNotDetached` |
+| A target restarted while it was being detached kept the job's staging for good | Swept at every prune | `TestStaleStagingSwept` |
+| A job whose source was forgotten stayed `running` though every target was done | Shown done (or failed) | `TestSourceGoneAfterTargetsFinished` |
+
 ## How to run the lab tests
 
 - **Torture** (`~/fkbr-lab/torture`): rounds of random copies and syncs

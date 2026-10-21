@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"fkbr/internal/api"
 	"fkbr/internal/config"
@@ -221,11 +222,17 @@ func TestCheckRoots(t *testing.T) {
 
 func TestMtimeRange(t *testing.T) {
 	dir := t.TempDir()
+	old := time.Date(2001, 1, 1, 0, 0, 0, 123456789, time.UTC)
+	os.Chtimes(dir, old, old)
+	mtimeRanges.Clear()       // probe even if another test did on this filesystem
 	lo, hi := MtimeRange(dir) // tmpfs/ext4/xfs with bigtime: no limit
 	t.Logf("range of %s: %d..%d", dir, lo, hi)
 	des, _ := os.ReadDir(dir)
 	if len(des) != 0 {
 		t.Fatalf("probe left %v behind", des)
+	}
+	if fi, _ := os.Stat(dir); !fi.ModTime().Equal(old) {
+		t.Errorf("probe changed the folder's mtime: %s", fi.ModTime())
 	}
 	if hi != 0 && hi < 2147483647e9 || lo != 0 && lo > -2147483648e9 {
 		t.Errorf("implausible range %d..%d", lo, hi)

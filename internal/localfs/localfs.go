@@ -435,7 +435,9 @@ var mtimeRanges sync.Map // st_dev -> [2]int64
 // the values it clamps to (ns; 0: no limit found). XFS without bigtime,
 // ext4 with 128-byte inodes and others stop at 2038-01-19 and 1901-12-13
 // and store anything beyond as the limit, silently. It probes once per
-// filesystem with a temporary file in dir, so dir must be writable.
+// filesystem with a temporary file in dir, so dir must be writable; dir's
+// times are put back afterwards (a sync scan must not change what it
+// compares, robust test 2 F2).
 func MtimeRange(dir string) (lo, hi int64) {
 	var st syscall.Stat_t
 	if syscall.Stat(dir, &st) != nil {
@@ -451,6 +453,7 @@ func MtimeRange(dir string) (lo, hi int64) {
 	}
 	name := f.Name()
 	f.Close()
+	defer os.Chtimes(dir, time.Unix(st.Atim.Unix()), time.Unix(st.Mtim.Unix())) // after the remove
 	defer os.Remove(name)
 	stored := func(t time.Time) (int64, bool) {
 		if os.Chtimes(name, t, t) != nil {

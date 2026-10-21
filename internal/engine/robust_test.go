@@ -18,6 +18,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/localfs"
+	"fkbr/internal/receive"
 	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
 )
@@ -408,6 +409,64 @@ func TestTargetGoneAfterSourceFinished(t *testing.T) {
 	}
 }
 
+// Robust test 2, F4: a job whose source was forgotten before it wrote done
+// stayed running forever, though every target was done.
+func TestSourceGoneAfterTargetsFinished(t *testing.T) {
+	share := t.TempDir()
+	a, _ := node(t, share, "a")
+	b, _ := node(t, share, "b")
+	c, _ := node(t, share, "c")
+	stopA := runWorker(t, a)
+	runWorker(t, b)
+	runWorker(t, c)
+	ctx := context.Background()
+	mk := func(id string, cState api.JobState) {
+		j := &api.Job{ID: id, Initiator: "a", Request: api.TransferRequest{SrcNode: "a", SrcRoot: "data", Paths: []string{"x"}, DstNodes: []string{"b", "c"}, DstRoot: "data"}}
+		if err := a.st.CreateJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+		a.st.PutStatus(ctx, id, &api.JobStatus{Node: "a", Role: api.RoleSource, State: api.JobRunning, Chunks: 1})
+		b.st.PutStatus(ctx, id, &api.JobStatus{Node: "b", Role: api.RoleTarget, State: api.JobDone, Chunks: 1})
+		c.st.PutStatus(ctx, id, &api.JobStatus{Node: "c", Role: api.RoleTarget, State: cState, Chunks: 1})
+	}
+	mk("18e0000000000000aaaaaaa1", api.JobDone)
+	mk("18e0000000000000aaaaaaa2", api.JobFailed)
+	mk("18e0000000000000aaaaaaa3", api.JobRunning)
+	stopA()
+	if got, _ := b.Job(ctx, "18e0000000000000aaaaaaa1"); got.State != api.JobRunning {
+		t.Fatalf("while a may still come back: %s", got.State)
+	}
+	waitUntil(t, func() bool {
+		ns, _ := b.Nodes(ctx)
+		for _, n := range ns {
+			if n.ID == "a" && !n.Online {
+				return true
+			}
+		}
+		return false
+	}, "a offline")
+	if err := b.Forget(ctx, "a"); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]api.JobState{
+		"18e0000000000000aaaaaaa1": api.JobDone,
+		"18e0000000000000aaaaaaa2": api.JobFailed,
+		// c has not ended: c fails the job itself once it misses a
+		"18e0000000000000aaaaaaa3": api.JobRunning,
+	} {
+		got, _ := b.Job(ctx, id)
+		if got.State != want {
+			t.Errorf("%s: %s, want %s (%+v)", id, got.State, want, got.Participants)
+		}
+	}
+	js, _ := b.Jobs(ctx)
+	for _, j := range js {
+		if j.ID == "18e0000000000000aaaaaaa1" && j.State != api.JobDone {
+			t.Errorf("listing: %s", j.State)
+		}
+	}
+}
+
 // F15: a node whose info.json was damaged stayed invisible for good (it kept
 // heartbeating), and such an entry could not be forgotten.
 func TestDamagedRegistryEntry(t *testing.T) {
@@ -493,4 +552,84 @@ func TestNotifyFailureIsNotFatal(t *testing.T) {
 	}
 	sameTree(t, aroot+"/tree", broot+"/in/tree")
 	sameTree(t, aroot+"/tree", croot+"/in/tree")
+}
+
+func (f *faultStore) Acked(ctx context.Context, src, id, node string) (int, error) {
+	if node == f.hideAcks {
+		return 0, nil
+	}
+	return f.Mailbox.Acked(ctx, src, id, node)
+}
+
+// Robust test 2, F1: a source back from a stall on the share read no acks
+// from a target that had already installed everything and said done, and
+// detached it for "no progress": the job ended partial.
+func TestDoneTargetNotDetached(t *testing.T) {
+	share := t.TempDir()
+	acfg := nodeCfg(t, share, "a")
+	acfg.Transfer.DetachAfter = 3 * time.Second
+	a, af := buildFaulty(t, acfg)
+	af.hideAcks = "b"
+	aroot := acfg.Roots[0].Path
+	b, broot := node(t, share, "b")
+	c, croot := node(t, share, "c")
+	runWorker(t, a)
+	runWorker(t, b)
+	runWorker(t, c)
+	// small: b is done long before detach_after, only its acks are not seen
+	makeTree(t, aroot, 1, 1<<10)
+	ctx := context.Background()
+	id, err := a.Submit(ctx, api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"b", "c"}, DstRoot: "data", DstDir: "in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, a, id, 30*time.Second)
+	if j.State != api.JobDone || len(j.Detached) > 0 {
+		t.Fatalf("job: %s, detached %+v, participants %+v", j.State, j.Detached, j.Participants)
+	}
+	sameTree(t, aroot+"/tree", broot+"/in/tree")
+	sameTree(t, aroot+"/tree", croot+"/in/tree")
+}
+
+// Robust test 2, F3: a target restarted mid-receive and then detached kept
+// the job's half-received staging in its root for good.
+func TestStaleStagingSwept(t *testing.T) {
+	share := t.TempDir()
+	a, _ := node(t, share, "a")
+	b, broot := node(t, share, "b")
+	ctx := context.Background()
+	mkJob := func(id string, bState api.JobState) {
+		j := &api.Job{ID: id, Initiator: "a", Request: api.TransferRequest{SrcNode: "a", SrcRoot: "data", Paths: []string{"x"}, DstNodes: []string{"b"}, DstRoot: "data"}}
+		if err := a.st.CreateJob(ctx, j); err != nil {
+			t.Fatal(err)
+		}
+		if bState != "" {
+			b.st.PutStatus(ctx, id, &api.JobStatus{Node: "b", Role: api.RoleTarget, State: bState, Chunks: 1})
+		}
+	}
+	const (
+		detached = "18e0000000000000bbbbbbb1"
+		goneOld  = "18e0000000000000bbbbbbb2"
+		goneNew  = "18e0000000000000bbbbbbb3"
+		running  = "18e0000000000000bbbbbbb4"
+		ended    = "18e0000000000000bbbbbbb5"
+	)
+	mkJob(detached, api.JobRunning)
+	a.st.Detach(ctx, detached, api.Detached{Node: "b", Reason: "offline"})
+	mkJob(running, api.JobRunning)
+	mkJob(ended, api.JobFailed)
+	staging := broot + "/" + receive.StagingDir
+	for _, id := range []string{detached, goneOld, goneNew, running, ended} {
+		os.MkdirAll(staging+"/"+id+"/tree/d", 0o755)
+		os.WriteFile(staging+"/"+id+"/tree/d/f", []byte("half"), 0o644)
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(staging+"/"+goneOld, old, old)
+	b.sweepStaging(ctx)
+	for id, keep := range map[string]bool{detached: false, goneOld: false, goneNew: true, running: true, ended: false} {
+		_, err := os.Stat(staging + "/" + id)
+		if kept := err == nil; kept != keep {
+			t.Errorf("%s: kept=%v, want %v", id, kept, keep)
+		}
+	}
 }

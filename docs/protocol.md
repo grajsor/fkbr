@@ -240,6 +240,10 @@ for final acks), it drops a target that is holding things up:
 - it has made no progress for `transfer.detach_after`, or
 - it reported `failed`.
 
+A target whose own status says `done` is never dropped, whatever its acks
+say: a source back from a stall on the share can read stale ack listings
+for a while, and the target installed everything.
+
 The last active target is not dropped for being slow or failing (a
 failure then fails the job), but it is once it has been offline for
 `transfer.detach_after`: the job ends `partial` and frees the source's
@@ -252,8 +256,14 @@ minute, in case the first one was lost or could not be written (an
 unwritable inbox delays that target, nothing else). When the source is
 done but a target never said so and is forgotten or offline for longer
 than `detach_after`, the job reads as `partial` with that target
-detached; if it comes back, it installs and the job is done. A detached target that notices (immediately, or when it comes back)
-discards its staging area and reports `detached`. Nothing partial is ever
+detached; if it comes back, it installs and the job is done. Likewise,
+when every target has ended but the source never said so and is
+forgotten or offline for longer than `detach_after`, the job reads as
+`done` (or `failed` if a target failed). A detached target that notices (immediately, or when it comes back)
+discards its staging area and reports `detached`. A node that was down
+meanwhile removes leftover staging when it prunes (at start and every
+half `keep_done`): of jobs it was detached from, jobs whose part it has
+ended, and jobs no longer on the share (after 10 min). Nothing partial is ever
 installed. A job that finished for some targets but detached others ends
 `partial`.
 
@@ -291,7 +301,8 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    into U+FFFD); the same form carries such names in every request.
    A target's header says what its filesystem cannot store: mtimes beyond
    the range it clamps to (probed once per filesystem with a temporary
-   file: XFS without bigtime stops at 2038), and its name rules (vfat,
+   file in the target folder, whose times are put back: XFS without
+   bigtime stops at 2038), and its name rules (vfat,
    exFAT, ext4 casefold: forbidden characters, trailing dots, ASCII only,
    no symlinks, names equal but for case or Unicode form). Excludes match
    case-insensitively there.

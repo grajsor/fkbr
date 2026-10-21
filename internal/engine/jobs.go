@@ -257,7 +257,7 @@ func (e *Engine) Job(ctx context.Context, id string) (*api.Job, error) {
 		return nil, err
 	}
 	normalize(j)
-	e.goneTargets(ctx, []*api.Job{j}, nil)
+	e.goneNodes(ctx, []*api.Job{j}, nil)
 	return j, nil
 }
 
@@ -268,17 +268,38 @@ func (e *Engine) Jobs(ctx context.Context) ([]api.Job, error) {
 		normalize(&js[i])
 		ps = append(ps, &js[i])
 	}
-	e.goneTargets(ctx, ps, nil)
+	e.goneNodes(ctx, ps, nil)
 	return js, err
 }
 
-// goneTargets shows a target as detached when the source is done but the
-// target never said so and is gone: forgotten, or offline for longer than
-// detach_after (it died after its last ack). Nothing else would ever end
-// such a job. If the target comes back, it installs and the job is done.
-func (e *Engine) goneTargets(ctx context.Context, js []*api.Job, nodes []api.Node) {
+// goneNodes ends jobs in the view that a gone node would never end. A gone
+// node is forgotten, or offline for longer than detach_after.
+//
+// A target is shown as detached when the source is done but the target
+// never said so and is gone (it died after its last ack). If it comes
+// back, it installs and the job is done.
+//
+// A source is shown as finished when every target has ended but the
+// source never said so and is gone (it died, or was forgotten, before it
+// wrote its last status): done if every target is done, failed otherwise.
+// Prune ignores the statuses of forgotten nodes in the same way.
+func (e *Engine) goneNodes(ctx context.Context, js []*api.Job, nodes []api.Node) {
+	gone := func(node string) string {
+		i := slices.IndexFunc(nodes, func(n api.Node) bool { return n.ID == node })
+		switch {
+		case i < 0:
+			return "forgotten"
+		case !nodes[i].Online && nodes[i].LastSeen > e.cfg.Transfer.DetachAfter:
+			return fmt.Sprintf("offline for %s", nodes[i].LastSeen.Round(time.Second))
+		}
+		return ""
+	}
 	for _, j := range js {
-		if j.State.Terminal() || roleState(j, api.RoleSource, "") != api.JobDone {
+		if j.State.Terminal() {
+			continue
+		}
+		src := roleState(j, api.RoleSource, "")
+		if src != api.JobDone && !(src != "" && !src.Terminal() && targetsEnded(j)) {
 			continue
 		}
 		if nodes == nil {
@@ -287,21 +308,64 @@ func (e *Engine) goneTargets(ctx context.Context, js []*api.Job, nodes []api.Nod
 				return
 			}
 		}
+		if src != api.JobDone {
+			why := gone(j.Request.SrcNode)
+			if why == "" {
+				continue
+			}
+			for i := range j.Participants {
+				p := &j.Participants[i]
+				if p.Role != api.RoleSource {
+					continue
+				}
+				p.State, p.Phase = api.JobDone, ""
+				if !targetsDone(j) {
+					p.State = api.JobFailed
+					p.Error = "source " + why + " before it finished"
+				}
+				p.Problems = append(p.Problems, "source "+why+" before it wrote its last status; every target had ended")
+			}
+			normalize(j)
+			continue
+		}
 		for _, p := range j.Participants {
 			if p.Role != api.RoleTarget || p.State.Terminal() || j.IsDetached(p.Node) {
 				continue
 			}
-			i := slices.IndexFunc(nodes, func(n api.Node) bool { return n.ID == p.Node })
-			switch {
-			case i < 0:
+			switch why := gone(p.Node); {
+			case why == "forgotten":
 				j.Detached = append(j.Detached, api.Detached{Node: p.Node, Reason: "forgotten before it finished", Chunks: p.Chunks})
-			case !nodes[i].Online && nodes[i].LastSeen > e.cfg.Transfer.DetachAfter:
-				j.Detached = append(j.Detached, api.Detached{Node: p.Node, Chunks: p.Chunks,
-					Reason: fmt.Sprintf("offline for %s after the source finished", nodes[i].LastSeen.Round(time.Second))})
+			case why != "":
+				j.Detached = append(j.Detached, api.Detached{Node: p.Node, Chunks: p.Chunks, Reason: why + " after the source finished"})
 			}
 		}
 		normalize(j)
 	}
+}
+
+// targetsEnded: every target that is not detached has a final status.
+func targetsEnded(j *api.Job) bool {
+	n := 0
+	for _, p := range j.Participants {
+		if p.Role != api.RoleTarget || j.IsDetached(p.Node) {
+			continue
+		}
+		if !p.State.Terminal() {
+			return false
+		}
+		n++
+	}
+	return n == len(j.Request.DstNodes)-len(j.Detached)
+}
+
+// targetsDone: every target that is not detached is done.
+func targetsDone(j *api.Job) bool {
+	for _, p := range j.Participants {
+		if p.Role == api.RoleTarget && !j.IsDetached(p.Node) && p.State != api.JobDone {
+			return false
+		}
+	}
+	return true
 }
 
 func (e *Engine) Cancel(ctx context.Context, id string) error {

@@ -488,6 +488,11 @@ func (s *sender) gc(ctx context.Context, total int) (bool, error) {
 		if err != nil {
 			return false, err
 		}
+		if s.tstate[d] == api.JobDone && total >= 0 {
+			// It installed everything: its acks may not be visible yet
+			// (a share that was cut off reads stale listings for a while).
+			n = total
+		}
 		if n > s.acks[d] {
 			s.acks[d] = n
 			s.progress[d] = now
@@ -556,8 +561,10 @@ func (s *sender) detachLaggards(ctx context.Context, total int) error {
 			return err
 		}
 	}
+	// A target that says it is done installed everything, whatever its
+	// acks say (they may not be visible yet): it is never dropped.
 	active := s.active()
-	if len(active) == 1 {
+	if len(active) == 1 && s.tstate[active[0]] != api.JobDone {
 		// The last target is not dropped for being slow, but one that has
 		// been offline for detach_after is: the job would hold this node's
 		// job slot until it came back (the job ends partial; catch it up
@@ -586,7 +593,7 @@ func (s *sender) detachLaggards(ctx context.Context, total int) error {
 		if total >= 0 {
 			holding = s.acks[d] < total
 		}
-		if !holding {
+		if !holding || s.tstate[d] == api.JobDone {
 			continue
 		}
 		idle := time.Since(s.progress[d])

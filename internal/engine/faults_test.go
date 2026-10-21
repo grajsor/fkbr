@@ -35,6 +35,8 @@ type faultStore struct {
 	eioReadHits                      int
 	// openDelay makes every chunk slow to open (a slow share).
 	openDelay time.Duration
+	// hideAcks: this target's acks read as 0 (a stale listing).
+	hideAcks string
 }
 
 type eioWriter struct{ transport.ChunkWriter }
