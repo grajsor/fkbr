@@ -72,7 +72,7 @@ doing, updated live.
 
 ## Quick start
 
-Build with Go 1.25 or newer. `make` cross-compiles both architectures:
+Build with Go 1.26 or newer. `make` cross-compiles both architectures:
 
 ```
 make    # dist/fkbr-linux-amd64 and dist/fkbr-linux-arm64

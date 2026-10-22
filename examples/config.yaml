@@ -14,7 +14,8 @@ nfs_root: /mnt/transfer/fkbr
 
 # Local runtime dir (never NFS) for the worker lock and socket; removed on
 # clean exit. Default: /tmp/fkbr-<uid>-<node> (kept fresh while running, so
-# /tmp cleaners leave it alone; not /run/user, which logout deletes).
+# /tmp cleaners leave it alone; not /run/user, which logout deletes). It
+# must belong to the user running fkbr and not be writable by others.
 # state_dir: /tmp/fkbr-1000-hosta
 
 # Role tags, published to the registry. "@role" targets every node with the
