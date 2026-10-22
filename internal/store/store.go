@@ -40,6 +40,16 @@ func validJobID(id string) error {
 	return nil
 }
 
+// validChunkRef checks the names of a chunk path (data/<src>/<id>). Every
+// name from a caller is checked before it becomes a path: over ssh the
+// caller is another host (docs/ssh.md).
+func validChunkRef(src, id string) error {
+	if !config.ValidID(src) {
+		return fmt.Errorf("%w: %q", api.ErrUnknownNode, src)
+	}
+	return validJobID(id)
+}
+
 // checkJobNames refuses a job record whose source or target names could
 // not be node IDs: they become paths on the share (data/<src>/...,
 // acks/<target>), so a forged "../" would reach outside it (security
@@ -179,6 +189,9 @@ func (m *Dir) PutStatus(_ context.Context, id string, st *api.JobStatus) error {
 	if st.Node != m.self {
 		return fmt.Errorf("store: status for %q written by %q", st.Node, m.self)
 	}
+	if st.Role != api.RoleSource && st.Role != api.RoleTarget { // part of the file name
+		return fmt.Errorf("store: status with role %q", st.Role)
+	}
 	return m.writeJSON(m.path("jobs", id, "status", m.self+"."+string(st.Role)+".json"), st)
 }
 
@@ -194,6 +207,9 @@ func (m *Dir) RequestCancel(_ context.Context, id string) error {
 }
 
 func (m *Dir) SetComplete(_ context.Context, id string, chunks int) error {
+	if err := validJobID(id); err != nil {
+		return err
+	}
 	return m.write(m.path("jobs", id, "COMPLETE"), []byte(strconv.Itoa(chunks)+"\n"))
 }
 
@@ -249,15 +265,24 @@ func (w *chunkWriter) Abort() {
 }
 
 func (m *Dir) ChunkMeta(_ context.Context, src, id string, seq int) ([]byte, error) {
+	if err := validChunkRef(src, id); err != nil {
+		return nil, err
+	}
 	return m.readListed(m.path("data", src, id), chunkName(seq, ".json"))
 }
 
 func (m *Dir) OpenChunk(_ context.Context, src, id string, seq int) (io.ReadCloser, error) {
+	if err := validChunkRef(src, id); err != nil {
+		return nil, err
+	}
 	m.fresh(m.path("data", src, id))
 	return os.Open(m.path("data", src, id, chunkName(seq, ".chunk")))
 }
 
 func (m *Dir) DeleteChunk(_ context.Context, id string, seq int) error {
+	if err := validJobID(id); err != nil {
+		return err
+	}
 	dir := m.path("data", m.self, id)
 	// Meta first, so a reader never finds meta without its chunk.
 	err := os.Remove(filepath.Join(dir, chunkName(seq, ".json")))
@@ -275,6 +300,9 @@ func (m *Dir) SetAcked(_ context.Context, src, id, node string, n int) error {
 	if node != m.self {
 		return fmt.Errorf("store: ack for %q written by %q", node, m.self)
 	}
+	if err := validChunkRef(src, id); err != nil {
+		return err
+	}
 	dir := m.path("data", src, id, "acks")
 	if err := m.mkdir(dir); err != nil {
 		return err
@@ -283,6 +311,12 @@ func (m *Dir) SetAcked(_ context.Context, src, id, node string, n int) error {
 }
 
 func (m *Dir) Acked(_ context.Context, src, id, node string) (int, error) {
+	if err := validChunkRef(src, id); err != nil {
+		return 0, err
+	}
+	if !config.ValidID(node) {
+		return 0, fmt.Errorf("%w: %q", api.ErrUnknownNode, node)
+	}
 	b, err := m.readListed(m.path("data", src, id, "acks"), node)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil

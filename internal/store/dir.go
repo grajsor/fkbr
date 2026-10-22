@@ -368,6 +368,9 @@ func (m *Dir) Send(_ context.Context, msg *transport.Message) error {
 	if !config.ValidID(msg.To) {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, msg.To)
 	}
+	if !config.ValidID(msg.ID) {
+		return fmt.Errorf("store: request id %q: invalid name", msg.ID)
+	}
 	if ok, _ := m.listed(m.path("nodes", msg.To), "info.json"); !ok {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, msg.To)
 	}
@@ -389,6 +392,9 @@ func (m *Dir) Send(_ context.Context, msg *transport.Message) error {
 }
 
 func (m *Dir) AwaitReplies(ctx context.Context, reqID string, fn func(*transport.Reply) error) error {
+	if !config.ValidID(reqID) {
+		return fmt.Errorf("store: request id %q: invalid name", reqID)
+	}
 	dir := m.path("reply", m.self, reqID)
 	defer func() {
 		os.RemoveAll(dir)
@@ -567,6 +573,9 @@ func (m *Dir) Reply(_ context.Context, req *transport.Message, r *transport.Repl
 // Finish removes a processed request; a failed one is kept in failed/
 // (until pruned) so an operator can see what went wrong.
 func (m *Dir) Finish(_ context.Context, msg *transport.Message, failed bool) error {
+	if !config.ValidID(msg.ID) {
+		return fmt.Errorf("store: request id %q: invalid name", msg.ID)
+	}
 	cur := m.path(m.inbox(m.self, "cur"), msg.ID+".json")
 	if !failed {
 		return os.Remove(cur)
