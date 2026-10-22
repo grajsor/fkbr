@@ -56,6 +56,8 @@ copyright "The Author".
   caching, several hosts, kill/stall/NAS-cut behaviour) so the owner can
   run it.
 - Work and push on the session's branch; the owner merges and deploys.
+  Never merge into or push to `master`: the owner replays branch commits
+  onto `master` under their own name, so their hashes differ from yours.
 
 ## Build, test, version
 
