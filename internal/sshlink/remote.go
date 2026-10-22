@@ -27,7 +27,8 @@ type Remote struct {
 	chunks   *store.Dir
 	chunkDir string
 	log      *slog.Logger
-	offset   atomic.Int64 // home clock minus ours, ns
+	offset   atomic.Int64  // home clock minus ours, ns
+	got      atomic.Uint64 // Seq of the last fetch answer read whole (see outbox)
 	stop     chan struct{}
 	stopOnce atomicOnce
 }
@@ -66,7 +67,7 @@ func Dial(ctx context.Context, conn io.ReadWriteCloser, self, version, chunkDir 
 	r := &Remote{sess: sess, self: self, chunks: chunks, chunkDir: chunkDir, log: log, stop: make(chan struct{})}
 	before := time.Now()
 	var now time.Time
-	if err := do(ctx, sess, "hello", &hello{Node: self, Protocol: api.ProtocolVersion, Version: version}, &now); err != nil {
+	if err := do(ctx, sess, "hello", &hello{Node: self, Protocol: api.ProtocolVersion, Version: version, Link: linkVersion}, &now); err != nil {
 		sess.Close()
 		return nil, fmt.Errorf("ssh link: %w", err)
 	}
@@ -278,9 +279,10 @@ func (r *Remote) AwaitReplies(ctx context.Context, reqID string, fn func(*transp
 
 func (r *Remote) Fetch(ctx context.Context) ([]*transport.Message, error) {
 	var f fetched
-	if err := do(ctx, r.sess, "fetch", nil, &f); err != nil {
-		return nil, err
+	if err := do(ctx, r.sess, "fetch", &fetchArgs{Ack: r.got.Load()}, &f); err != nil {
+		return nil, err // not acked: the home node sends these again
 	}
+	r.got.Store(f.Seq)
 	return f.Msgs, decodeErr(&answer{E: f.E, C: f.C})
 }
 

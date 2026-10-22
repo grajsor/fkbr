@@ -187,7 +187,8 @@ Regression tests for these are in `internal/engine/robust_test.go` and
 package tests; docs/testplan.md lists them.
 
 - Fetch never drops a claimed request (retries, parks after 20 failed
-  reads). The heartbeat runs on its own goroutine. Prune ages are mtimes
+  reads). Over ssh the home node keeps what it handed out until the
+  linked node's next fetch acks it (`sshlink.outbox`). The heartbeat runs on its own goroutine. Prune ages are mtimes
   against `serverNow()`, never the local clock; IDs/times come from the
   share clock (`Mailbox.Now`, `id.At`).
 - A source re-sends `receive` every minute to targets without a status. A

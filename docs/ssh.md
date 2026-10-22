@@ -106,6 +106,10 @@ and acks).
   Nothing partial is ever installed.
 - When the home node quits, it asks every remote node to stop: each
   leaves the swarm while its link is still up, then ssh closes.
+- A request handed to a remote node stays on the home node until that
+  node's next "anything for me?" says the answer arrived; if it did not,
+  the request goes out again (alone, and after 20 tries it is parked in
+  failed/). One answer carries at most 16 MiB of requests.
 - A remote fkbr on another protocol version is refused with the usual
   message.
 

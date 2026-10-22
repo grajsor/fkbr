@@ -54,6 +54,83 @@ type peer struct {
 	host string
 	sess *frame.Session
 	mb   *store.Dir // opened as this node
+	out  outbox
+}
+
+// fetchBudget bounds the requests in one fetch answer, well below the
+// line the other side reads (maxHeader); the rest wait for the next one.
+// maxSendTries: a request that fails to arrive this often in a row, sent
+// alone, is parked in failed/ (as store's maxReadTries).
+const (
+	fetchBudget  = 16 << 20
+	maxSendTries = 20
+)
+
+// outbox is what the home node has claimed from a linked node's inbox
+// and not yet seen arrive. store.Fetch hands a claimed request out once;
+// over a link its answer can be lost while the link stays up (unreadable,
+// or cut short), so the request stays here until the node's next fetch
+// acks that answer, and goes out again if it does not. When the link
+// ends, the next one opens the store anew, which hands them all out again.
+type outbox struct {
+	mu    sync.Mutex
+	seq   uint64               // of the last answer
+	sent  []*transport.Message // in it, until acked
+	tries int                  // answers in a row whose requests were not acked
+	held  []*transport.Message // claimed, not sent yet
+}
+
+// fetch answers a linked node's fetch that acks answer ack: what was not
+// acked first (alone after a failure), then what was held back, else new
+// requests, waiting up to fetchWait for one.
+func (o *outbox) fetch(ctx context.Context, mb *store.Dir, ack uint64, log *slog.Logger) (*fetched, error) {
+	o.mu.Lock() // also keeps mb.Fetch to one caller, as it must be
+	defer o.mu.Unlock()
+	if ack == o.seq {
+		o.sent, o.tries = nil, 0
+	} else if len(o.sent) > 0 {
+		o.tries++
+	}
+	queue := append(append([]*transport.Message(nil), o.sent...), o.held...)
+	if len(queue) > 0 && o.tries >= maxSendTries {
+		log.Warn("ssh link: a request never arrived; parked in failed/", "node", mb.Self(), "id", queue[0].ID, "type", queue[0].Type)
+		mb.Finish(ctx, queue[0], true)
+		queue, o.tries = queue[1:], 0
+	}
+	var ferr error
+	if len(queue) == 0 {
+		deadline := time.Now().Add(fetchWait)
+		for {
+			queue, ferr = mb.Fetch(ctx)
+			if len(queue) > 0 || ferr != nil || time.Now().After(deadline) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(waitStep):
+			}
+		}
+	}
+	var send []*transport.Message
+	size := 0
+	for len(queue) > 0 {
+		m := queue[0]
+		b, err := json.Marshal(m)
+		if err != nil || len(b) > maxHeader-64<<10 {
+			log.Warn("ssh link: a request too big for the link; parked in failed/", "node", mb.Self(), "id", m.ID, "type", m.Type, "bytes", len(b))
+			mb.Finish(ctx, m, true)
+			queue = queue[1:]
+			continue
+		}
+		if len(send) > 0 && (size+len(b) > fetchBudget || o.tries > 0) {
+			break
+		}
+		send, size, queue = append(send, m), size+len(b), queue[1:]
+	}
+	o.seq++
+	o.sent, o.held = send, queue
+	return &fetched{Msgs: send, Seq: o.seq, E: errText(ferr), C: errorCode(ferr)}, nil
 }
 
 // NewHome uses dir (private, on local disk) as the swarm's share, with
@@ -160,7 +237,12 @@ type hello struct {
 	Node     string `json:"node"`
 	Protocol int    `json:"protocol"`
 	Version  string `json:"version"`
+	Link     int    `json:"link"`
 }
+
+// linkVersion is what the calls over a link mean, on top of Protocol:
+// 2 acks fetch answers (outbox). Builds before it sent none (0).
+const linkVersion = 2
 
 // ServeConn runs the home end of one link (an ssh session's pipes) until
 // it ends. host names the link in logs and in Nodes.
@@ -217,8 +299,9 @@ func (h *Home) greet(ctx context.Context, st *frame.Stream, sess *frame.Session,
 		if err != nil {
 			return nil, err
 		}
-		if a.Protocol != api.ProtocolVersion {
-			return nil, fmt.Errorf("%s on %s speaks protocol %d, this one %d: run the same version on every node", a.Node, host, a.Protocol, api.ProtocolVersion)
+		if a.Protocol != api.ProtocolVersion || a.Link != linkVersion {
+			return nil, fmt.Errorf("%s on %s speaks protocol %d (link %d), this one %d (link %d): run the same version on every node",
+				a.Node, host, a.Protocol, a.Link, api.ProtocolVersion, linkVersion)
 		}
 		if a.Node == h.self {
 			return nil, fmt.Errorf("%w: %s on %s has the home node's name; pass -node with another name there", api.ErrNotAllowed, a.Node, host)
@@ -356,19 +439,12 @@ func (h *Home) handlers(p *peer) map[string]handler {
 			writeJSONLine(w, end)
 			return nil, errAnswered
 		},
-		"fetch": func(ctx context.Context, _ json.RawMessage, _ io.Reader, _ *answerWriter) (any, error) {
-			deadline := time.Now().Add(fetchWait)
-			for {
-				msgs, err := mb.Fetch(ctx)
-				if len(msgs) > 0 || err != nil || time.Now().After(deadline) {
-					return fetched{msgs, errText(err), errorCode(err)}, nil
-				}
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(waitStep):
-				}
+		"fetch": func(ctx context.Context, raw json.RawMessage, _ io.Reader, _ *answerWriter) (any, error) {
+			a, err := args[fetchArgs](raw)
+			if err != nil {
+				return nil, err
 			}
+			return p.out.fetch(ctx, mb, a.Ack, h.log)
 		},
 		"reply": func(ctx context.Context, raw json.RawMessage, _ io.Reader, _ *answerWriter) (any, error) {
 			a, err := args[replyArgs](raw)
@@ -573,8 +649,14 @@ type staleEntry struct {
 	Age    time.Duration `json:"age"`
 }
 
+// fetchArgs acks the last fetch answer the node got (its Seq; see outbox).
+type fetchArgs struct {
+	Ack uint64 `json:"ack"`
+}
+
 type fetched struct {
 	Msgs []*transport.Message `json:"msgs,omitempty"`
+	Seq  uint64               `json:"seq"`
 	E    string               `json:"e,omitempty"`
 	C    string               `json:"c,omitempty"`
 }
