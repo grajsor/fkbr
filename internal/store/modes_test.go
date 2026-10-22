@@ -1,4 +1,4 @@
-package nfsmailbox
+package store
 
 import (
 	"errors"
@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+	"time"
 
 	"fkbr/internal/api"
 	"fkbr/internal/transport"
@@ -115,7 +116,7 @@ func TestReadListed(t *testing.T) {
 	if _, err := m.readListed(dir, "x.json"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("missing dir: %v", err)
 	}
-	if err := mkdir(dir); err != nil {
+	if err := m.mkdir(dir); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := m.readListed(dir, "x.json"); !errors.Is(err, fs.ErrNotExist) {
@@ -130,4 +131,68 @@ func TestReadListed(t *testing.T) {
 	if b, err := m.readListed(dir, "x.json"); err != nil || string(b) != "hi" {
 		t.Fatalf("listed file: %q %v", b, err)
 	}
+}
+
+// A private share (an ssh swarm's home node, local mode) is this user's
+// alone, whatever the umask, the root included.
+func TestPrivateShareModes(t *testing.T) {
+	old := syscall.Umask(0o022)
+	defer syscall.Umask(old)
+	root := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var ms []*Dir
+	for _, id := range []string{"a", "b"} {
+		m, err := Open(root, id, Options{Poll: 5 * time.Millisecond, OfflineAfter: time.Minute, Private: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := m.Register(ctx, api.NodeInfo{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+		ms = append(ms, m)
+	}
+	a, b := ms[0], ms[1]
+	a.Heartbeat(ctx, "w1 1 a")
+	if err := a.Send(ctx, &transport.Message{Protocol: 1, ID: "0001", Type: "list", From: "a", To: "b"}); err != nil {
+		t.Fatal(err)
+	}
+	job := &api.Job{ID: "18dfe2ce5f5b9560f9aa6dfc", Request: api.TransferRequest{SrcNode: "a", DstNodes: []string{"b"}}}
+	if err := a.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	cw, err := a.CreateChunk(ctx, job.ID, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cw.Write([]byte("chunk"))
+	if err := cw.Commit([]byte(`{"seq":0}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SetAcked(ctx, "a", job.ID, "b", 1); err != nil {
+		t.Fatal(err)
+	}
+	bw, _ := a.CreateBlob(ctx, "plans/p1/plan.json")
+	bw.Write([]byte("{}"))
+	if err := bw.Commit(nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.Prune(ctx, 0); err != nil {
+		t.Fatal(err)
+	}
+	filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			t.Fatal(err)
+		}
+		fi, _ := d.Info()
+		want := os.FileMode(privateFileMode)
+		if d.IsDir() {
+			want = privateDirMode
+		}
+		if fi.Mode().Perm() != want {
+			t.Errorf("%s: %v, want %v", p, fi.Mode().Perm(), want)
+		}
+		return nil
+	})
 }

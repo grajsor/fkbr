@@ -560,7 +560,7 @@ func (f *faultStore) Acked(ctx context.Context, src, id, node string) (int, erro
 	if node == f.hideAcks {
 		return 0, nil
 	}
-	return f.Mailbox.Acked(ctx, src, id, node)
+	return f.Dir.Acked(ctx, src, id, node)
 }
 
 // Robust test 2, F1: a source back from a stall on the share read no acks

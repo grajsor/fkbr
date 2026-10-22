@@ -15,26 +15,27 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/localfs"
+	"fkbr/internal/store"
 	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
 )
 
 // lossyInbox drops the first n receive notifies, as if they were lost.
 type lossyInbox struct {
-	*nfsmailbox.Mailbox
+	*store.Dir
 	mu   sync.Mutex
 	drop int
 }
 
 func (l *lossyInbox) Fetch(ctx context.Context) ([]*transport.Message, error) {
-	msgs, err := l.Mailbox.Fetch(ctx)
+	msgs, err := l.Dir.Fetch(ctx)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var out []*transport.Message
 	for _, m := range msgs {
 		if m.Type == transport.TypeReceive && l.drop != 0 {
 			l.drop--
-			l.Mailbox.Finish(ctx, m, false)
+			l.Dir.Finish(ctx, m, false)
 			continue
 		}
 		out = append(out, m)
@@ -53,7 +54,7 @@ func buildLossy(t *testing.T, share, id string, drop int) (*Engine, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := New(cfg, fsys, &lossyInbox{Mailbox: mb, drop: drop}, mb, Options{Version: "test"})
+	e := New(cfg, fsys, &lossyInbox{Dir: mb, drop: drop}, mb, Options{Version: "test"})
 	t.Cleanup(func() { e.Close() })
 	return e, cfg.Roots[0].Path
 }

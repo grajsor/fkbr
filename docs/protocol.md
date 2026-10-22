@@ -3,7 +3,8 @@
 Nodes share nothing but one directory, normally an NFS mount. They never
 open network connections to each other. This document describes what lives
 on the share and the rules every node follows. The implementation is
-`internal/transport/nfsmailbox`.
+`internal/store`; `internal/transport/nfsmailbox` opens it on NFS, with
+the refresh trick below.
 
 ## Layout
 

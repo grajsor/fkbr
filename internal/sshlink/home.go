@@ -21,8 +21,8 @@ import (
 	"fkbr/internal/api"
 	"fkbr/internal/config"
 	"fkbr/internal/sshlink/frame"
+	"fkbr/internal/store"
 	"fkbr/internal/transport"
-	"fkbr/internal/transport/nfsmailbox"
 )
 
 // waitStep is how often a call that waits looks again on local disk.
@@ -40,7 +40,7 @@ var (
 type Home struct {
 	dir  string // the private share
 	self string
-	opts nfsmailbox.Options
+	opts store.Options
 	log  *slog.Logger
 
 	mu    sync.Mutex
@@ -53,12 +53,13 @@ type peer struct {
 	node string
 	host string
 	sess *frame.Session
-	mb   *nfsmailbox.Mailbox // opened as this node
+	mb   *store.Dir // opened as this node
 }
 
 // NewHome uses dir (private, on local disk) as the swarm's share, with
-// self as the home node's ID.
-func NewHome(dir, self string, opts nfsmailbox.Options, log *slog.Logger) *Home {
+// self as the home node's ID. The share is kept private (opts.Private).
+func NewHome(dir, self string, opts store.Options, log *slog.Logger) *Home {
+	opts.Private = true
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
@@ -68,16 +69,16 @@ func NewHome(dir, self string, opts nfsmailbox.Options, log *slog.Logger) *Home 
 // Open returns the home node's own transport and store: the mailbox on
 // the private share, with chunk reads from linked nodes going to them.
 func (h *Home) Open() (*HomeNode, error) {
-	mb, err := nfsmailbox.Open(h.dir, h.self, h.opts)
+	mb, err := store.Open(h.dir, h.self, h.opts)
 	if err != nil {
 		return nil, err
 	}
-	return &HomeNode{Mailbox: mb, h: h}, nil
+	return &HomeNode{Dir: mb, h: h}, nil
 }
 
 // HomeNode is the home node's transport.Transport and transport.Store.
 type HomeNode struct {
-	*nfsmailbox.Mailbox
+	*store.Dir
 	h *Home
 }
 
@@ -88,21 +89,21 @@ var (
 
 func (n *HomeNode) ChunkMeta(ctx context.Context, src, id string, seq int) ([]byte, error) {
 	if src == n.h.self {
-		return n.Mailbox.ChunkMeta(ctx, src, id, seq)
+		return n.Dir.ChunkMeta(ctx, src, id, seq)
 	}
 	return n.h.chunkMeta(ctx, src, id, seq)
 }
 
 func (n *HomeNode) OpenChunk(ctx context.Context, src, id string, seq int) (io.ReadCloser, error) {
 	if src == n.h.self {
-		return n.Mailbox.OpenChunk(ctx, src, id, seq)
+		return n.Dir.OpenChunk(ctx, src, id, seq)
 	}
 	return n.h.openChunk(ctx, src, id, seq)
 }
 
 // Nodes adds each linked node's link state.
 func (n *HomeNode) Nodes(ctx context.Context) ([]api.Node, error) {
-	ns, err := n.Mailbox.Nodes(ctx)
+	ns, err := n.Dir.Nodes(ctx)
 	n.h.annotate(ns)
 	return ns, err
 }
@@ -228,7 +229,7 @@ func (h *Home) greet(ctx context.Context, st *frame.Stream, sess *frame.Session,
 		if other != nil {
 			return nil, fmt.Errorf("%w: a node named %s is linked already (from %s)", api.ErrNotAllowed, a.Node, other.host)
 		}
-		mb, err := nfsmailbox.Open(h.dir, a.Node, h.opts)
+		mb, err := store.Open(h.dir, a.Node, h.opts)
 		if err != nil {
 			return nil, err
 		}

@@ -1,4 +1,4 @@
-package nfsmailbox
+package store
 
 import (
 	"errors"
@@ -26,7 +26,7 @@ import (
 
 // listNames lists dir afresh. If dir looks missing, which may be a stale
 // entry in its parent, the parent is listed first and dir tried again.
-func (m *Mailbox) listNames(dir string) ([]string, error) {
+func (m *Dir) listNames(dir string) ([]string, error) {
 	m.fresh(dir)
 	names, err := readNames(dir)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -50,7 +50,7 @@ func readNames(dir string) ([]string, error) {
 
 // readListed reads dir/name once a fresh listing of dir shows it, and
 // returns an error wrapping fs.ErrNotExist until then.
-func (m *Mailbox) readListed(dir, name string) ([]byte, error) {
+func (m *Dir) readListed(dir, name string) ([]byte, error) {
 	ok, err := m.listed(dir, name)
 	if err != nil {
 		return nil, err
@@ -63,7 +63,7 @@ func (m *Mailbox) readListed(dir, name string) ([]byte, error) {
 
 // listed reports whether a fresh listing of dir shows name; a missing dir
 // counts as not listed.
-func (m *Mailbox) listed(dir, name string) (bool, error) {
+func (m *Dir) listed(dir, name string) (bool, error) {
 	names, err := m.listNames(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		return false, nil

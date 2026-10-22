@@ -1,4 +1,4 @@
-package nfsmailbox
+package store
 
 // Job and data layout:
 //
@@ -31,7 +31,7 @@ import (
 	"fkbr/internal/transport"
 )
 
-var _ transport.Store = (*Mailbox)(nil)
+var _ transport.Store = (*Dir)(nil)
 
 func validJobID(id string) error {
 	if !config.ValidID(id) {
@@ -62,12 +62,12 @@ var errBadRecord = errors.New("bad job record")
 
 func chunkName(seq int, ext string) string { return fmt.Sprintf("%08d%s", seq, ext) }
 
-func (m *Mailbox) CreateJob(_ context.Context, job *api.Job) error {
+func (m *Dir) CreateJob(_ context.Context, job *api.Job) error {
 	if err := validJobID(job.ID); err != nil {
 		return err
 	}
 	dir := m.path("jobs", job.ID)
-	if err := mkdir(filepath.Join(dir, "status")); err != nil {
+	if err := m.mkdir(filepath.Join(dir, "status")); err != nil {
 		return err
 	}
 	for _, d := range job.Detached {
@@ -80,7 +80,7 @@ func (m *Mailbox) CreateJob(_ context.Context, job *api.Job) error {
 	return m.writeJSON(filepath.Join(dir, "job.json"), &rec)
 }
 
-func (m *Mailbox) Detach(_ context.Context, id string, d api.Detached) error {
+func (m *Dir) Detach(_ context.Context, id string, d api.Detached) error {
 	if err := validJobID(id); err != nil {
 		return err
 	}
@@ -88,13 +88,13 @@ func (m *Mailbox) Detach(_ context.Context, id string, d api.Detached) error {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, d.Node)
 	}
 	dir := m.path("jobs", id, "detached")
-	if err := mkdir(dir); err != nil {
+	if err := m.mkdir(dir); err != nil {
 		return err
 	}
 	return m.writeJSON(filepath.Join(dir, d.Node+".json"), &d)
 }
 
-func (m *Mailbox) GetJob(_ context.Context, id string) (*api.Job, error) {
+func (m *Dir) GetJob(_ context.Context, id string) (*api.Job, error) {
 	if err := validJobID(id); err != nil {
 		return nil, err
 	}
@@ -149,7 +149,7 @@ func (m *Mailbox) GetJob(_ context.Context, id string) (*api.Job, error) {
 	return &job, nil
 }
 
-func (m *Mailbox) ListJobs(ctx context.Context) ([]api.Job, error) {
+func (m *Dir) ListJobs(ctx context.Context) ([]api.Job, error) {
 	m.fresh(m.path("jobs"))
 	des, err := os.ReadDir(m.path("jobs"))
 	if errors.Is(err, fs.ErrNotExist) {
@@ -172,17 +172,17 @@ func (m *Mailbox) ListJobs(ctx context.Context) ([]api.Job, error) {
 	return out, nil
 }
 
-func (m *Mailbox) PutStatus(_ context.Context, id string, st *api.JobStatus) error {
+func (m *Dir) PutStatus(_ context.Context, id string, st *api.JobStatus) error {
 	if err := validJobID(id); err != nil {
 		return err
 	}
 	if st.Node != m.self {
-		return fmt.Errorf("nfsmailbox: status for %q written by %q", st.Node, m.self)
+		return fmt.Errorf("store: status for %q written by %q", st.Node, m.self)
 	}
 	return m.writeJSON(m.path("jobs", id, "status", m.self+"."+string(st.Role)+".json"), st)
 }
 
-func (m *Mailbox) RequestCancel(_ context.Context, id string) error {
+func (m *Dir) RequestCancel(_ context.Context, id string) error {
 	if err := validJobID(id); err != nil {
 		return err
 	}
@@ -193,24 +193,24 @@ func (m *Mailbox) RequestCancel(_ context.Context, id string) error {
 	return m.write(m.path("jobs", id, "CANCEL"), []byte(m.self+"\n"))
 }
 
-func (m *Mailbox) SetComplete(_ context.Context, id string, chunks int) error {
+func (m *Dir) SetComplete(_ context.Context, id string, chunks int) error {
 	return m.write(m.path("jobs", id, "COMPLETE"), []byte(strconv.Itoa(chunks)+"\n"))
 }
 
 type chunkWriter struct {
-	m    *Mailbox
+	m    *Dir
 	f    *syncedFile
 	dir  string
 	seq  int
 	done bool
 }
 
-func (m *Mailbox) CreateChunk(_ context.Context, id string, seq int) (transport.ChunkWriter, error) {
+func (m *Dir) CreateChunk(_ context.Context, id string, seq int) (transport.ChunkWriter, error) {
 	if err := validJobID(id); err != nil {
 		return nil, err
 	}
 	dir := m.path("data", m.self, id)
-	if err := mkdir(filepath.Join(dir, "acks")); err != nil {
+	if err := m.mkdir(filepath.Join(dir, "acks")); err != nil {
 		return nil, err
 	}
 	f, err := os.CreateTemp(m.path("tmp"), "."+id+"-"+chunkName(seq, ".chunk")+".*")
@@ -224,7 +224,7 @@ func (w *chunkWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
 
 func (w *chunkWriter) Commit(meta []byte) error {
 	defer w.Abort()
-	if err := w.f.Chmod(shareFileMode); err != nil { // CreateTemp made it 0600
+	if err := w.f.Chmod(w.m.fileMode()); err != nil { // CreateTemp made it 0600
 		return err
 	}
 	if err := w.f.Sync(); err != nil {
@@ -248,16 +248,16 @@ func (w *chunkWriter) Abort() {
 	}
 }
 
-func (m *Mailbox) ChunkMeta(_ context.Context, src, id string, seq int) ([]byte, error) {
+func (m *Dir) ChunkMeta(_ context.Context, src, id string, seq int) ([]byte, error) {
 	return m.readListed(m.path("data", src, id), chunkName(seq, ".json"))
 }
 
-func (m *Mailbox) OpenChunk(_ context.Context, src, id string, seq int) (io.ReadCloser, error) {
+func (m *Dir) OpenChunk(_ context.Context, src, id string, seq int) (io.ReadCloser, error) {
 	m.fresh(m.path("data", src, id))
 	return os.Open(m.path("data", src, id, chunkName(seq, ".chunk")))
 }
 
-func (m *Mailbox) DeleteChunk(_ context.Context, id string, seq int) error {
+func (m *Dir) DeleteChunk(_ context.Context, id string, seq int) error {
 	dir := m.path("data", m.self, id)
 	// Meta first, so a reader never finds meta without its chunk.
 	err := os.Remove(filepath.Join(dir, chunkName(seq, ".json")))
@@ -271,18 +271,18 @@ func (m *Mailbox) DeleteChunk(_ context.Context, id string, seq int) error {
 	return err
 }
 
-func (m *Mailbox) SetAcked(_ context.Context, src, id, node string, n int) error {
+func (m *Dir) SetAcked(_ context.Context, src, id, node string, n int) error {
 	if node != m.self {
-		return fmt.Errorf("nfsmailbox: ack for %q written by %q", node, m.self)
+		return fmt.Errorf("store: ack for %q written by %q", node, m.self)
 	}
 	dir := m.path("data", src, id, "acks")
-	if err := mkdir(dir); err != nil {
+	if err := m.mkdir(dir); err != nil {
 		return err
 	}
 	return m.write(filepath.Join(dir, node), []byte(strconv.Itoa(n)+"\n"))
 }
 
-func (m *Mailbox) Acked(_ context.Context, src, id, node string) (int, error) {
+func (m *Dir) Acked(_ context.Context, src, id, node string) (int, error) {
 	b, err := m.readListed(m.path("data", src, id, "acks"), node)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, nil
@@ -293,7 +293,7 @@ func (m *Mailbox) Acked(_ context.Context, src, id, node string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
-func (m *Mailbox) StagedBytes(_ context.Context, id string) (job, total int64, err error) {
+func (m *Dir) StagedBytes(_ context.Context, id string) (job, total int64, err error) {
 	base := m.path("data", m.self)
 	jobs, err := os.ReadDir(base)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -322,7 +322,7 @@ func (m *Mailbox) StagedBytes(_ context.Context, id string) (job, total int64, e
 	return job, total, nil
 }
 
-func (m *Mailbox) RemoveJobData(_ context.Context, id string) error {
+func (m *Dir) RemoveJobData(_ context.Context, id string) error {
 	if err := validJobID(id); err != nil {
 		return err
 	}
@@ -356,8 +356,9 @@ func jobFinished(j *api.Job, registered []string) bool {
 	return true
 }
 
-// newestEntry is the latest mtime of dir's entries. Not of dir itself: the
-// refresh trick (Options.Refresh) bumps a directory's mtime on every read.
+// newestEntry is the latest mtime of dir's entries. Not of dir itself: a
+// refresh (Options.Fresh) bumps a directory's mtime on every read. The
+// NFS refresh's probe files (".r-...") do not count either.
 func newestEntry(dir string) time.Time {
 	var newest time.Time
 	des, _ := os.ReadDir(dir)
@@ -386,7 +387,7 @@ func removeRacing(dir string) error {
 	return err
 }
 
-func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
+func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	des, err := os.ReadDir(m.path("jobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -396,7 +397,7 @@ func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	}
 	now, err := m.serverNow() // job.json's mtime is server time; see Prune
 	if err != nil {
-		return fmt.Errorf("nfsmailbox: probe: %w", err)
+		return fmt.Errorf("store: probe: %w", err)
 	}
 	// Statuses of detached targets and of nodes that were forgotten never
 	// change again, whatever they say; they must not keep a job forever.

@@ -1,5 +1,8 @@
-// Package nfsmailbox implements transport.Transport over a directory shared
-// by all nodes (normally an NFS mount). Layout under the share root:
+// Package store implements transport.Transport and transport.Store over a
+// directory: the swarm's share. It is the same code whatever holds the
+// directory: an NFS mount every node reaches (nfsmailbox adds what NFS
+// needs), or a private directory on local disk (an ssh swarm's home node,
+// local mode). Layout under the share root:
 //
 //	protocol-version
 //	tmp/                              every write starts here, then rename
@@ -10,9 +13,10 @@
 //
 // Each inbox has a single consumer (its node), so no locking is needed on
 // the share. Liveness compares heartbeat mtimes with the mtime of a freshly
-// written probe file; both are set by the NFS server, so host clock skew
-// does not matter. See docs/protocol.md.
-package nfsmailbox
+// written probe file; both are set by the file system holding the share
+// (on NFS, the server), so host clock skew does not matter. See
+// docs/protocol.md.
+package store
 
 import (
 	"context"
@@ -47,15 +51,17 @@ type Options struct {
 	Poll time.Duration
 	// OfflineAfter is the heartbeat age after which a node counts as offline.
 	OfflineAfter time.Duration
-	// Refresh compensates for NFS mounts that cache attributes and lookups
-	// for long (e.g. actimeo=1800): before reading a directory, or a file
-	// in it, that other nodes change, a tiny file is created and removed
-	// in that directory. The client then revalidates the directory and its
-	// entries, so renamed-in files and new names become visible at once.
-	Refresh bool
+	// Fresh, if set, is called before reading a directory, or a file in
+	// it, that other nodes change, to make their changes visible (the NFS
+	// refresh trick, see nfsmailbox).
+	Fresh func(dir string)
+	// Private keeps the share to this user (directories 0700, files
+	// 0600): a share only one process reaches. Otherwise it is open to the
+	// users of other hosts (see modes.go).
+	Private bool
 }
 
-type Mailbox struct {
+type Dir struct {
 	root      string
 	self      string
 	opts      Options
@@ -64,14 +70,11 @@ type Mailbox struct {
 	// how often reading them failed. Only Fetch (one goroutine) uses it.
 	claimed map[string]int
 
-	refreshMu   sync.Mutex
-	refreshedAt map[string]time.Time
-	refreshSeq  atomic.Uint64
-	openedUp    sync.Once
+	openedUp sync.Once
 	// offset is the share's clock minus this host's (ns), from mtimes the
-	// NFS server set (see Now).
+	// share's file system set (see Now).
 	offset atomic.Int64
-	// registered: this mailbox is a node's (Register was called), so it has
+	// registered: this Dir is a node's (Register was called), so it has
 	// its own folders on the share. A client that only looks (a CLI
 	// command without a running node) creates none of them.
 	registered atomic.Bool
@@ -80,66 +83,43 @@ type Mailbox struct {
 // Now is the current time by the share's clock: job IDs and times made
 // with it sort right whatever this host's clock says. It is measured when
 // the share is opened and on every heartbeat.
-func (m *Mailbox) Now() time.Time { return time.Now().Add(time.Duration(m.offset.Load())) }
+func (m *Dir) Now() time.Time { return time.Now().Add(time.Duration(m.offset.Load())) }
 
 // measureOffset records the server clock, as an mtime the server just set
 // (st), against the local time around the write.
-func (m *Mailbox) measureOffset(before time.Time, server time.Time) {
+func (m *Dir) measureOffset(before time.Time, server time.Time) {
 	local := before.Add(time.Since(before) / 2)
 	m.offset.Store(int64(server.Sub(local)))
 }
 
-// refreshEvery throttles directory refreshes per directory.
-const refreshEvery = 100 * time.Millisecond
-
-// fresh makes other clients' changes in dir visible (see Options.Refresh).
-func (m *Mailbox) fresh(dir string) {
-	if !m.opts.Refresh {
-		return
-	}
-	now := time.Now()
-	m.refreshMu.Lock()
-	if now.Sub(m.refreshedAt[dir]) < refreshEvery {
-		m.refreshMu.Unlock()
-		return
-	}
-	m.refreshedAt[dir] = now
-	m.refreshMu.Unlock()
-	p := filepath.Join(dir, fmt.Sprintf(".r-%s-%d", m.self, m.refreshSeq.Add(1)))
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err == nil {
-		f.Close()
-		os.Remove(p)
-		return
-	}
-	// dir may exist on the server while this client still caches it as
-	// missing (looked up before another node created it). Refresh the
-	// parent so that cached "does not exist" is dropped.
-	if parent := filepath.Dir(dir); errors.Is(err, fs.ErrNotExist) && parent != dir && strings.HasPrefix(parent, m.root) {
-		m.fresh(parent)
+// fresh makes other nodes' changes in dir visible (see Options.Fresh).
+func (m *Dir) fresh(dir string) {
+	if m.opts.Fresh != nil {
+		m.opts.Fresh(dir)
 	}
 }
 
 // freshFile refreshes the directory containing path.
-func (m *Mailbox) freshFile(path string) { m.fresh(filepath.Dir(path)) }
+func (m *Dir) freshFile(path string) { m.fresh(filepath.Dir(path)) }
 
-var _ transport.Transport = (*Mailbox)(nil)
+var _ transport.Transport = (*Dir)(nil)
 
 // Open prepares the share layout for node self and checks the protocol
 // version. The share root itself must already exist (it is the mount).
-func Open(root, self string, opts Options) (*Mailbox, error) {
+func Open(root, self string, opts Options) (*Dir, error) {
 	if !config.ValidID(self) {
-		return nil, fmt.Errorf("nfsmailbox: invalid node id %q", self)
+		return nil, fmt.Errorf("store: invalid node id %q", self)
 	}
 	fi, err := os.Stat(root)
 	if err != nil {
-		return nil, fmt.Errorf("nfsmailbox: share root: %w", err)
+		return nil, fmt.Errorf("store: share root: %w", err)
 	} else if !fi.IsDir() {
-		return nil, fmt.Errorf("nfsmailbox: share root %s is not a directory", root)
+		return nil, fmt.Errorf("store: share root %s is not a directory", root)
 	}
 	// Nodes running as other users create top-level entries here too.
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == uint32(os.Geteuid()) && fi.Mode().Perm() != shareDirMode {
-		os.Chmod(root, shareDirMode)
+	m := &Dir{root: root, self: self, opts: opts, claimed: map[string]int{}}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == uint32(os.Geteuid()) && fi.Mode().Perm() != m.dirMode() {
+		os.Chmod(root, m.dirMode())
 	}
 	if opts.Poll <= 0 {
 		opts.Poll = 200 * time.Millisecond
@@ -147,9 +127,9 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 	if opts.OfflineAfter <= 0 {
 		opts.OfflineAfter = 30 * time.Second
 	}
-	m := &Mailbox{root: root, self: self, opts: opts, refreshedAt: map[string]time.Time{}, claimed: map[string]int{}}
+	m.opts = opts
 	if err := m.layout(); err != nil {
-		return nil, fmt.Errorf("nfsmailbox: %w", err)
+		return nil, fmt.Errorf("store: %w", err)
 	}
 	if err := m.checkProtocol(); err != nil {
 		return nil, err
@@ -161,18 +141,18 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 	return m, nil
 }
 
-func (m *Mailbox) checkProtocol() error {
+func (m *Dir) checkProtocol() error {
 	p := filepath.Join(m.root, "protocol-version")
 	want := strconv.Itoa(api.ProtocolVersion)
 	data, err := readFile(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		if err := m.write(p, []byte(want+"\n")); err != nil {
-			return fmt.Errorf("nfsmailbox: %w", err)
+			return fmt.Errorf("store: %w", err)
 		}
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("nfsmailbox: %w", err)
+		return fmt.Errorf("store: %w", err)
 	}
 	if got := strings.TrimSpace(string(data)); got != want {
 		return fmt.Errorf("share %s uses protocol %s, this %s speaks %s: run the same version on every node "+
@@ -181,21 +161,21 @@ func (m *Mailbox) checkProtocol() error {
 	return nil
 }
 
-func (m *Mailbox) Self() string { return m.self }
+func (m *Dir) Self() string { return m.self }
 
 // layout creates the share's fixed directories and this node's own. Open
 // calls it, and so does any write, probe or inbox read that finds one of
 // them gone (someone cleaned up the share under running nodes), so the
 // share heals instead of failing until every node restarts. It never
 // recreates a job's directories: a pruned job stays gone.
-func (m *Mailbox) layout() error {
+func (m *Dir) layout() error {
 	dirs := []string{"tmp", "nodes", "inbox", "reply"}
 	if m.registered.Load() {
 		dirs = append(dirs, m.inbox(m.self, "new"), m.inbox(m.self, "cur"), m.inbox(m.self, "failed"),
 			filepath.Join("reply", m.self), filepath.Join("nodes", m.self))
 	}
 	for _, d := range dirs {
-		if err := mkdir(m.path(d)); err != nil {
+		if err := m.mkdir(m.path(d)); err != nil {
 			return err
 		}
 	}
@@ -203,23 +183,23 @@ func (m *Mailbox) layout() error {
 }
 
 // inbox returns the share-relative path of a node's inbox state directory.
-func (m *Mailbox) inbox(node, state string) string {
+func (m *Dir) inbox(node, state string) string {
 	return filepath.Join("inbox", node, state)
 }
 
-func (m *Mailbox) path(parts ...string) string {
+func (m *Dir) path(parts ...string) string {
 	return filepath.Join(append([]string{m.root}, parts...)...)
 }
 
-func (m *Mailbox) write(dest string, data []byte) error {
-	err := atomicfile.Write(m.path("tmp"), dest, data, shareFileMode)
+func (m *Dir) write(dest string, data []byte) error {
+	err := atomicfile.Write(m.path("tmp"), dest, data, m.fileMode())
 	if errors.Is(err, fs.ErrNotExist) && m.layout() == nil {
-		err = atomicfile.Write(m.path("tmp"), dest, data, shareFileMode)
+		err = atomicfile.Write(m.path("tmp"), dest, data, m.fileMode())
 	}
 	return err
 }
 
-func (m *Mailbox) writeJSON(dest string, v any) error {
+func (m *Dir) writeJSON(dest string, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
@@ -227,9 +207,9 @@ func (m *Mailbox) writeJSON(dest string, v any) error {
 	return m.write(dest, data)
 }
 
-func (m *Mailbox) Register(_ context.Context, info api.NodeInfo) error {
+func (m *Dir) Register(_ context.Context, info api.NodeInfo) error {
 	if info.ID != m.self {
-		return fmt.Errorf("nfsmailbox: registering %q from node %q", info.ID, m.self)
+		return fmt.Errorf("store: registering %q from node %q", info.ID, m.self)
 	}
 	data, err := json.MarshalIndent(info, "", "  ")
 	if err != nil {
@@ -242,7 +222,7 @@ func (m *Mailbox) Register(_ context.Context, info api.NodeInfo) error {
 	return m.write(m.path("nodes", m.self, "info.json"), data)
 }
 
-func (m *Mailbox) Heartbeat(_ context.Context, token string) (string, error) {
+func (m *Dir) Heartbeat(_ context.Context, token string) (string, error) {
 	p := m.path("nodes", m.self, "heartbeat")
 	var other string
 	m.freshFile(p)
@@ -279,7 +259,7 @@ func (m *Mailbox) Heartbeat(_ context.Context, token string) (string, error) {
 // StaleEntry reports whether node has a registry folder that Nodes leaves
 // out (its info.json is missing or cannot be read) and how long ago it
 // last heartbeat (-1: never).
-func (m *Mailbox) StaleEntry(node string) (bool, time.Duration) {
+func (m *Dir) StaleEntry(node string) (bool, time.Duration) {
 	if !config.ValidID(node) {
 		return false, 0
 	}
@@ -298,7 +278,7 @@ func (m *Mailbox) StaleEntry(node string) (bool, time.Duration) {
 }
 
 // serverNow returns the current time according to the share's clock.
-func (m *Mailbox) serverNow() (time.Time, error) {
+func (m *Dir) serverNow() (time.Time, error) {
 	f, err := os.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
 	if errors.Is(err, fs.ErrNotExist) && m.layout() == nil {
 		f, err = os.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
@@ -318,10 +298,10 @@ func (m *Mailbox) serverNow() (time.Time, error) {
 	return fi.ModTime(), nil
 }
 
-func (m *Mailbox) Nodes(_ context.Context) ([]api.Node, error) {
+func (m *Dir) Nodes(_ context.Context) ([]api.Node, error) {
 	now, err := m.serverNow()
 	if err != nil {
-		return nil, fmt.Errorf("nfsmailbox: probe: %w", err)
+		return nil, fmt.Errorf("store: probe: %w", err)
 	}
 	m.fresh(m.path("nodes"))
 	des, err := os.ReadDir(m.path("nodes"))
@@ -359,19 +339,19 @@ func (m *Mailbox) Nodes(_ context.Context) ([]api.Node, error) {
 	return out, nil
 }
 
-func (m *Mailbox) Unregister(_ context.Context, node string) error {
+func (m *Dir) Unregister(_ context.Context, node string) error {
 	if !config.ValidID(node) {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, node)
 	}
 	if node == m.self {
-		return fmt.Errorf("nfsmailbox: a node cannot unregister itself")
+		return fmt.Errorf("store: a node cannot unregister itself")
 	}
 	return m.remove(node)
 }
 
-func (m *Mailbox) Leave(context.Context) error { return m.remove(m.self) }
+func (m *Dir) Leave(context.Context) error { return m.remove(m.self) }
 
-func (m *Mailbox) remove(node string) error {
+func (m *Dir) remove(node string) error {
 	var errs []error
 	// The registry entry goes first, so the node vanishes from listings
 	// even if removing its data takes a while.
@@ -381,9 +361,9 @@ func (m *Mailbox) remove(node string) error {
 	return errors.Join(errs...)
 }
 
-func (m *Mailbox) Send(_ context.Context, msg *transport.Message) error {
+func (m *Dir) Send(_ context.Context, msg *transport.Message) error {
 	if msg.From != m.self {
-		return fmt.Errorf("nfsmailbox: message from %q sent by %q", msg.From, m.self)
+		return fmt.Errorf("store: message from %q sent by %q", msg.From, m.self)
 	}
 	if !config.ValidID(msg.To) {
 		return fmt.Errorf("%w: %q", api.ErrUnknownNode, msg.To)
@@ -394,11 +374,11 @@ func (m *Mailbox) Send(_ context.Context, msg *transport.Message) error {
 	// The reply directory must exist before the request is visible, so the
 	// executor can tell "requester gone" from "not created yet".
 	if !msg.Notify {
-		if err := mkdir(m.path("reply", m.self, msg.ID)); err != nil {
+		if err := m.mkdir(m.path("reply", m.self, msg.ID)); err != nil {
 			return err
 		}
 	}
-	if err := mkdir(m.path(m.inbox(msg.To, "new"))); err != nil {
+	if err := m.mkdir(m.path(m.inbox(msg.To, "new"))); err != nil {
 		return err
 	}
 	if err := m.writeJSON(m.path(m.inbox(msg.To, "new"), msg.ID+".json"), msg); err != nil {
@@ -408,7 +388,7 @@ func (m *Mailbox) Send(_ context.Context, msg *transport.Message) error {
 	return nil
 }
 
-func (m *Mailbox) AwaitReplies(ctx context.Context, reqID string, fn func(*transport.Reply) error) error {
+func (m *Dir) AwaitReplies(ctx context.Context, reqID string, fn func(*transport.Reply) error) error {
 	dir := m.path("reply", m.self, reqID)
 	defer func() {
 		os.RemoveAll(dir)
@@ -424,7 +404,7 @@ func (m *Mailbox) AwaitReplies(ctx context.Context, reqID string, fn func(*trans
 		case err == nil:
 			var r transport.Reply
 			if err := json.Unmarshal(data, &r); err != nil {
-				return fmt.Errorf("nfsmailbox: reply %s/%d: %w", reqID, seq, err)
+				return fmt.Errorf("store: reply %s/%d: %w", reqID, seq, err)
 			}
 			if r.Error != "" {
 				return &api.CodedError{Msg: r.From + ": " + r.Error, Code: r.Code}
@@ -458,7 +438,7 @@ const maxReadTries = 20
 // cannot be claimed or read now is tried again on the next call; one bad
 // file never holds up the others, and a claimed request is never dropped.
 // The error reports problems, but the returned messages are still valid.
-func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
+func (m *Dir) Fetch(_ context.Context) ([]*transport.Message, error) {
 	var errs []error
 	// After a restart, requests claimed but never finished are redelivered.
 	if !m.recovered {
@@ -530,7 +510,7 @@ func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
 // pruneOrphanData removes this node's staged data for jobs whose record is
 // gone. Normally the source removes it when the job ends, but a removal
 // that races with another node's refresh file can leave the directory.
-func (m *Mailbox) pruneOrphanData(cutoff time.Time) error {
+func (m *Dir) pruneOrphanData(cutoff time.Time) error {
 	jobs, err := m.listNames(m.path("jobs")) // by listing: see listed.go
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -569,9 +549,9 @@ func listJSON(dir string) ([]string, error) {
 	return out, nil
 }
 
-func (m *Mailbox) Reply(_ context.Context, req *transport.Message, r *transport.Reply) error {
+func (m *Dir) Reply(_ context.Context, req *transport.Message, r *transport.Reply) error {
 	if !config.ValidID(req.From) || !config.ValidID(req.ID) {
-		return fmt.Errorf("nfsmailbox: no reply to %q request %q: invalid name", req.From, req.ID)
+		return fmt.Errorf("store: no reply to %q request %q: invalid name", req.From, req.ID)
 	}
 	dir := m.path("reply", req.From, req.ID)
 	m.freshFile(dir)
@@ -586,7 +566,7 @@ func (m *Mailbox) Reply(_ context.Context, req *transport.Message, r *transport.
 
 // Finish removes a processed request; a failed one is kept in failed/
 // (until pruned) so an operator can see what went wrong.
-func (m *Mailbox) Finish(_ context.Context, msg *transport.Message, failed bool) error {
+func (m *Dir) Finish(_ context.Context, msg *transport.Message, failed bool) error {
 	cur := m.path(m.inbox(m.self, "cur"), msg.ID+".json")
 	if !failed {
 		return os.Remove(cur)
@@ -603,11 +583,11 @@ const StaleTmp = time.Hour
 // clock (serverNow), never the local one: a host whose clock runs ahead
 // would otherwise delete other nodes' files that are still in use.
 
-func (m *Mailbox) Prune(_ context.Context, maxAge time.Duration) error {
+func (m *Dir) Prune(_ context.Context, maxAge time.Duration) error {
 	m.openedUp.Do(m.openUp) // once per process: new entries get the right modes
 	now, err := m.serverNow()
 	if err != nil {
-		return fmt.Errorf("nfsmailbox: probe: %w", err)
+		return fmt.Errorf("store: probe: %w", err)
 	}
 	cutoff := now.Add(-maxAge)
 	var errs []error

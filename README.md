@@ -140,7 +140,8 @@ The code is layered:
 - **API:** `internal/api`, with an in-process client (`api/local`) and a
   Unix-socket client (`api/remote`).
 - **Engine:** `internal/engine`: jobs, fan-out and sync.
-- **Subsystems:** `transport/nfsmailbox`, `bundle`, `receive`, `inventory`
+- **Subsystems:** `store` (the share), `transport/nfsmailbox` (the share
+  on NFS), `sshlink` (nodes over ssh), `bundle`, `receive`, `inventory`
   and `localfs`.
 
 ## License
