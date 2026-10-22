@@ -337,7 +337,12 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    last restores their mtimes.
 4. **Apply.** Removals beyond `max_deletes` on any target block the apply
    unless it is forced. Deletions run first, in batches of 1000 through
-   ordinary `remove` requests. Then each group becomes a transfer job with
+   ordinary `remove` requests that name the plan: the target deletes only
+   what its own scan for the plan saw as it still is (type; size and
+   mtime of files; symlink targets). Whatever is new or changed since the
+   dry run stays, with the folders holding it, and is listed as a plan
+   problem; the next dry run shows it. Older builds ignore the plan name
+   and delete as before. Then each group becomes a transfer job with
    `paths_blob`, `base_dir` = `src_path` and `no_recurse` (each listed
    entry is sent alone), with conflict policy `overwrite`. A plan is
    applied at most once.

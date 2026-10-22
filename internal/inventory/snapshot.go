@@ -96,6 +96,21 @@ func typeOf(t api.EntryType) string {
 	return TypeOther
 }
 
+// Unchanged reports whether e, as Scan recorded it, still describes a:
+// same type, and for files size and mtime, for symlinks the target.
+func (e *Entry) Unchanged(a api.Entry) bool {
+	if e.T != typeOf(a.Type) {
+		return false
+	}
+	switch e.T {
+	case TypeFile:
+		return e.S == a.Size && e.M == a.MtimeNs
+	case TypeSymlink:
+		return e.L == a.LinkTarget
+	}
+	return true
+}
+
 // Writer writes a snapshot.
 type Writer struct {
 	zw  *zstd.Encoder

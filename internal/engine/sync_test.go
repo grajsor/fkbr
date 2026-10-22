@@ -186,6 +186,57 @@ func TestSyncPlanAppliesOnceAtATime(t *testing.T) {
 	sameTree(t, filepath.Join(mroot, "tree"), filepath.Join(sroot, "m"))
 }
 
+// A mirror deletes only what its dry run showed: what appeared or changed
+// on the target since then stays and is reported, until a new dry run.
+func TestSyncKeepsChangesSinceTheDryRun(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	s1, sroot := node(t, share, "s1")
+	makeTree(t, mroot, 5, 10<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	ctx := context.Background()
+	req := api.SyncRequest{SrcRoot: "data", SrcPath: "tree", DstNodes: []string{"s1"}, DstRoot: "data", DstPath: "m", Mode: api.SyncMirror}
+	applyAndWait(t, master, mustPlan(t, master, req), false)
+	at := func(p string) string { return filepath.Join(sroot, "m", p) }
+	os.MkdirAll(at("olddir"), 0o755)
+	os.WriteFile(at("olddir/x"), []byte("x"), 0o644)
+	os.WriteFile(at("extra"), []byte("old"), 0o644)
+	os.WriteFile(at("stale"), nil, 0o644)
+	plan := mustPlan(t, master, req)
+	if tg := target(plan, "s1"); tg.Delete != 3 {
+		t.Fatalf("plan: %+v", tg)
+	}
+
+	os.WriteFile(at("olddir/fresh"), []byte("made after the dry run"), 0o644)
+	os.WriteFile(at("extra"), []byte("edited after the dry run"), 0o644)
+	p, err := master.ApplySync(ctx, plan.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.DeleteErrors) > 0 || len(p.Problems) != 2 ||
+		!strings.Contains(strings.Join(p.Problems, "\n"), "olddir/fresh") || !strings.Contains(strings.Join(p.Problems, "\n"), "m/extra") {
+		t.Errorf("problems %q, delete errors %q", p.Problems, p.DeleteErrors)
+	}
+	for _, f := range []string{"olddir/fresh", "extra"} {
+		if _, err := os.Stat(at(f)); err != nil {
+			t.Errorf("%s deleted though it changed after the dry run", f)
+		}
+	}
+	for _, f := range []string{"olddir/x", "stale"} {
+		if _, err := os.Lstat(at(f)); !os.IsNotExist(err) {
+			t.Errorf("%s not deleted: %v", f, err)
+		}
+	}
+	// A new dry run shows them, and applying it deletes them.
+	plan = mustPlan(t, master, req)
+	if tg := target(plan, "s1"); tg.Delete != 2 {
+		t.Fatalf("second plan: %+v", tg)
+	}
+	applyAndWait(t, master, plan, false)
+	nothingToDo(t, mustPlan(t, master, req))
+}
+
 // A type change deletes the target's entry first; if the source entry is
 // gone by the time it is sent, the job says so and the next sync settles.
 func TestSyncSourceGoneAfterDeletes(t *testing.T) {
