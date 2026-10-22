@@ -14,9 +14,14 @@ Tested on CentOS 7, Rocky 8, 9 and 10, and Debian 12.
 | `/tmp/fkbr-<uid>-<node>/` | worker lock and API socket; `node.log` when the TUI runs the node | lock and socket removed on clean exit; the log stays (at most 2 × 1 MiB) |
 | `<root>/.fkbr-tmp/` in a destination root | staging for a transfer in progress | removed when the transfer ends; leftovers of a node that was down are removed at its next prune |
 | the share directory you pass | node registry; finished job records, sync plans and failed requests | records pruned after `keep_done` (1h), see below |
+| `/tmp/fkbr-<uid>-<node>-ssh/` | without a share, or with `ssh:`: the same as the share above, private to you | as above |
+| `/tmp/fkbr-<uid>-<node>-link/` | on a host linked over ssh: lock, socket, and the data it sends until its targets have it | data removed when the job ends; the rest on a clean exit |
+| `~/.fkbr.conf` | only if there is no other config file: the ssh hosts you linked from the TUI (F7) | until you unlink them (F8) or delete it |
 
-Nothing is written to `/etc`, `/var` or your home directory, and fkbr never
-reads configuration from them.
+Nothing is written to `/etc` or `/var`. The one file fkbr may put in your
+home directory is `~/.fkbr.conf`: only when you link a host from the TUI
+and neither `$FKBR_CONFIG` nor `fkbr.yaml` beside the binary exists. fkbr
+reads nothing else from there.
 
 **Permissions on the share.** Hosts usually run fkbr as different users,
 and every node creates and deletes entries in the others' directories. So
@@ -151,9 +156,11 @@ name. Closing the terminal (an ssh session that drops) stops a TUI's node
 cleanly, like quitting.
 
 **Config file (optional).** The same settings can live in a YAML file:
-`-config FILE`, `$FKBR_CONFIG`, or `fkbr.yaml` next to the binary. See
+`-config FILE`, else `$FKBR_CONFIG`, else `fkbr.yaml` next to the binary
+if it is there, else `~/.fkbr.conf` if that is there. See
 `examples/config.yaml` for every option, including tuning. Arguments and
-flags override the file.
+flags override the file; a share given on the command line wins over the
+file's `ssh:` hosts, and a file may not name both `nfs_root` and `ssh`.
 
 Check a host before relying on it:
 
@@ -221,10 +228,40 @@ directory without one), and opens the TUI with all of them.
   and `catchup` sends the rest. `nodes` and the TUI node list show each
   link's state.
 - **Quitting** the home node stops the others: each leaves the swarm.
+- **From the TUI:** F7 in the node list links another host and adds it
+  to the config file's `ssh:` list (the file is created if there is none:
+  `~/.fkbr.conf`), F8 unlinks one and removes it. The file's hosts are
+  linked whenever fkbr starts without a share; `ssh:` on the command line
+  links exactly the hosts it names.
+  A host whose link is not up shows in the node list with why.
 - **Runtime files:** the home node keeps the swarm's records in
-  `/tmp/fkbr-<uid>-<node>/ssh`; another host keeps the data it sends in
+  `/tmp/fkbr-<uid>-<node>-ssh/ssh`; another host keeps the data it sends in
   `/tmp/fkbr-<uid>-<node>-link` until the targets have it (up to
   `transfer.job_quota` per job). Both are private to the user.
+
+## Without a share
+
+`fkbr` with no share opens the TUI on this host alone: the left pane in
+the directory you started it in, the right pane in `/`. The hosts in the
+config file's `ssh:` list are linked over ssh at once (see "Over ssh");
+F7 in the node list (F2) links another and adds it there, F8 unlinks the
+one under the cursor and removes it. Once a host is linked, this host
+shares the directory you started in with it, as on a share.
+
+- **Root `local`** is `/` by default (`-local-root DIR` or `local_root:`
+  picks another; `none` turns it off). Only this host's TUI and CLI see
+  it: it is not published, and other nodes cannot list, read, write or
+  delete in it, even if they forge a job. Copies this host starts may
+  read from it, and write into it when there is no share (only this
+  host and the hosts it links over ssh are involved). On an NFS share it
+  is a source only: anyone who can write the share could forge what
+  would be written. Syncs do not use it yet; copy instead. It is there
+  on a share too, as a source.
+- **Which file:** the config file fkbr reads (`-config`, else
+  `$FKBR_CONFIG`, else `fkbr.yaml` beside the binary if it is there),
+  else `~/.fkbr.conf`, created with mode 0600. fkbr changes only its
+  `ssh:` list and keeps the rest, comments and mode included, and never
+  writes through a symlink.
 
 ## Commands
 

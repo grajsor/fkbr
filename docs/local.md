@@ -1,6 +1,6 @@
 # Local file systems (design)
 
-Status: design, not built yet. See "Phases" at the end.
+Status: local mode is built in part (section 2); the rest is design. See "Phases" at the end.
 
 Two separate things:
 
@@ -32,41 +32,39 @@ setup:
 
 ## 2. Local mode
 
-```
-fkbr -local
-```
+Built: `fkbr` with no share opens the TUI on this host alone, as an ssh
+swarm's home node with no hosts yet (`ssh.md`; user docs in
+`operations.md`, "Without a share"). The panes open in the directory it
+was started in and in root `local` (`/` by default), which only this
+host's TUI and CLI see: it is not published, other nodes cannot reach it,
+and a job touching it runs only if this node submitted it, checked
+against the request kept in the private state dir
+(`engine/localroot.go`). Its share is private
+(`/tmp/fkbr-<uid>-<node>-ssh/ssh`, 0700).
 
-The host runs a node of its own, with no share and no other nodes. The
-TUI's panes browse this host's roots: the current directory (`files`),
-and with `-drives` each mounted drive (`/`, `/home`, `/media/...`,
-`/mnt/...`: real file systems from `/proc/self/mountinfo`; no `proc`,
-`sysfs`, `tmpfs` or bind mounts twice), named after its mount point
-(`media-usb`). `-root id=/path` adds roots, as today. Copy, move, sync,
-view, create and delete work between any two of them, with the same
-plans, excludes, `max_deletes`, resumable jobs and checks.
+Not built yet:
 
-- **The share is private:** `/tmp/fkbr-<uid>-<node>/local`, not
-  readable by other users. Nothing is published there for anyone else.
-- **Same-node copies skip the chunks.** Today a copy from a node to
-  itself is staged as chunks on the share, then read back: two writes of
-  every byte. In local mode the engine copies files straight into the
-  receiver's staging area (`.fkbr-tmp` in the destination root), so
-  install stays atomic and crash-safe: nothing partial is ever installed.
-  The same path helps a node that copies to itself on NFS.
-- Read-only roots (`-ro`, `id=/path:ro`) stay read-only. FAT, exFAT and
-  case-folding targets keep their name rules (`protocol.md`, "Sync").
-- `fkbr` with no share and no config keeps printing the usage. Local
-  mode is asked for with `-local`, so a forgotten share argument never
-  starts a node that shares nothing.
+- **Drives** (`-drives`): each mounted drive as a root (`/home`,
+  `/media/...`, `/mnt/...`: real file systems from
+  `/proc/self/mountinfo`; no `proc`, `sysfs`, `tmpfs` or bind mounts
+  twice), named after its mount point. Today `/` covers them; `-root
+  id=/path` adds roots.
+- **Same-node copies skip the chunks.** A copy from a node to itself is
+  staged as chunks, then read back: two writes of every byte. The engine
+  could copy files straight into the receiver's staging area
+  (`.fkbr-tmp` in the destination root), so install stays atomic and
+  crash-safe. The same path would help a node that copies to itself on
+  NFS.
+- **Syncs on the local root**: their path lists and snapshots would have
+  to be kept where no one else can change them.
 
 ## Packages
 
 | Package | |
 |---|---|
-| `internal/local` | local mode: the private share, drive discovery from mountinfo, root names |
-| `internal/engine` | the same-node fast path (`samenode.go`), for local mode and NFS alike |
-| `internal/check` | file system checks for any share; local-mode checks |
-| `cmd/fkbr` | `-local`, `-drives` |
+| `internal/engine` | built: local-only roots (`localroot.go`); to do: the same-node fast path (`samenode.go`), for local mode and NFS alike |
+| `internal/check` | to do: file system checks for any share |
+| `cmd/fkbr` | built: no share, `-local-root`; to do: `-drives` |
 
 The share in local mode is the share store (`internal/store`) on a
 private directory, as on an ssh swarm's home node.
@@ -86,9 +84,9 @@ shares; a big copy between two disks against `cp -a` and rsync for
 ## Phases
 
 1. `check` for shares on any file system, docs.
-2. `-local` with a private share and roots; drive discovery (`-drives`).
+2. Done: no share, a private share, root `local`. To do: `-drives`.
 3. The same-node fast path.
-4. TUI touches: drive names in the pane header, a drive list, user docs.
+4. TUI touches: drive names in the pane header, a drive list.
 
 ## Open questions
 

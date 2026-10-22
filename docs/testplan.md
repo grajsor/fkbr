@@ -24,6 +24,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Resume after a crash with ramped chunk sizes and read-ahead | The source regenerates identical chunks | auto, lab (torture) |
 | One sync plan applied four times at once through a node (TUI and CLI), then from another node | Applied once, one job; the others refused (all four ran, each submitting a job) | auto (`TestSyncPlanAppliesOnceAtATime`) |
 | A mirror applied after files appeared or changed on the target since its dry run | Only what the dry run showed is deleted; the rest is kept and reported, and the next dry run shows it (a file made after the dry run was deleted) | auto (`TestSyncKeepsChangesSinceTheDryRun`) |
+| A move on one node from a root into another root that holds it (two roots overlapping on disk, e.g. the local root `/` and the shared directory) | Refused: it would delete what it copied (it was accepted) | auto (`TestMoveAcrossOverlappingRoots`) |
 | A type change whose source entry is gone by the time it is sent | Target entry deleted, the job reports it vanished, the next sync has nothing to do | auto (`TestSyncSourceGoneAfterDeletes`) |
 
 ## 2. Process failures
@@ -196,6 +197,24 @@ faults into a share directory's files are skipped there).
 | Real ssh, a `ProxyJump` path, 20 to 50 ms round trips | Works; throughput against `scp` and `rsync -e ssh` | **todo** (lab) |
 | A link cut mid-transfer (network, not a kill), both directions; the home node killed | Rides it out or detaches; resumes after | **todo** (lab) |
 | x86-64 and ARM64 hosts in one ssh swarm; a host with /tmp in memory | Same results; staging bounded by `job_quota` | **todo** (lab) |
+
+## 11. On its own: root `local`, hosts from the TUI
+
+`fkbr` with no share, root `local` (`/`) that only this host sees, and
+ssh hosts linked from the TUI (`operations.md`, "Without a share").
+
+| Case | Expected | Status |
+|---|---|---|
+| Another node lists, reads, makes a folder in, deletes in, or copies out of a node's local root | Refused as an unknown root; it is not in the registry; the node itself sees it | auto (`TestLocalRootUnseenByPeers`) |
+| A job record made up by another node, or a node's own job changed on the share, naming its local root | The node refuses it (no record of starting it / record differs) and sends nothing; its own copy works | auto (`TestLocalRootOnlyOwnJobs`) |
+| A copy into the local root over an NFS share; with no share (ssh, on its own) | Refused on NFS (anyone could forge the chunks); done without a share | auto (`TestLocalRootWritesNeedPrivateShare`) |
+| A sync from or into the local root | Refused for now | auto (`TestLocalRootUnseenByPeers`) |
+| `check` with the local root `/` | Reads it, writes nothing there | manual (cloud session) |
+| Hosts kept in the config file: added twice, removed, the owner's comments and keys, a symlink in its place | Each host once; the rest of the file and its mode kept (a new file 0600); never written through the symlink | auto (`TestSavedHosts`) |
+| Which config file: `-config`, `$FKBR_CONFIG`, `fkbr.yaml` beside the binary, `~/.fkbr.conf` | Read and written in that order; `~/.fkbr.conf` only when none of the others is there | auto (`TestConfigPathOrder`) |
+| No share: a host linked while the node runs, saved, linked again at the next start, unlinked | Online, saved; back on restart; leaves and is forgotten | auto (`TestSSHHostsLinkedAtRuntime`) |
+| TUI: panes open in this directory and another node or the local root; a host not up yet shows with why; F7 links, F8 unlinks; on a share F7/F8 in the node list do nothing new | As stated | auto (`TestStartPanesAndLinkRows`, `TestLinkAndUnlinkFromTheNodeList`, `TestNoLinkKeysOnAShare`) |
+| The TUI on a real terminal: start without a share, F7 a real host, quit and start again | As above | **todo** (lab) |
 
 ## How to run the lab tests
 

@@ -30,7 +30,10 @@ between any two. Without `:/path`, a host shares its login directory.
 `PATH`). CLI commands attach to this host's node.
 
 The host that runs the `ssh:` command is the **home** node below; the
-others are **remote** nodes.
+others are **remote** nodes. `fkbr` with no share is a home node too, with
+no hosts but those in the config file's `ssh:` list; in its TUI, F7 in
+the node list links a host while it runs (and adds it there; with no
+config file, to a new `~/.fkbr.conf`), F8 unlinks one.
 
 ## Sessions
 
