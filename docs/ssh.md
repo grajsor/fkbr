@@ -5,9 +5,12 @@ Status: design, not built yet. See "Phases" at the end.
 ## Goal
 
 Hosts that share no directory, but that you can reach with ssh, work as
-nodes of one swarm. As with NFS, each host needs only the fkbr binary: no
-service, no open port besides sshd, nothing installed. Logins, keys and
-host checks are ssh's: fkbr adds no authentication of its own.
+nodes of one swarm. Data goes straight from source to target over ssh,
+never resting anywhere on the way. fkbr runs the user's own `ssh`, so
+whatever ssh reaches (`ProxyJump`, bastions, `~/.ssh/config`, the agent,
+`known_hosts`), fkbr reaches. Each host needs only the fkbr binary: no
+service, no open port besides sshd, nothing installed, and no
+authentication of fkbr's own.
 
 ## Use
 
@@ -21,109 +24,139 @@ today. It also starts fkbr on web01 and db01 over ssh, sharing `/srv/www`
 and `/var/backups` there, and opens the TUI with all three nodes. Every
 node can be a source or a target: copy, move, sync, view and delete work
 as they do with NFS. Without `:/path`, a host shares its login directory.
+`-ssh-bin PATH` names fkbr on the other hosts (default: `fkbr` on their
+`PATH`). CLI commands attach to this host's node, as today.
 
-Host names go to `ssh` as typed, so `~/.ssh/config`, the agent,
-`ProxyJump` and `known_hosts` all apply. `-ssh-bin PATH` names fkbr on the
-other hosts (default: `fkbr` on their `PATH`). CLI commands attach to this
-host's node, as today.
+The host that runs the `ssh:` command is the **home** node below.
 
-The host that runs the `ssh:` command is the **hub** below.
+## What stays, what changes
+
+The engine stays as it is: jobs, fan-out, detach, catch-up, sync plans,
+excludes, moves, resume. It talks to the share only through the
+`transport.Transport` and `transport.Store` interfaces; over ssh they are
+implemented by `internal/sshlink` instead of `nfsmailbox`.
+
+| | NFS | ssh |
+|---|---|---|
+| Chunks | files on the share | **the same chunks** (FKB2, zstd, SHA-256, the strict reader), streamed from source to target |
+| Chunk metadata | `.meta` files | the same metadata, sent ahead of each chunk |
+| Requests, replies, acks, status, cancel | files, polled every 200 ms to 1 s | messages, sent at once |
+| Liveness | heartbeat file mtimes | the ssh session, plus a heartbeat message |
+| Job records, registry, sync plans and snapshots | files on the share | files in a private directory on the home node |
+| Clock | the NFS server's | the home node's |
+
+ssh compression stays off (`-o Compression=no`): chunks are already zstd.
 
 ## How it works
 
-The protocol stays as it is (`protocol.md`). Only the share moves.
+### Sessions
 
-- **The share is a directory on the hub**, private to it:
-  `/tmp/fkbr-<uid>-<node>/hub` (or `-hub DIR`). The hub's own node uses it
-  as a local share.
-- **One ssh session per host.** The hub runs the user's `ssh HOST`, which
-  starts `fkbr` there in a hidden stdio mode, in the given directory. Over
-  that session's stdin and stdout the hub serves the hub directory with
-  SFTP (`github.com/pkg/sftp`, server side, confined to that directory).
-- **The remote node is an ordinary node** whose share is the hub
-  directory reached over SFTP on its stdin and stdout. It has the same
-  registry entry, inbox, heartbeat, chunks, acks and job records as on
-  NFS. Atomic publication uses SFTP's `posix-rename` and `fsync`.
-- **The mailbox gets a small file system interface** (`vfs`): the local
-  one (as today, with the NFS refresh trick when the share is on NFS) and
-  SFTP. The mailbox code is the same for both.
-- **One clock.** Heartbeats and pruning use mtimes on the hub's file
-  system, as they use the NFS server's today.
-- **Data passes through the hub.** A copy from web01 to db01 is staged on
-  the hub, like it is on the NAS with NFS. The hub's disk holds the
-  `job_quota` window (1 GiB per job).
+The home node runs `ssh HOST` once per host, starting fkbr there in a
+hidden stdio mode in the given directory. All traffic with that node
+runs over this one session's stdin and stdout, as frames of a small
+multiplexed protocol: many requests and chunk streams at once, each with
+its own flow control, so one big transfer never holds up a directory
+listing.
 
-### Lifetime and failures
+### Control state
 
-- A remote node lives as long as its ssh session. When the hub quits,
-  ssh closes; the remote node stops, removes its staging and leaves, like
-  a TUI on SIGHUP today.
-- A dropped link (network, ssh killed) looks like a cut from the NAS.
-  The remote node cannot dial back, so it stops at once; on the hub its
-  jobs detach it after `offline_after`, as today. The hub starts the
-  session again, with backoff, and `catchup` re-sends.
+The home node keeps the swarm's records in a private directory
+(`/tmp/fkbr-<uid>-<node>/ssh`), with the existing mailbox code on local
+disk: job records, statuses, acks, detaches, cancel, registry, sync plans
+and snapshots. Remote nodes read and write them with messages; a write
+returns once the home node has committed it (atomic rename, as today).
+The home node pushes changes (a new request, a reply, a status) to the
+nodes that wait on them, so nothing polls.
+
+### Data: straight from source to target
+
+- `CreateChunk` on the source sends the chunk to every active target of
+  the job, each over its own path. A chunk to a node is written straight
+  into that node's staging area (`.fkbr-tmp` in its destination root),
+  where `OpenChunk` reads it. Nothing is stored in between.
+- **Paths.** Between the home node and a remote node, the path is their
+  ssh session. Between two remote nodes, the home node forwards the
+  frames from one session to the other in memory, as a jump host does,
+  never writing them to disk. A later option lets a remote node run its
+  own `ssh` to the other one, where that path exists.
+- **The window.** `StagedBytes` counts the bytes sent to a target and
+  not yet acked; `job_quota` bounds it, as it bounds staging on the
+  share. A slow target fills its window: the source waits, and after
+  `detach_after` without progress it detaches that target, as today. The
+  others go on.
+- **Fan-out** sends a chunk once per target (NFS stages it once for all).
+  This is the price of point-to-point, and it is what lets every target
+  get its own path.
+- **Acks** go back to the source and to the home node's records. The
+  source drops a chunk from its window when every active target acked it
+  (`DeleteChunk`).
+
+### Failures and resume
+
+- A target that restarts, or whose session comes back, asks for its
+  first chunk not acked yet. The source builds chunks the same way every
+  time (chunk sizes depend only on the sequence number), so it
+  regenerates from there; a source whose files changed meanwhile is
+  detected by `First`, as today. Nothing partial is ever installed.
+- A dropped session looks like a node going offline: its jobs detach it
+  after `offline_after`, as today. The home node starts the session
+  again, with backoff; `catchup` re-sends what was detached.
+- A remote node lives as long as its session. When the home node quits,
+  ssh closes; remote nodes stop, remove their staging and leave, like a
+  TUI on SIGHUP today.
 - A remote fkbr on another protocol version refuses with the usual
   message. Mixed builds of one protocol work together, as with NFS.
 
 ### Trust
 
-Remote nodes read and write only the hub directory: the SFTP server is
-confined to it. Within the swarm the rules are those of NFS: one trust
-domain, records from the share validated (`ValidID`, size caps, blob
-names). The SFTP backend must keep those checks; they live in the mailbox,
-so it does.
-
-### Differences from NFS
-
-- The hub is needed: without it there is no swarm. This fits "a running
-  TUI does all the work".
-- Throughput is bound by the hub's links; a copy between two remote nodes
-  crosses them twice.
-- Every poll is a few SFTP round trips; the poll interval may need to be
-  longer on slow links.
-- No NFS attribute caching: the refresh trick is off for SFTP.
+ssh decides who reaches which host. Within the swarm the rules are those
+of NFS: one trust domain; what a node receives from others is validated
+as it is from the share (`ValidID`, size caps, blob names, the strict
+chunk reader with its checksum). The frame protocol is fuzzed like the
+chunk reader.
 
 ## Packages
 
 | Package | |
 |---|---|
-| `internal/transport/vfs` | the file system interface and its local implementation |
-| `internal/transport/nfsmailbox` | unchanged protocol, on `vfs` (the name stays; NFS tricks only on the local file system) |
-| `internal/transport/sftpfs` | `vfs` over an SFTP client |
-| `internal/sshlink` | ssh sessions: start, serve SFTP to them, restart with backoff, state for the TUI |
+| `internal/sshlink/frame` | the multiplexed frame protocol over one stream: request/reply, push, chunk streams with flow control |
+| `internal/sshlink` | `Transport` and `Store` over a session: the home side (records on local disk, routing between sessions) and the remote side |
+| `internal/sshlink/session` | starting `ssh`, restarts with backoff, state for the TUI and `nodes` |
 | `cmd/fkbr` | `ssh:` shares, the hidden stdio mode |
-| `internal/check` | ssh checks: host reachable, fkbr found there, its version, SFTP works |
+| `internal/check` | ssh checks: host reachable, fkbr found there, its version |
+
+`nfsmailbox` does not change.
 
 ## Testing
 
 In `go test`, with no ssh:
 
-- A `vfs` conformance test for both implementations; SFTP over an
-  in-process pipe (pkg/sftp server and client).
-- The mailbox tests and the engine tests with every node's share over an
-  SFTP pipe: the whole suite, on the new backend.
-- `sshlink` with a fake `ssh` command that runs fkbr locally, so a node
-  can be killed, its link cut and the hub stopped mid-transfer.
+- The frame protocol: unit tests, and a fuzzer on the reader.
+- The engine suite with nodes linked by in-process pipes instead of a
+  share: copies, fan-out, sync, detach, cancel, resume. Pipes that stall,
+  drop or cut mid-chunk stand in for bad links.
+- Sessions with a fake `ssh` command that runs fkbr locally, so a node
+  can be killed, its link cut and the home node stopped mid-transfer.
 
-On real hosts (lab): real ssh and latency; the link dropped mid-transfer
-in both directions; the hub killed and restarted; a big transfer through
-the hub; x86-64 and ARM64 nodes in one swarm.
+On real hosts (lab): real ssh and latency (local network, and a link
+with 20 to 50 ms round trips); a `ProxyJump` path; sessions dropped
+mid-transfer in both directions; the home node killed and restarted; a
+big transfer between two remote nodes; x86-64 and ARM64 in one swarm;
+throughput against `scp`, `rsync -e ssh` and NFS for `benchmarks.md`.
 
 ## Phases
 
-1. `vfs`, and the mailbox on it. No change in behaviour; the whole suite
-   stays green.
-2. `sftpfs`, and the suite over SFTP pipes.
-3. `sshlink`, `ssh:` shares, the stdio mode.
+1. `frame`: the protocol, its tests and fuzzer.
+2. `sshlink` over in-process pipes, and the engine suite on it.
+3. `session`, `ssh:` shares, the stdio mode.
 4. `check`, link state in the TUI and `nodes`, user docs (FAQ,
    operations.md), test plan rows.
 
 ## Open questions
 
-- Copies between two remote nodes could go straight from one to the
-  other over ssh, skipping the hub. Only if the hub's links turn out to
-  be the limit.
-- The hub could copy its own binary to a host that has none (into the
-  state dir there, same architecture only). Off unless asked for.
+- Direct sessions between remote nodes (instead of forwarding through
+  the home node), where one can ssh to the other.
+- The home node could copy its own binary to a host that has none (into
+  the state dir there, same architecture only). Off unless asked for.
 - An NFS swarm and an ssh swarm in one TUI. Not planned: one share per
   node.

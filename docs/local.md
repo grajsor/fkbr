@@ -67,8 +67,8 @@ plans, excludes, `max_deletes`, resumable jobs and checks.
 | `internal/check` | file system checks for any share; local-mode checks |
 | `cmd/fkbr` | `-local`, `-drives` |
 
-The share in local mode is the mailbox on the local file system (`vfs`,
-see `ssh.md`), so the protocol code is the one used everywhere.
+The share in local mode is the mailbox (`nfsmailbox`) on local disk, so
+the protocol code is the one NFS uses.
 
 ## Testing
 
