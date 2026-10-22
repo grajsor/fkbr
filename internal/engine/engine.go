@@ -50,6 +50,10 @@ type Engine struct {
 	// applyMu makes ApplySync's check and mark of plan.Applied one step
 	// for every client of this node (TUI, CLI, socket).
 	applyMu sync.Mutex
+	// scan reads a sync plan's scan forward across the Remove batches of
+	// its apply (see scannedBelow).
+	scanMu  sync.Mutex
+	scanCur *scanCursor
 
 	// Job execution state, used only by Run.
 	jobsWG  sync.WaitGroup

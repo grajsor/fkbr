@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -126,42 +127,110 @@ func (e *Engine) mkdirLocal(req api.MkdirRequest) error {
 
 // scannedBelow reads this node's scan for a sync plan and returns its
 // entries at and below paths (root-relative), keyed relative to base.
+// An apply's Remove batches come in the scan's order (the delete list is
+// written in it), so one cursor reads the scan forward across them: once
+// per apply, not once per batch. A batch for another plan, or for paths
+// the cursor has passed, starts it again from the top.
 func (e *Engine) scannedBelow(ctx context.Context, planID, base string, paths []string) (map[string]*inventory.Entry, error) {
-	tops := map[string]bool{}
+	var tops []string
 	for _, p := range paths {
 		if c, err := localfs.CleanRel(p); err == nil {
-			tops[inventoryRel(base, c)] = true
+			tops = append(tops, inventoryRel(base, c))
 		}
 	}
-	rc, err := e.st.OpenBlob(ctx, snapshotBlob(planID, e.Self()))
-	if err != nil {
-		return nil, err
-	}
-	defer rc.Close()
-	r, err := inventory.NewReader(bufio.NewReaderSize(rc, 256<<10))
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	m := map[string]*inventory.Entry{}
-	for {
-		ent, err := r.Next()
-		if errors.Is(err, io.EOF) {
-			return m, nil
+	slices.SortFunc(tops, inventory.ComparePaths)
+	e.scanMu.Lock()
+	defer e.scanMu.Unlock()
+	c := e.scanCur
+	e.scanCur = nil
+	if c != nil {
+		c.idle.Stop()
+		if c.plan != planID || (len(tops) > 0 && c.pos != "" && inventory.ComparePaths(tops[0], c.pos) <= 0) {
+			c.close()
+			c = nil
 		}
+	}
+	if c == nil {
+		// The cursor outlives this request: not its context.
+		rc, err := e.st.OpenBlob(context.WithoutCancel(ctx), snapshotBlob(planID, e.Self()))
 		if err != nil {
 			return nil, err
 		}
-		for q := ent.P; ; q = path.Dir(q) {
-			if tops[q] {
+		r, err := inventory.NewReader(bufio.NewReaderSize(rc, 256<<10))
+		if err != nil {
+			rc.Close()
+			return nil, err
+		}
+		c = &scanCursor{plan: planID, rc: rc, r: r}
+	}
+	m := map[string]*inventory.Entry{}
+	for i, top := range tops {
+		if i > 0 && within(tops[i-1], top) {
+			continue // collected with its folder
+		}
+		for {
+			ent, err := c.peek()
+			if err != nil {
+				c.close()
+				return nil, err
+			}
+			if ent == nil || (inventory.ComparePaths(ent.P, top) > 0 && !within(top, ent.P)) {
+				break // past top's subtree (contiguous in this order); kept for the next
+			}
+			if within(top, ent.P) {
 				m[ent.P] = ent
-				break
 			}
-			if q == "." || q == "/" {
-				break
-			}
+			c.next = nil
+		}
+		c.pos = top
+	}
+	c.idle = time.AfterFunc(time.Minute, func() {
+		e.scanMu.Lock()
+		defer e.scanMu.Unlock()
+		if e.scanCur == c {
+			e.scanCur = nil
+			c.close()
+		}
+	})
+	e.scanCur = c
+	return m, nil
+}
+
+// within reports whether p is dir or inside it (scan-relative paths).
+func within(dir, p string) bool {
+	return dir == "." || p == dir || strings.HasPrefix(p, dir+"/")
+}
+
+// scanCursor is a scan being read forward (see scannedBelow).
+type scanCursor struct {
+	plan string
+	rc   io.ReadCloser
+	r    *inventory.Reader
+	next *inventory.Entry // read, not used yet
+	eof  bool
+	pos  string // the last top served
+	idle *time.Timer
+}
+
+// peek returns the next entry without using it up; nil at the end.
+func (c *scanCursor) peek() (*inventory.Entry, error) {
+	if c.next == nil && !c.eof {
+		ent, err := c.r.Next()
+		switch {
+		case errors.Is(err, io.EOF):
+			c.eof = true
+		case err != nil:
+			return nil, err
+		default:
+			c.next = ent
 		}
 	}
+	return c.next, nil
+}
+
+func (c *scanCursor) close() {
+	c.r.Close()
+	c.rc.Close()
 }
 
 func (e *Engine) removeLocal(ctx context.Context, req api.RemoveRequest) (*api.RemoveResult, error) {
