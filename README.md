@@ -10,6 +10,9 @@ a dual-pane TUI and a scriptable CLI.
 - **Nothing to install.** One static binary for x86-64 or ARM64. It runs
   on any Linux with kernel 3.10 or newer and does not depend on glibc. No
   package, service, system user or files in `/etc`.
+- **Over ssh too.** Hosts without a common share, reached with ssh, are
+  linked from one of them: `fkbr ssh:web01:/srv/www,db01`. Data goes
+  straight from source to target (`docs/ssh.md`).
 - **No master.** Each host that runs `fkbr /mnt/nfs/xfer` joins as a node
   named after its hostname. Copy to one node, a list of nodes, or all of
   them (`@all`).
@@ -121,8 +124,8 @@ the commit it was built from.
 - `docs/testplan.md`: what could break, how it is tested, and the results
 - `examples/config.yaml`: every option, for those who prefer a config file
   to flags
-- `docs/ssh.md`, `docs/local.md`: designs for nodes over ssh and for
-  local file systems (not built yet)
+- `docs/ssh.md`: how nodes work over ssh
+- `docs/local.md`: design for local file systems (not built yet)
 
 ## Development
 

@@ -107,7 +107,9 @@ internal/engine             jobs, send/recv, fan-out/detach, sync, files ops, ev
                             worker lock, instance.go (one worker per node ID)
 internal/transport          Transport (messaging) + Store (jobs/data/blobs) interfaces
 internal/transport/nfsmailbox  the store on NFS: the refresh trick
-internal/sshlink            nodes over ssh (docs/ssh.md); sshlink/frame the link protocol
+internal/sshlink            nodes over ssh (docs/ssh.md): home.go (records, relay), remote.go,
+                            session.go (runs ssh, backoff, Probe); sshlink/frame the link protocol;
+                            cmd/fkbr/link.go is `fkbr link`, the remote end (hidden command)
 internal/bundle             chunks in fkbr's own format (native.go, optional zstd); big files
                             split into segments over consecutive chunks
 internal/receive            os.Root-confined staging (.fkbr-tmp), commit, metadata order

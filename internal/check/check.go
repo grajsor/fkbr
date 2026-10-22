@@ -58,9 +58,15 @@ func Run(ctx context.Context, cfg *config.Config, mountInfo io.Reader) []Result 
 	c.add(OK, "config", "node %q, %d roots, share %s", cfg.NodeID, len(cfg.Roots), cfg.NFSRoot)
 	c.roots()
 	c.stateDir()
-	mounts := mountinfo.Parse(mountInfo)
-	c.share(mounts)
-	c.registry(ctx)
+	if len(cfg.SSH) > 0 {
+		// The home node of an ssh swarm: the share is its private
+		// directory, no mount; the hosts are checked by the caller.
+		c.add(Info, "share", "ssh swarm; records kept in %s, private to this user", cfg.NFSRoot)
+	} else {
+		mounts := mountinfo.Parse(mountInfo)
+		c.share(mounts)
+		c.registry(ctx)
+	}
 	c.capabilities()
 	c.socket()
 	return c.res

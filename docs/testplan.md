@@ -177,6 +177,26 @@ that: from the share onto a node's host, and from another local user.
 
 Each test fails with its fix taken out.
 
+## 10. Over ssh
+
+Hosts linked over ssh instead of a share (`ssh.md`). Every case of
+sections 1 to 8 that `go test` covers also runs with the nodes linked:
+`FKBR_TEST_TRANSPORT=ssh go test ./internal/engine` (tests that inject
+faults into a share directory's files are skipped there).
+
+| Case | Expected | Status |
+|---|---|---|
+| The engine suite with every node but the first linked over a pipe | As on a share | auto (with `-race`) |
+| A record write from a stopping worker (cancelled context) | Done, as on a share (it was cancelled: a restarted node failed to register) | auto (`TestLeaveOnStop` over links) |
+| Link protocol: big and many streams, a stalled stream beside a busy one, banners, resets, a silent peer, bad frames | Each stream gets its data; the stalled one does not hold up the others; bad input ends the session | auto (`internal/sshlink/frame`), fuzzed (`FuzzSession`) |
+| Home node and two hosts through a stand-in ssh: copies both ways and between the two hosts, a mirror sync, a clean stop | Files arrive; the hosts leave the swarm when the home node stops; a login banner is skipped and logged | auto (`TestSSHSwarm`) |
+| The target's fkbr killed with -9 mid-transfer | Session started again, the job resumes and is done | auto (`TestSSHTargetKilledMidTransfer`) |
+| A host without fkbr | Link state says why; the home node keeps trying | auto (`TestSSHHostWithoutFkbr`) |
+| A private share (home node's records, staged chunks) | 0700/0600 whatever the umask | auto (`TestPrivateShareModes`) |
+| Real ssh, a `ProxyJump` path, 20 to 50 ms round trips | Works; throughput against `scp` and `rsync -e ssh` | **todo** (lab) |
+| A link cut mid-transfer (network, not a kill), both directions; the home node killed | Rides it out or detaches; resumes after | **todo** (lab) |
+| x86-64 and ARM64 hosts in one ssh swarm; a host with /tmp in memory | Same results; staging bounded by `job_quota` | **todo** (lab) |
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): rounds of random copies and syncs

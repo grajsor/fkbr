@@ -40,6 +40,15 @@ type Poll struct {
 type Config struct {
 	NodeID  string `yaml:"node_id"`
 	NFSRoot string `yaml:"nfs_root"`
+	// SSH lists the hosts of an ssh swarm ("host" or "host:/path", as ssh
+	// takes the host); this node is then its home node, and the share is
+	// a private directory in StateDir (docs/ssh.md).
+	SSH []string `yaml:"ssh"`
+	// SSHBin is fkbr on the ssh hosts (default "fkbr", on their PATH).
+	SSHBin string `yaml:"ssh_bin"`
+	// Link: this node runs under `fkbr link`, linked to a home node over
+	// ssh; its share is where it keeps the chunks it sends.
+	Link bool `yaml:"-"`
 	// StateDir is local (never NFS) runtime storage: worker lock, socket.
 	// Default $TMPDIR (normally /tmp)/fkbr-<uid>-<node>.
 	StateDir string `yaml:"state_dir"`
@@ -250,21 +259,38 @@ func ParseRoot(s string) (Root, error) {
 	return r, nil
 }
 
-// defaultStateDir is per-node runtime storage for the worker lock and the
+// DefaultStateDir is per-node runtime storage for the worker lock and the
 // socket; nothing in it needs to survive a reboot. It is deliberately not
 // $XDG_RUNTIME_DIR: logind deletes that when the user's last session ends,
 // while a node may keep running under nohup or inside tmux. The node keeps
 // its files fresh so tmpfiles cleaning of /tmp never ages them out.
-func defaultStateDir(node string) string {
+func DefaultStateDir(node string) string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d-%s", product.Name, os.Getuid(), node))
 }
 
 func (c *Config) applyDefaults() {
 	if c.StateDir == "" && c.NodeID != "" {
-		c.StateDir = defaultStateDir(c.NodeID)
+		c.StateDir = DefaultStateDir(c.NodeID)
 	}
 	if c.Socket == "" && c.StateDir != "" {
 		c.Socket = filepath.Join(c.StateDir, product.Name+".sock")
+	}
+	switch {
+	case c.Link:
+		if c.NFSRoot == "" && c.StateDir != "" {
+			c.NFSRoot = filepath.Join(c.StateDir, "chunks")
+		}
+		// Asking for requests waits on the home node (sshlink), so ask
+		// again at once.
+		setDur(&c.Poll.Active, 10*time.Millisecond)
+		setDur(&c.Poll.Idle, 10*time.Millisecond)
+	case len(c.SSH) > 0:
+		if c.NFSRoot == "" && c.StateDir != "" {
+			c.NFSRoot = filepath.Join(c.StateDir, "ssh")
+		}
+		// The share is on local disk: looking is cheap.
+		setDur(&c.Poll.Active, 20*time.Millisecond)
+		setDur(&c.Poll.Idle, 100*time.Millisecond)
 	}
 	if c.SocketMode == 0 {
 		c.SocketMode = 0o600

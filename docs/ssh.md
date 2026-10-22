@@ -1,9 +1,8 @@
 # SSH (design)
 
-Status: being built. Done: the link protocol (`internal/sshlink/frame`)
-and the nodes' ends of a link (`internal/sshlink`), with the engine's test
-suite run over links. To do: starting ssh, `ssh:` on the command line,
-`check`, link state in the TUI, user docs.
+Status: built and tested without real ssh (`testplan.md`, section 10);
+real hosts, latency and cut links still to be tried on the lab. User
+docs: `operations.md`, "Over ssh".
 
 ## Goal
 

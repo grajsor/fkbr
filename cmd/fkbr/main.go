@@ -32,6 +32,7 @@ import (
 	"fkbr/internal/localfs"
 	"fkbr/internal/product"
 	"fkbr/internal/safetext"
+	"fkbr/internal/sshlink"
 )
 
 // commit is set at build time with -ldflags "-X main.commit=..." (make).
@@ -93,6 +94,12 @@ installed. Without a command, the TUI opens.
 
   cd /srv/data && {name} /mnt/nfs/xfer
 
+Hosts with no share in common, reached with ssh, are linked from this one
+instead: SHARE is ssh:HOST[:/dir],... and fkbr runs on each of them over
+ssh, sharing that directory (the login directory without one).
+
+  cd /srv/data && {name} ssh:web01:/srv/www,db01:/var/backups
+
 Copy to one node, a list (n1,n2), or every other node (@all).
 
 commands:
@@ -127,6 +134,7 @@ func run() error {
 	cfgPath := flag.String("config", "", product.Expand("config file (default ${ENV}CONFIG, else {name}.yaml next to the binary, else none)"))
 	node := flag.String("node", "", "this node's ID (default: short hostname)")
 	share := flag.String("share", "", "the shared directory (alternative to the SHARE argument)")
+	sshBin := flag.String("ssh-bin", "", product.Expand("{name} on the hosts of an ssh: share (default {name}, on their PATH)"))
 	readOnly := flag.Bool("ro", false, "share the current directory read-only")
 	stateDir := flag.String("state", "", product.Expand("local runtime dir for lock and socket (default /tmp/{name}-<uid>-<node>)"))
 	var roots rootFlags
@@ -141,6 +149,12 @@ func run() error {
 	flag.Usage = usage
 	flag.Parse()
 	args := flag.Args()
+	if len(args) > 0 && args[0] == "link" { // started by a home node's ssh
+		if len(args) > 1 {
+			return fmt.Errorf("link takes no arguments: %q", strings.Join(args[1:], " "))
+		}
+		return runLink(linkFlags{node: *node, state: *stateDir, roots: roots, readOnly: *readOnly, roles: *roles, verbose: *verbose})
+	}
 	if len(args) == 0 && *share == "" && os.Getenv(product.EnvPrefix+"SHARE") == "" && *cfgPath == "" && config.DefaultPath() == "" {
 		usage()
 		return fmt.Errorf("which shared directory? e.g. %s /mnt/nfs/xfer", product.Name)
@@ -194,14 +208,24 @@ func run() error {
 	case cfg.NFSRoot == "":
 		cfg.NFSRoot = os.Getenv(product.EnvPrefix + "SHARE")
 	}
-	if cfg.NFSRoot == "" {
+	if s, ok := strings.CutPrefix(cfg.NFSRoot, "ssh:"); ok {
+		if _, err := sshlink.ParseHosts(s); err != nil {
+			return err
+		}
+		cfg.SSH, cfg.NFSRoot = []string{s}, ""
+	}
+	if *sshBin != "" {
+		cfg.SSHBin = *sshBin
+	}
+	if cfg.NFSRoot == "" && len(cfg.SSH) == 0 {
 		return fmt.Errorf("which shared directory? e.g. %s /mnt/nfs/xfer", product.Name)
 	}
-	abs, err := filepath.Abs(cfg.NFSRoot)
-	if err != nil {
-		return err
+	var err error
+	if cfg.NFSRoot != "" {
+		if cfg.NFSRoot, err = filepath.Abs(cfg.NFSRoot); err != nil {
+			return err
+		}
 	}
-	cfg.NFSRoot = abs
 	if *node != "" {
 		cfg.NodeID = *node
 	}
@@ -212,6 +236,12 @@ func run() error {
 	}
 	if *stateDir != "" {
 		cfg.StateDir = *stateDir
+	}
+	if len(cfg.SSH) > 0 && cfg.NFSRoot == "" { // the swarm's records: private, in the state dir
+		if cfg.StateDir == "" {
+			cfg.StateDir = config.DefaultStateDir(cfg.NodeID)
+		}
+		cfg.NFSRoot = filepath.Join(cfg.StateDir, "ssh")
 	}
 	if len(roots) > 0 {
 		cfg.Roots = roots
@@ -402,6 +432,11 @@ func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger, leave 
 	if err != nil {
 		return nil, err
 	}
+	return startNodeWith(ctx, cfg, log, leave, c)
+}
+
+// startNodeWith is startNode for a client built already.
+func startNodeWith(ctx context.Context, cfg *config.Config, log *slog.Logger, leave bool, c *local.Client) (*node, error) {
 	if leave {
 		c.LeaveOnStop()
 	}
@@ -537,6 +572,30 @@ func runCheck(ctx context.Context, cfg *config.Config) error {
 		fmt.Printf("%-4s  %-11s %s\n", r.Level, r.Area, r.Msg)
 		if r.Level == check.Fail {
 			fails++
+		}
+	}
+	for _, s := range cfg.SSH {
+		hosts, err := sshlink.ParseHosts(s)
+		if err != nil {
+			return err
+		}
+		for _, h := range hosts {
+			v, err := sshlink.Probe(ctx, h, sshlink.SessionOptions{Bin: cfg.SSHBin})
+			if err != nil {
+				fmt.Printf("%-4s  %-11s %s\n", check.Fail, "ssh", safetext.Clean(h.String()+": "+err.Error()))
+				fails++
+				continue
+			}
+			lvl, note := check.OK, ""
+			if !strings.HasPrefix(v, product.Name+" ") {
+				lvl, note = check.Fail, " (not "+product.Name+"?)"
+			} else if v != product.Name+" "+version {
+				lvl, note = check.Warn, " (this one is "+version+"; the protocol decides if they work together)"
+			}
+			if lvl == check.Fail {
+				fails++
+			}
+			fmt.Printf("%-4s  %-11s %s\n", lvl, "ssh", safetext.Clean(h.String()+": "+v+note))
 		}
 	}
 	if fails > 0 {

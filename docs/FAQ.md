@@ -17,6 +17,9 @@ cd /dir/to/share
 ```
 This opens the TUI. The machine joins under its hostname and shares the folder you are in.
 
+**No NFS, only ssh?**
+Start it on one machine with the others listed: `./fkbr ssh:web01,db01:/data`. They need the fkbr file too, and ssh must log in without a password (a key). See `operations.md`, "Over ssh".
+
 **How do I copy?**
 In the TUI, mark files with Insert and press F5. F6 moves instead. In a shell:
 ```
