@@ -143,3 +143,34 @@ func TestSyncKeepNewer(t *testing.T) {
 		t.Errorf("older target file not updated: %q", b)
 	}
 }
+
+// A target on a build without recheck would delete what changed since the
+// dry run: a mirror that deletes there is refused before anything runs.
+// Copying to it still works.
+func TestRecheckNeedsSupport(t *testing.T) {
+	share := t.TempDir()
+	a, aroot := node(t, share, "a")
+	old, oroot := node(t, share, "old")
+	old.info.Features = []string{api.FeatureExclude, api.FeatureMove} // as published by the build before
+	runWorker(t, a)
+	runWorker(t, old)
+	ctx := context.Background()
+	writeFiles(t, aroot, "p/new.txt")
+	writeFiles(t, oroot, "m/extra.txt")
+	req := api.SyncRequest{SrcRoot: "data", SrcPath: "p", DstNodes: []string{"old"}, DstRoot: "data", DstPath: "m", Mode: api.SyncMirror}
+	plan := mustPlan(t, a, req)
+	if _, err := a.ApplySync(ctx, plan.ID, false); err == nil || !strings.Contains(err.Error(), "old") || !strings.Contains(err.Error(), "update") {
+		t.Errorf("mirror deleting on an old node: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(oroot, "m/extra.txt")); err != nil {
+		t.Errorf("refused, but deleted: %v", err)
+	}
+	if p, _ := a.SyncPlan(ctx, plan.ID); p == nil || p.Applied {
+		t.Error("a refused plan is marked applied")
+	}
+	req.Mode = api.SyncIncremental
+	applyAndWait(t, a, mustPlan(t, a, req), false)
+	if _, err := os.Stat(filepath.Join(oroot, "m/new.txt")); err != nil {
+		t.Errorf("incremental sync to the old node: %v", err)
+	}
+}

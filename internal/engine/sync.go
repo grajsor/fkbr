@@ -443,6 +443,24 @@ func (e *Engine) claimPlan(ctx context.Context, planID string, force bool) (*api
 			}
 		}
 	}
+	// A target that deletes must keep what changed since the dry run; an
+	// older build would delete it anyway, unseen.
+	nodes, err := e.tr.Nodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, t := range plan.Targets {
+		if t.Delete+t.Replace == 0 {
+			continue
+		}
+		for _, n := range nodes {
+			if n.ID == t.Node {
+				if err := needFeature(api.FeatureRecheck, "keeping what changed since the dry run", n); err != nil {
+					return nil, fmt.Errorf("%w: %w", api.ErrNotAllowed, err)
+				}
+			}
+		}
+	}
 	plan.Applied = true
 	if err := e.savePlan(ctx, plan); err != nil {
 		return nil, fmt.Errorf("sync plan %s: %w", planID, err)
