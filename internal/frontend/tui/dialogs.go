@@ -447,6 +447,8 @@ MOVING AROUND
 
   Names end in / for a folder and @ for a link; ../ is one up.
 
+  In an ssh swarm ({name} ssh:host1,host2), a node whose link is down says why in the node list.
+
 MARKING
   Insert, Space  mark and move down
   + - *          mark all, none, invert
