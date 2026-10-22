@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"strings"
 	"syscall"
 
 	"fkbr/internal/api"
@@ -133,9 +134,31 @@ type call struct {
 func (c *call) Read(p []byte) (int, error) {
 	n, err := c.r.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
-		err = linkErr(err)
+		err = resetErr(linkErr(err))
 	}
 	return n, err
+}
+
+// A handler that fails after its answer started resets the stream with a
+// coded reason, "code|text" (codes as in answers): a chunk the home node
+// relays from a node whose link then dies must reach its target as a link
+// down, which transfers ride out, not as a reset, which fails the job.
+func codedReset(err error) error {
+	return errors.New(errorCode(err) + "|" + err.Error())
+}
+
+// resetErr turns a coded reset from the other side back into the error
+// it stands for, so errors.Is sees through it.
+func resetErr(err error) error {
+	if !errors.Is(err, frame.ErrReset) {
+		return err
+	}
+	_, reason, _ := strings.Cut(err.Error(), frame.ErrReset.Error()+": ")
+	code, msg, ok := strings.Cut(reason, "|")
+	if !ok || code == "" {
+		return err
+	}
+	return fmt.Errorf("%w: %w", frame.ErrReset, &remoteError{msg, code})
 }
 
 func (c *call) Close() error {
@@ -303,9 +326,12 @@ func serveOne(ctx context.Context, st *frame.Stream, handlers map[string]handler
 	case err != nil:
 		if !w.written {
 			w.fail(err)
-		} else if log != nil {
-			log.Debug("ssh link: call failed after its answer", "call", req.M, "err", err)
-			st.Reset(err)
+		} else {
+			// Reset, never end: the caller would take what came as all.
+			if log != nil {
+				log.Debug("ssh link: call failed after its answer", "call", req.M, "err", err)
+			}
+			st.Reset(codedReset(err))
 			return
 		}
 	case !w.written:
