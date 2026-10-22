@@ -308,7 +308,7 @@ func TestSSHHostWithoutFkbr(t *testing.T) {
 	}
 	defer n.stop()
 	waitFor(t, "the link error", 20*time.Second, func() bool {
-		for _, l := range c.Links() {
+		for _, l := range c.LinkStates() {
 			if strings.Contains(l.Error, "not found") && strings.HasPrefix(l.State, "retrying") {
 				return true
 			}
@@ -328,4 +328,91 @@ func (s *syncWriter) Write(p []byte) (int, error) {
 	s.mu <- struct{}{}
 	defer func() { <-s.mu }()
 	return s.w.Write(p)
+}
+
+// No share: the home node starts alone; a host linked while it runs is
+// saved in the config file and linked again at the next start; unlinked,
+// its node leaves and the file forgets it.
+func TestSSHHostsLinkedAtRuntime(t *testing.T) {
+	base := t.TempDir()
+	for _, n := range []string{"home", "hosta", "state", "userhome"} {
+		os.Mkdir(filepath.Join(base, n), 0o755)
+	}
+	t.Setenv("FKBR_TEST_MAIN", "1")
+	t.Setenv("FKBR_TEST_STATE", filepath.Join(base, "state"))
+	t.Setenv("HOME", filepath.Join(base, "userhome"))
+	conf := filepath.Join(base, "userhome", ".fkbr.conf")
+	ssh := fakeSSH(t)
+	start := func(saved []string) (*node, *local.Client) {
+		cfg := &config.Config{
+			NodeID:     "home",
+			Home:       true,
+			SSH:        saved,
+			ConfigPath: conf,
+			StateDir:   filepath.Join(base, "state", "home"),
+			Roots:      []config.Root{{ID: "files", Path: filepath.Join(base, "home"), AllowWrite: true}},
+		}
+		if err := cfg.Finish(); err != nil {
+			t.Fatal(err)
+		}
+		c, err := local.Open(cfg, "test", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.SetSessions(sshlink.SessionOptions{SSH: []string{ssh}, Bin: os.Args[0], StopWait: 10 * time.Second})
+		n, err := startNodeWith(context.Background(), cfg, slog.New(slog.DiscardHandler), true, c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, c
+	}
+	ctx := context.Background()
+	online := func(c *local.Client, id string) bool {
+		ns, _ := c.Nodes(ctx)
+		for _, nd := range ns {
+			if nd.ID == id && nd.Online {
+				return true
+			}
+		}
+		return false
+	}
+	n, c := start(nil)
+	if ls, err := c.Links(ctx); err != nil || len(ls) != 0 {
+		t.Fatalf("links at start: %v %v", ls, err)
+	}
+	host := "hosta:" + filepath.Join(base, "hosta")
+	if err := c.AddLink(ctx, host, true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "hosta online", 30*time.Second, func() bool { return online(c, "hosta") })
+	saved, _ := config.SavedHosts(conf)
+	if len(saved) != 1 || saved[0] != host {
+		t.Fatalf("saved: %v", saved)
+	}
+	if ls, _ := c.Links(ctx); len(ls) != 1 || !ls[0].Saved || ls[0].Node != "hosta" {
+		t.Errorf("links: %+v", ls)
+	}
+	if err := n.stop(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The next start links the saved host on its own.
+	n, c = start(saved)
+	waitFor(t, "hosta online again", 30*time.Second, func() bool { return online(c, "hosta") })
+	if err := c.RemoveLink(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "hosta gone", 20*time.Second, func() bool {
+		ns, _ := c.Nodes(ctx)
+		for _, nd := range ns {
+			if nd.ID == "hosta" {
+				return false
+			}
+		}
+		return true
+	})
+	if saved, _ := config.SavedHosts(conf); len(saved) != 0 {
+		t.Errorf("still saved: %v", saved)
+	}
+	n.stop()
 }

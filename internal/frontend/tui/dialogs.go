@@ -428,6 +428,20 @@ func wrapText(s string, w int) string {
 
 // helpText is the F1 screen. Lines stay under 72 columns so it reads well
 // in an 80-column terminal.
+// sshHelp is the help for linking hosts, on an ssh swarm's home node.
+func (m *model) sshHelp() string {
+	if m.linker() == nil {
+		return ""
+	}
+	return product.Expand(`
+
+SSH HOSTS
+  In the node list (F2), hosts this node reaches with ssh:
+  F7             link one: web01, or web01:/srv/www to share that
+  F8             unlink the one under the cursor
+  A linked host is kept in the config file ({name}.yaml beside {name}, or $FKBR_CONFIG) and linked again whenever {name} starts without a share. The host needs {name} too, and ssh must log in without a password (a key or the agent).`)
+}
+
 func (m *model) helpText() string {
 	// Paragraphs are one line each: flowText wraps them to the window.
 	jobs := `  Copies run on the nodes, not in this window. A daemon keeps going after you quit.`
@@ -491,7 +505,7 @@ JOBS (F9)
   u              catch up nodes that were offline
   Esc            back
 
-`) + jobs + `
+`) + jobs + m.sshHelp() + `
 
 QUIT AND HELP
   F1, ?          this help

@@ -60,6 +60,9 @@ type Config struct {
 	// or there is no share at all and hosts may be added later); its share
 	// is a private directory in StateDir.
 	Home bool `yaml:"-"`
+	// ConfigPath is the config file this run read, or where one goes
+	// (WritePath): hosts linked from the TUI are kept in its ssh list.
+	ConfigPath string `yaml:"-"`
 	// StateDir is local (never NFS) runtime storage: worker lock, socket.
 	// Default $TMPDIR (normally /tmp)/fkbr-<uid>-<node>.
 	StateDir string `yaml:"state_dir"`
@@ -163,11 +166,31 @@ var idRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
 // directory names on the share, so they are deliberately restrictive.
 func ValidID(s string) bool { return idRE.MatchString(s) }
 
-// DefaultPath returns the config file to use when none is given, or ""
-// for none: $FKBR_CONFIG, else fkbr.yaml next to the executable. fkbr is
-// meant to run from wherever it was copied, without installing anything,
-// so it never looks in system or home directories.
+// DefaultPath returns the config file to read when none is given (see
+// WritePath), or "" for none. fkbr is meant to run from wherever it was
+// copied, without installing anything: it never looks in system
+// directories, and in the home directory only for ~/.fkbr.conf.
 func DefaultPath() string {
+	if p := os.Getenv(product.EnvPrefix + "CONFIG"); p != "" {
+		return p
+	}
+	if p := WritePath(""); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// WritePath is the config file, also where the TUI keeps the ssh hosts it
+// links: the one given (-config), else $FKBR_CONFIG, else fkbr.yaml next
+// to the executable if it is there, else ~/.fkbr.conf. That last one is
+// the only file fkbr ever puts in a home directory, and only once a host
+// is linked from the TUI.
+func WritePath(given string) string {
+	if given != "" {
+		return given
+	}
 	if p := os.Getenv(product.EnvPrefix + "CONFIG"); p != "" {
 		return p
 	}
@@ -176,6 +199,9 @@ func DefaultPath() string {
 		if _, err := os.Stat(p); err == nil {
 			return p
 		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, "."+product.Name+".conf")
 	}
 	return ""
 }
@@ -456,6 +482,9 @@ func DirRoot(dir, share string, writable bool) (Root, error) {
 	}
 	return Root{ID: DefaultRootID, Path: abs, AllowWrite: writable}, nil
 }
+
+// LocalRootID names the root LocalRoot adds.
+const LocalRootID = "local"
 
 // PrivateShare reports whether nobody but this swarm's nodes can write the
 // share: an ssh swarm's records and links, where no directory is open to

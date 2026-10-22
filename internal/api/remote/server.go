@@ -20,6 +20,9 @@
 //	POST /v1/sync/{id}/apply      ?force=1 -> api.SyncPlan
 //	GET  /v1/sync/{id}/entries    ?limit=N -> api.SyncEntries
 //	GET  /v1/events               text/event-stream of api.Event
+//	GET  /v1/links                []api.Link (an ssh swarm's home node)
+//	POST /v1/links                {"host": h, "save": bool}
+//	POST /v1/links/remove         {"host": h}
 //
 // Errors are {"error": msg, "code": code} with a matching HTTP status.
 package remote
@@ -146,6 +149,41 @@ func Handler(svc api.Service) http.Handler {
 	mux.HandleFunc("POST /v1/sync/{id}/apply", func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.ApplySync(r.Context(), r.PathValue("id"), r.URL.Query().Get("force") == "1")
 		reply(w, v, err)
+	})
+	type linkReq struct {
+		Host string `json:"host"`
+		Save bool   `json:"save,omitempty"`
+	}
+	linker := func(w http.ResponseWriter) api.Linker {
+		l, ok := svc.(api.Linker)
+		if !ok {
+			reply(w, nil, fmt.Errorf("%w: this node links no ssh hosts", api.ErrNotAllowed))
+		}
+		return l
+	}
+	mux.HandleFunc("GET /v1/links", func(w http.ResponseWriter, r *http.Request) {
+		if l := linker(w); l != nil {
+			v, err := l.Links(r.Context())
+			reply(w, v, err)
+		}
+	})
+	mux.HandleFunc("POST /v1/links", func(w http.ResponseWriter, r *http.Request) {
+		var req linkReq
+		if !decode(w, r, &req) {
+			return
+		}
+		if l := linker(w); l != nil {
+			reply(w, struct{}{}, l.AddLink(r.Context(), req.Host, req.Save))
+		}
+	})
+	mux.HandleFunc("POST /v1/links/remove", func(w http.ResponseWriter, r *http.Request) {
+		var req linkReq
+		if !decode(w, r, &req) {
+			return
+		}
+		if l := linker(w); l != nil {
+			reply(w, struct{}{}, l.RemoveLink(r.Context(), req.Host))
+		}
 	})
 	mux.HandleFunc("GET /v1/events", func(w http.ResponseWriter, r *http.Request) {
 		events(w, r, svc)

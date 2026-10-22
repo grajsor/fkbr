@@ -102,6 +102,21 @@ func (c *Client) Nodes(ctx context.Context) ([]api.Node, error) {
 	return v, c.call(ctx, http.MethodGet, "/v1/nodes", nil, &v)
 }
 
+var _ api.Linker = (*Client)(nil)
+
+func (c *Client) Links(ctx context.Context) ([]api.Link, error) {
+	var v []api.Link
+	return v, c.call(ctx, http.MethodGet, "/v1/links", nil, &v)
+}
+
+func (c *Client) AddLink(ctx context.Context, host string, save bool) error {
+	return c.call(ctx, http.MethodPost, "/v1/links", map[string]any{"host": host, "save": save}, nil)
+}
+
+func (c *Client) RemoveLink(ctx context.Context, host string) error {
+	return c.call(ctx, http.MethodPost, "/v1/links/remove", map[string]any{"host": host}, nil)
+}
+
 func (c *Client) Forget(ctx context.Context, node string) error {
 	return c.call(ctx, http.MethodPost, "/v1/nodes/"+url.PathEscape(node)+"/forget", nil, nil)
 }

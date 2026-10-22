@@ -47,6 +47,12 @@ type Home struct {
 	peers map[string]*peer
 	// hosts is the link state by host, for Nodes and the TUI.
 	hosts map[string]*hostState
+	// While Run runs: its context and options, and how to stop each
+	// host's session (Add, Remove).
+	runCtx  context.Context
+	runOpts *SessionOptions
+	keepers map[string]context.CancelFunc
+	keeping sync.WaitGroup
 }
 
 type peer struct {
@@ -625,6 +631,9 @@ type hostState struct {
 func (h *Home) setState(host, node, state, err string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if _, kept := h.keepers[host]; h.keepers != nil && !kept {
+		return // removed (Remove); its session is ending
+	}
 	hs := h.hosts[host]
 	if hs == nil {
 		hs = &hostState{}
