@@ -521,6 +521,7 @@ func (f *failSend) Send(ctx context.Context, m *transport.Message) error {
 // F17: one target's inbox unwritable for a moment failed the whole fan-out
 // at once, the healthy target included.
 func TestNotifyFailureIsNotFatal(t *testing.T) {
+	nfsOnly(t)
 	old := renotifyEvery
 	renotifyEvery = 300 * time.Millisecond
 	t.Cleanup(func() { renotifyEvery = old })

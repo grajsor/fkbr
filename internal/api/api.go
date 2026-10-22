@@ -108,6 +108,9 @@ type Node struct {
 	// LastSeen is the age of the node's last heartbeat, measured against
 	// the NFS server clock. Negative means no heartbeat was ever written.
 	LastSeen time.Duration `json:"last_seen_ns"`
+	// Link is how the home node of an ssh swarm reaches this node, e.g.
+	// "ssh web01: connected"; empty on a share.
+	Link string `json:"link,omitempty"`
 }
 
 type EntryType string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,9 @@ import (
 	"fkbr/internal/api"
 	"fkbr/internal/config"
 	"fkbr/internal/localfs"
+	"fkbr/internal/sshlink"
+	"fkbr/internal/sshlink/frame"
+	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
 )
 
@@ -57,13 +61,84 @@ func build(t *testing.T, cfg *config.Config) *Engine {
 	}
 	// Refresh on: exercises the NFS-compensation paths everywhere (on a
 	// local filesystem they change nothing observable).
-	mb, err := nfsmailbox.Open(cfg.NFSRoot, cfg.NodeID, nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter, Refresh: true})
+	opts := nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter, Refresh: true}
+	if linkTest {
+		tr, st := linked(t, cfg, opts)
+		e := New(cfg, fsys, tr, st, Options{Version: "test"})
+		t.Cleanup(func() { e.Close() })
+		return e
+	}
+	mb, err := nfsmailbox.Open(cfg.NFSRoot, cfg.NodeID, opts)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := New(cfg, fsys, mb, mb, Options{Version: "test"})
 	t.Cleanup(func() { e.Close() })
 	return e
+}
+
+// With FKBR_TEST_TRANSPORT=ssh, the first node built on a share is an ssh
+// swarm's home node, with the share as its private directory, and every
+// other node is linked to it over an in-process pipe (docs/ssh.md).
+var linkTest = os.Getenv("FKBR_TEST_TRANSPORT") == "ssh"
+
+type testSwarm struct {
+	mu    sync.Mutex
+	home  *sshlink.Home
+	id    string
+	links map[string]*sshlink.Remote
+}
+
+var swarms sync.Map // share -> *testSwarm
+
+func linked(t *testing.T, cfg *config.Config, opts nfsmailbox.Options) (transport.Transport, transport.Store) {
+	t.Helper()
+	v, loaded := swarms.LoadOrStore(cfg.NFSRoot, &testSwarm{id: cfg.NodeID, links: map[string]*sshlink.Remote{}})
+	sw := v.(*testSwarm)
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	if !loaded {
+		sw.home = sshlink.NewHome(cfg.NFSRoot, cfg.NodeID, opts, nil)
+	}
+	if cfg.NodeID == sw.id {
+		n, err := sw.home.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n, n
+	}
+	if old := sw.links[cfg.NodeID]; old != nil { // a restart: the old process is gone
+		old.Close()
+		waitUntil(t, func() bool { return !linkedNode(sw.home, cfg.NodeID) }, "old link gone")
+	}
+	a, b := net.Pipe()
+	fo := frame.Options{Ping: 100 * time.Millisecond}
+	go sw.home.ServeConn(context.Background(), a, cfg.NodeID+"-host", fo)
+	r, err := sshlink.Dial(context.Background(), b, cfg.NodeID, "test", filepath.Join(cfg.StateDir, "chunks"), fo, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sw.links[cfg.NodeID] = r
+	t.Cleanup(func() { r.Close() })
+	return r, r
+}
+
+// nfsOnly skips a test that builds a node on the share itself, to inject
+// faults into the share's files: in an ssh swarm no node does.
+func nfsOnly(t *testing.T) {
+	t.Helper()
+	if linkTest {
+		t.Skip("injects faults into the share's files; NFS only")
+	}
+}
+
+func linkedNode(h *sshlink.Home, node string) bool {
+	for _, l := range h.Links() {
+		if l.Node == node && l.State == "connected" {
+			return true
+		}
+	}
+	return false
 }
 
 func node(t *testing.T, share, id string) (*Engine, string) {
