@@ -219,7 +219,7 @@ directory without one), and opens the TUI with all of them.
   hosts it passes through this host's memory, never its disk.
 - **A dropped link** is started again (after 1 s, doubling up to 1 min);
   transfers wait for it for up to 3 min, after that the node is detached
-  and `catchup` sends the rest. `nodes` and the TUI node list show each
+  and `catchup` sends the rest (also to a target whose copy failed). `nodes` and the TUI node list show each
   link's state.
 - **Quitting** the home node stops the others: each leaves the swarm.
 - **Runtime files:** the home node keeps the swarm's records in
@@ -364,8 +364,8 @@ Measured performance is in `benchmarks.md`.
 - Ctrl-C on `cp` or `sync` only detaches the terminal; the job keeps
   running in the nodes.
 - `cancel ID` stops a job everywhere and cleans up staging.
-- `catchup ID` re-sends a partial fan-out job to targets that were
-  detached.
+- `catchup ID` re-sends a job to its targets that were detached or
+  failed.
 - Restarting a node is safe: its jobs resume from the state on the share.
 - To remove fkbr, stop it and delete the binary and its directory on the
   share.

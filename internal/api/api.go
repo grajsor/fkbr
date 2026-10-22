@@ -336,7 +336,7 @@ type Job struct {
 	// TotalChunks is set once the source has produced every chunk.
 	TotalChunks int  `json:"total_chunks,omitempty"`
 	Cancelled   bool `json:"cancelled"`
-	// CatchUpOf is the job this one re-sends to detached targets.
+	// CatchUpOf is the job this one re-sends to targets that missed it.
 	CatchUpOf    string      `json:"catch_up_of,omitempty"`
 	Detached     []Detached  `json:"detached,omitempty"`
 	State        JobState    `json:"state"`
@@ -362,8 +362,9 @@ type JobService interface {
 	Jobs(ctx context.Context) ([]Job, error)
 	// Cancel asks every participant to stop; it returns before they do.
 	Cancel(ctx context.Context, id string) error
-	// CatchUp submits a new job re-sending a job's data to its detached
-	// targets that are online now, and returns the new job's ID.
+	// CatchUp submits a new job re-sending a job's data to its targets
+	// that missed it (detached or failed) and are online now, and returns
+	// the new job's ID.
 	CatchUp(ctx context.Context, id string) (string, error)
 }
 

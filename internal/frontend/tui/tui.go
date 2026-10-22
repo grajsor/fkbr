@@ -1061,6 +1061,11 @@ func jobDetails(j *api.Job) string {
 	for _, d := range j.Detached {
 		fmt.Fprintf(&b, "\ndetached %s after %d chunks: %s  (u = catch up)", d.Node, d.Chunks, safetext.Clean(d.Reason))
 	}
+	for _, p := range j.Participants {
+		if p.Role == api.RoleTarget && p.State == api.JobFailed && !j.IsDetached(p.Node) {
+			fmt.Fprintf(&b, "\nfailed %s  (u = send again)", p.Node)
+		}
+	}
 	return b.String()
 }
 

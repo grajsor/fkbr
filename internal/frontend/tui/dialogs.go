@@ -490,7 +490,7 @@ JOBS (F9)
   ↑ ↓            choose a job
   Enter          details: time taken, progress, ETA, every node, notes
   c              cancel
-  u              catch up nodes that were offline
+  u              send again to targets that were offline or failed
   Esc            back
 
 `) + jobs + `

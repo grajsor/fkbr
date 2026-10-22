@@ -272,9 +272,9 @@ installed. A job that finished for some targets but detached others ends
 `partial`.
 
 **Catch-up.** `CatchUp(job)` (`fkbr catchup JOB`) submits a new job with
-the same request whose targets are the detached nodes that are online
-now. It records `catch_up_of`. It re-sends everything; a `sync` to the
-same targets copies only what differs.
+the same request whose targets are the detached and the failed targets
+that are online now. It records `catch_up_of`. It re-sends everything; a
+`sync` to the same targets copies only what differs.
 
 **Write policy.** `accept_writes_from` (node IDs or `@role`) lists who may
 initiate writes into a node; empty means anyone, and a node may always

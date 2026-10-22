@@ -167,7 +167,8 @@ Every runtime use of the name comes from `internal/product`.
 - Fan-out: chunks staged once (job_quota 1 GiB window), deleted when every
   *active* target acked. A target offline for `offline_after` (30 s) or
   without progress for `detach_after` (10 min) is detached while others
-  remain; detached targets install nothing and `catchup` re-sends. The
+  remain; detached targets install nothing and `catchup` re-sends (to
+  failed targets too). The
   *last* target is detached only when offline for `detach_after`; a
   source with no active target is done.
 - Cleanup: handled requests are deleted at once. Finished jobs, plans and

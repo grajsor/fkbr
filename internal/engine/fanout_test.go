@@ -522,3 +522,40 @@ func TestDetachOfflineNamedTargets(t *testing.T) {
 		t.Fatalf("@dest outside the TUI: %v", err)
 	}
 }
+
+// A target that failed (a link down for longer than transfers wait, say)
+// is caught up like a detached one: catchup re-sends the job to it.
+func TestCatchUpFailedTarget(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	c1 := nodeCfg(t, share, "s1")
+	s1 := build(t, c1)
+	makeTree(t, mroot, 5, 100<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	ctx := context.Background()
+	id, err := master.Submit(ctx, api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data", DstDir: "g"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, master, id, 20*time.Second); j.State != api.JobDone {
+		t.Fatalf("state %s", j.State)
+	}
+	if _, err := master.CatchUp(ctx, id); err == nil {
+		t.Fatal("catch-up of a job every target got")
+	}
+	// As if s1 had failed: its status says so, and nothing arrived.
+	if err := s1.st.PutStatus(ctx, id, &api.JobStatus{Node: "s1", Role: api.RoleTarget, State: api.JobFailed, Error: "chunk 6: ssh link down"}); err != nil {
+		t.Fatal(err)
+	}
+	os.RemoveAll(filepath.Join(c1.Roots[0].Path, "g"))
+	cid, err := master.CatchUp(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cj := waitJob(t, master, cid, 20*time.Second)
+	if cj.State != api.JobDone || cj.CatchUpOf != id || strings.Join(cj.Request.DstNodes, ",") != "s1" {
+		t.Fatalf("catch-up: %s %+v", cj.State, cj)
+	}
+	sameTree(t, filepath.Join(mroot, "tree"), filepath.Join(c1.Roots[0].Path, "g", "tree"))
+}

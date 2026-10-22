@@ -205,14 +205,17 @@ func expandTargets(byID map[string]api.Node, dsts []string, src string, detachOf
 	return online, offline, nil
 }
 
-// CatchUp re-sends a job to its detached targets that are online now.
+// CatchUp re-sends a job to its targets that missed it and are online
+// now: detached ones, and ones that failed (a link down for longer than
+// transfers wait for it, say).
 func (e *Engine) CatchUp(ctx context.Context, id string) (string, error) {
 	j, err := e.st.GetJob(ctx, id)
 	if err != nil {
 		return "", err
 	}
-	if len(j.Detached) == 0 {
-		return "", fmt.Errorf("job %s has no detached targets", id)
+	missed := missedTargets(j)
+	if len(missed) == 0 {
+		return "", fmt.Errorf("job %s has no detached or failed targets", id)
 	}
 	nodes, err := e.tr.Nodes(ctx)
 	if err != nil {
@@ -225,17 +228,32 @@ func (e *Engine) CatchUp(ctx context.Context, id string) (string, error) {
 	req := j.Request
 	req.DstNodes = nil
 	var down []string
-	for _, d := range j.Detached {
-		if online[d.Node] {
-			req.DstNodes = append(req.DstNodes, d.Node)
+	for _, n := range missed {
+		if online[n] {
+			req.DstNodes = append(req.DstNodes, n)
 		} else {
-			down = append(down, d.Node)
+			down = append(down, n)
 		}
 	}
 	if len(req.DstNodes) == 0 {
-		return "", fmt.Errorf("%w: detached targets still offline: %s", api.ErrNodeOffline, strings.Join(down, ", "))
+		return "", fmt.Errorf("%w: targets still offline: %s", api.ErrNodeOffline, strings.Join(down, ", "))
 	}
 	return e.submit(ctx, req, id)
+}
+
+// missedTargets are a job's targets that did not get it: detached, or
+// failed.
+func missedTargets(j *api.Job) []string {
+	var out []string
+	for _, d := range j.Detached {
+		out = append(out, d.Node)
+	}
+	for _, p := range j.Participants {
+		if p.Role == api.RoleTarget && p.State == api.JobFailed && !slices.Contains(out, p.Node) {
+			out = append(out, p.Node)
+		}
+	}
+	return out
 }
 
 func onlineNode(byID map[string]api.Node, id string) (api.Node, error) {

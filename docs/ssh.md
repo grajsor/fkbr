@@ -102,7 +102,8 @@ and acks).
   backoff). This holds also for a chunk relayed between two remote
   nodes when the source's link drops: the home node passes the target
   the cause, not a bare reset. A node whose link stays down goes offline
-  after `offline_after` and is detached, as any offline node.
+  after `offline_after` and is detached, as any offline node; a target
+  whose job failed anyway gets it again with `catchup`.
 - A restarted node asks its source for the first chunk it has not acked;
   the source builds chunks the same way every time and sends from there.
   Nothing partial is ever installed.

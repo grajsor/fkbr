@@ -60,7 +60,7 @@ The status line shows which machine it scans and in which folder. A folder that 
 `fkbr /mnt/nfs/xfer sync -n -mirror /src hostb:/dst` lists it (add `-v` for everything). In the TUI, F4 shows the first ones; press `l` for all.
 
 **A machine was offline during a copy?**
-It gets nothing; the others get everything. Catch it up later: F9, pick the job, press `u` (or `./fkbr /mnt/nfs/somedir catchup JOB`). A sync works too.
+It gets nothing; the others get everything. Catch it up later: F9, pick the job, press `u` (or `./fkbr /mnt/nfs/somedir catchup JOB`). A sync works too. The same works for a machine whose copy failed, say when its ssh link was down too long.
 
 **Something broke halfway?**
 Nothing half-copied ever appears: files are put in place only when all of them have arrived and been checked. Restart fkbr and the copy goes on where it stopped.
