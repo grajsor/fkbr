@@ -54,6 +54,13 @@ func TestRemoteCommandQuoting(t *testing.T) {
 	if got := run("pwd"); got != dir+"\n" {
 		t.Errorf("directory: %q", got)
 	}
+	// ~/ is the remote user's home, also when no shell expanded it here.
+	home := t.TempDir()
+	os.WriteFile(filepath.Join(home, "it's"), []byte("#!/bin/sh\necho home bin\n"), 0o755)
+	t.Setenv("HOME", home)
+	if got := run("~/it's"); got != "home bin\n" {
+		t.Errorf("~/ bin: %q", got)
+	}
 }
 
 // fakeSSH runs the remote command here, after ssh's options, and prints a

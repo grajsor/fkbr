@@ -212,7 +212,8 @@ directory without one), and opens the TUI with all of them.
   `known_hosts` apply as for any ssh. `fkbr ssh:... check` tries each
   host and shows its fkbr version.
 - **The other hosts** need the fkbr binary, on their `PATH` or named with
-  `-ssh-bin /path/fkbr`. Nothing else: no daemon, no open port.
+  `-ssh-bin /path/fkbr` (`~/` is their home). Nothing else: no daemon,
+  no open port.
 - **Names:** a host's node is named after its short hostname, as always.
 - **Data** goes straight from source to target. Between two of the other
   hosts it passes through this host's memory, never its disk.

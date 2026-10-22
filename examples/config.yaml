@@ -12,6 +12,12 @@ node_id: hosta
 # The shared NFS directory. Must be the same export on every node.
 nfs_root: /mnt/transfer/fkbr
 
+# Or, instead of nfs_root (not both): hosts reached with ssh, linked from
+# this node (docs/ssh.md). host or host:/dir, as ssh takes the host.
+# ssh: [web01:/srv/www, db01]
+# fkbr on those hosts (default: fkbr on their PATH); ~/ is their home.
+# ssh_bin: ~/fkbr/fkbr
+
 # Local runtime dir (never NFS) for the worker lock and socket; removed on
 # clean exit. Default: /tmp/fkbr-<uid>-<node> (kept fresh while running, so
 # /tmp cleaners leave it alone; not /run/user, which logout deletes). It

@@ -89,7 +89,11 @@ func sshArgs(o *SessionOptions, h Host, remote string) []string {
 
 // remoteCommand is what the remote shell runs.
 func remoteCommand(o *SessionOptions, h Host, words ...string) string {
-	cmd := "exec " + shellQuote(o.Bin)
+	bin := shellQuote(o.Bin)
+	if rest, ok := strings.CutPrefix(o.Bin, "~/"); ok { // the remote home, also from fkbr.yaml
+		bin = `"$HOME"/` + shellQuote(rest)
+	}
+	cmd := "exec " + bin
 	for _, w := range words {
 		cmd += " " + shellQuote(w)
 	}
