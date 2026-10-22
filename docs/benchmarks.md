@@ -3,13 +3,13 @@
 ## fkbr, tar, rsync and borg through the share (2026-10-20, protocol 2)
 
 **Setup**
-- **Share:** Synology NAS over NFSv3 on 1 GbE (`actimeo=1800`, hard).
+- **Share:** a NAS over NFSv3 on 1 GbE (`actimeo=1800`, hard).
   Raw speed per client: write about 115 MB/s, read 70–107 MB/s; all
   hosts together get about 100 MB/s.
 - **Nodes:** four x86-64 VMs, 2 vCPU and 1.7 GiB RAM each (CentOS 7.9,
   Rocky 8.10, 9.8 and 10.2), on local XFS.
-- **Runs:** source rhel9. "1 target" is rhel10; "3 targets" are rhel10,
-  rhel8 and rhel7. Page caches dropped on every host before each run.
+- **Runs:** source the Rocky 9 VM. "1 target" is Rocky 10; "3 targets"
+  are Rocky 10, Rocky 8 and CentOS 7. Page caches dropped on every host before each run.
   Times are from the start until every target has everything; every copy
   was then checked with sha256 against the source. The 1 GiB and 20,000
   file cases ran twice (the mean is shown), the larger ones once.
@@ -32,7 +32,7 @@
   once.
 - **borg 1.4.5:** `borg create` into a repository on the share (no
   encryption, default lz4), then `borg extract` on the target. Its static
-  binary needs glibc 2.31, so only rhel9 and rhel10 can run it: one
+  binary needs glibc 2.31, so only Rocky 9 and 10 can run it: one
   target only.
 
 **Results**
@@ -118,8 +118,8 @@ the share, and the planner merges them in one pass.
 `-z` compresses chunks with zstd (fastest level, 1 MiB window, up to 2
 threads). gzip and lz4 were measured too and dropped.
 
-**On the lab:** `cp` from rhel9-test to rhel7-test and rhel8-test over the
-Synology NFSv3 share (2 runs each).
+**On the lab:** `cp` from the Rocky 9 VM to the CentOS 7 and Rocky 8 VMs
+over the NFSv3 share (2 runs each).
 
 | Data | none | gzip | lz4 | zstd |
 |---|---|---|---|---|

@@ -154,7 +154,7 @@ A second, 90-minute run on the fixed build (da7f98f) checked the 17 again
 | A source back from a NAS stall detached a target that had already said done; the job ended partial | A done target counts as finished, whatever its acks | `TestDoneTargetNotDetached` |
 | A target restarted while it was being detached kept the job's staging for good | Swept at every prune | `TestStaleStagingSwept` |
 | A job whose source was forgotten stayed `running` though every target was done | Shown done (or failed) | `TestSourceGoneAfterTargetsFinished` |
-| A registry entry damaged between a worker's Register and its first heartbeat stopped the worker (found by `-race` on rhel10) | Registers again, as the heartbeat loop does | `TestEntryLostAtStart` |
+| A registry entry damaged between a worker's Register and its first heartbeat stopped the worker (found by `-race`) | Registers again, as the heartbeat loop does | `TestEntryLostAtStart` |
 | A copy of a source path that does not exist ended `done` with one error (seen in the regression pass; asked for) | Refused at submit on the source, or the source fails the job before sending | `TestMissingSourcePathFails` |
 
 ## 9. Security audit (2026-10-22)
@@ -176,19 +176,19 @@ Each test fails with its fix taken out.
 
 ## How to run the lab tests
 
-- **Torture** (`~/fkbr-lab/torture`): rounds of random copies and syncs
+- **Torture** (`torture/`): rounds of random copies and syncs
   between five nodes, with kill -9, SIGSTOP and restarts, verified by
   sha256 manifests. See its README.
-- **Weird** (`~/fkbr-lab/weird`): `weird.py [test...]` runs odd cases with
+- **Weird** (`weird/`): `weird.py [test...]` runs odd cases with
   several nodes on one machine; `nfscut.py target|source` cuts a lab node
   off the NAS mid-transfer; `fuzz_tui.py SECONDS SEED` (with pyte) throws
   random keys and resizes at the TUI.
-- **Funky** (`~/fkbr-lab/funky`): `funky.py [test...]` (with pyte; sudo
+- **Funky** (`funky/`): `funky.py [test...]` (with pyte; sudo
   for the FAT image and hostnames): how fkbr is started and where, hostile
   names and peers, odd target filesystems and limits.
-- **Compare** (`~/fkbr-lab/compare`): `compare.py setup | setup_big |
+- **Compare** (`compare/`): `compare.py setup | setup_big |
   run N | runbig | clean` times fkbr, tar, rsync and borg through the
   share and verifies every copy; results go to `docs/benchmarks.md`.
-- **Explore** (`~/fkbr-lab/explore`): `explore.py quota | quota2 |
+- **Explore** (`explore/`): `explore.py quota | quota2 |
   concurrent | same | dup | queued | clean`, each a focused experiment;
   results append to `results.log`.

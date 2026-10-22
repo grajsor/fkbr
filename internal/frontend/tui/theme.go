@@ -10,7 +10,7 @@ import (
 	"github.com/muesli/termenv"
 )
 
-// The palette follows forsakringskassan.se: its dark header green fills the
+// The palette is built around a dark green, which fills the
 // panels the way blue did in Norton Commander. Colours are named by role,
 // since the 16-colour fallback is a different scheme: that palette has no
 // dark green (the terminal's "green" is often glaring), so there the

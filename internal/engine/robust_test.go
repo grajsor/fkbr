@@ -1,7 +1,7 @@
 package engine
 
 // Regression tests for what the 2026-10-21 lab robust-test found
-// (~/fkbr-lab/robust/runs/2026-10-21/findings.md, F1..F17).
+// (findings F1..F17 of that run).
 
 import (
 	"context"

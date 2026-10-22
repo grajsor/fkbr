@@ -13,7 +13,7 @@ import (
 
 func TestParseDefaults(t *testing.T) {
 	c, err := Parse([]byte(`
-node_id: rhel9-a
+node_id: host1
 nfs_root: /mnt/share/fkbr
 state_dir: /srv/fkbr-state
 roots:
