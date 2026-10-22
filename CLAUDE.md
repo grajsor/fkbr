@@ -224,6 +224,11 @@ package tests; docs/testplan.md lists them.
   (`api.ErrNotFound` at Submit, `missingPaths` in send.go).
 - A node whose shared dir is deleted/moved/replaced stops and says so
   (`localfs.CheckRoots` every 5 s).
+- **Over ssh the home node's store is a trust boundary:** linked hosts
+  call it with names off the wire. Every store method checks each name
+  it puts in a path (`ValidID`, roles source/target) itself;
+  `TestRemoteCallsStayInTheShare` sends hostile names in every field of
+  every call. A new call or field must pass it.
 
 ### Excludes, moves, plan listings
 
