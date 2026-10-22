@@ -173,6 +173,9 @@ func open(ctx context.Context, s *frame.Session, method string, args any, body i
 	}
 	if body != nil {
 		if _, err := io.Copy(st, body); err != nil {
+			// Reset first: Close alone would send the end of the body,
+			// and the other side would take what came as all of it.
+			st.Reset(err)
 			c.Close()
 			return nil, c.ctxErr(ctx, err)
 		}

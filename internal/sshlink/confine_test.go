@@ -31,44 +31,13 @@ func TestRemoteCallsStayInTheShare(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(victim, "keep"), []byte("keep"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	h := NewHome(dir, "home", store.Options{}, nil)
-	if _, err := h.Open(); err != nil {
-		t.Fatal(err)
-	}
-	mb, err := store.Open(dir, "web01", h.opts)
-	if err != nil {
-		t.Fatal(err)
-	}
+	h, mb, cli := linked(t, dir)
 	ctx := context.Background()
-	if err := mb.Register(ctx, api.NodeInfo{ID: "web01"}); err != nil {
-		t.Fatal(err)
-	}
 	// A real job, so calls on it get past "no such job" to their writes.
 	if err := mb.CreateJob(ctx, &api.Job{ID: "j1", Request: api.TransferRequest{SrcNode: "web01", DstNodes: []string{"home"}}}); err != nil {
 		t.Fatal(err)
 	}
-	p := &peer{node: "web01", host: "web01", mb: mb}
-
-	c1, c2 := net.Pipe() // unbuffered: both ends start together
-	var srv *frame.Session
-	srvErr := make(chan error, 1)
-	go func() {
-		var err error
-		srv, err = frame.Server(c2, frame.Options{})
-		srvErr <- err
-	}()
-	cli, err := frame.Client(c1, frame.Options{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := <-srvErr; err != nil {
-		t.Fatal(err)
-	}
-	defer cli.Close()
-	defer srv.Close()
-	sctx, stop := context.WithCancel(ctx)
-	defer stop()
-	go serve(sctx, srv, h.handlers(p), nil)
+	_ = h
 
 	msg := func(id, from, to string) transport.Message { return transport.Message{ID: id, From: from, To: to} }
 	job := func(id, src, dst string) api.Job {
@@ -128,4 +97,59 @@ func TestRemoteCallsStayInTheShare(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// linked serves a home node on dir to a linked node web01 over an
+// in-memory link; it returns web01's store and its end of the link.
+func linked(t *testing.T, dir string) (*Home, *store.Dir, *frame.Session) {
+	t.Helper()
+	h := NewHome(dir, "home", store.Options{}, nil)
+	if _, err := h.Open(); err != nil {
+		t.Fatal(err)
+	}
+	mb, err := store.Open(dir, "web01", h.opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mb.Register(context.Background(), api.NodeInfo{ID: "web01"}); err != nil {
+		t.Fatal(err)
+	}
+	p := &peer{node: "web01", host: "web01", mb: mb}
+	c1, c2 := net.Pipe() // unbuffered: both ends start together
+	var srv *frame.Session
+	srvErr := make(chan error, 1)
+	go func() {
+		var err error
+		srv, err = frame.Server(c2, frame.Options{})
+		srvErr <- err
+	}()
+	cli, err := frame.Client(c1, frame.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := <-srvErr; err != nil {
+		t.Fatal(err)
+	}
+	ctx, stop := context.WithCancel(context.Background())
+	t.Cleanup(func() { stop(); cli.Close(); srv.Close() })
+	go serve(ctx, srv, h.handlers(p), nil)
+	return h, mb, cli
+}
+
+// A blob upload that fails halfway is not published, cut short.
+func TestAbortedBlobNotCommitted(t *testing.T) {
+	dir := t.TempDir()
+	_, mb, cli := linked(t, dir)
+	r := &Remote{sess: cli}
+	w, err := r.CreateBlob(context.Background(), "plans/p1/copy-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("half of it"))
+	w.Abort()
+	time.Sleep(200 * time.Millisecond) // the home node handles the end
+	if rc, err := mb.OpenBlob(context.Background(), "plans/p1/copy-x"); err == nil {
+		rc.Close()
+		t.Error("an aborted blob was published")
+	}
 }
