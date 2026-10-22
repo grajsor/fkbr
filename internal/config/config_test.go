@@ -150,3 +150,9 @@ func TestShareAndRoots(t *testing.T) {
 		t.Fatalf("unrelated root: hide %q, %v", c.Roots[0].Hide, err)
 	}
 }
+
+func TestNFSAndSSHBothRefused(t *testing.T) {
+	if _, err := Parse([]byte("nfs_root: /mnt/nfs/xfer\nssh: [web01]\n")); err == nil {
+		t.Error("a config with nfs_root and ssh was accepted")
+	}
+}

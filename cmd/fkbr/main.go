@@ -200,19 +200,8 @@ func run() error {
 	}
 	// Arguments and flags override the file; then fall back to defaults:
 	// node named after the host, sharing the current directory.
-	switch {
-	case shareArg != "":
-		cfg.NFSRoot = shareArg
-	case *share != "":
-		cfg.NFSRoot = *share
-	case cfg.NFSRoot == "":
-		cfg.NFSRoot = os.Getenv(product.EnvPrefix + "SHARE")
-	}
-	if s, ok := strings.CutPrefix(cfg.NFSRoot, "ssh:"); ok {
-		if _, err := sshlink.ParseHosts(s); err != nil {
-			return err
-		}
-		cfg.SSH, cfg.NFSRoot = []string{s}, ""
+	if err := pickShare(cfg, shareArg, *share, os.Getenv(product.EnvPrefix+"SHARE")); err != nil {
+		return err
 	}
 	if *sshBin != "" {
 		cfg.SSHBin = *sshBin
@@ -433,6 +422,34 @@ func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger, leave 
 		return nil, err
 	}
 	return startNodeWith(ctx, cfg, log, leave, c)
+}
+
+// pickShare sets cfg's share from the SHARE argument or -share, else
+// keeps the config file's, else takes $FKBR_SHARE. A share given here
+// replaces the file's, an ssh: list included: an NFS share taken for an
+// ssh swarm's records would be made private (0700).
+func pickShare(cfg *config.Config, arg, flag, env string) error {
+	given := true
+	switch {
+	case arg != "":
+		cfg.NFSRoot = arg
+	case flag != "":
+		cfg.NFSRoot = flag
+	default:
+		given = false
+		if cfg.NFSRoot == "" && len(cfg.SSH) == 0 {
+			cfg.NFSRoot = env
+		}
+	}
+	if s, ok := strings.CutPrefix(cfg.NFSRoot, "ssh:"); ok {
+		if _, err := sshlink.ParseHosts(s); err != nil {
+			return err
+		}
+		cfg.SSH, cfg.NFSRoot = []string{s}, ""
+	} else if given {
+		cfg.SSH = nil
+	}
+	return nil
 }
 
 // startNodeWith is startNode for a client built already.

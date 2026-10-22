@@ -205,6 +205,9 @@ func decode(data []byte) (*Config, error) {
 	if err := dec.Decode(&c); err != nil && err != io.EOF {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	if c.NFSRoot != "" && len(c.SSH) > 0 {
+		return nil, fmt.Errorf("config: nfs_root and ssh both set: a node shares either an NFS directory or links hosts over ssh")
+	}
 	return &c, nil
 }
 
