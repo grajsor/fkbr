@@ -101,6 +101,7 @@ func (f *faultStore) OpenChunk(ctx context.Context, src, id string, seq int) (io
 
 func buildFaulty(t *testing.T, cfg *config.Config) (*Engine, *faultStore) {
 	t.Helper()
+	nfsOnly(t)
 	fsys, err := localfs.Open(cfg.Roots)
 	if err != nil {
 		t.Fatal(err)
