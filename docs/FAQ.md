@@ -6,6 +6,9 @@ Copy and sync files between machines that share an NFS mount. One file, nothing 
 **Which file?**
 `fkbr-linux-amd64` for x86-64, `fkbr-linux-arm64` for ARM. Works on almost any Linux, old or new.
 
+**Where do I put it?**
+On each machine's own disk, not on the share: anyone who can write to the share could swap it. Keep `fkbr.yaml` next to it.
+
 **How do I start?**
 On every machine:
 ```

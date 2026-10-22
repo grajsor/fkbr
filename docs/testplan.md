@@ -170,6 +170,7 @@ that: from the share onto a node's host, and from another local user.
 | Node names and IDs in requests and job records were not checked, so a forged `../` reached outside fkbr's folder on the share (reply files, ack folders) | Checked when read; bad job records are pruned | `TestForgedNamesStayOnTheShare` |
 | A sync scan probed (wrote a file in) the folder it was asked for before checking the path: `../x`, or a symlink out of the root, led it elsewhere | Path checked first; probes only in a folder inside the root | `TestScanProbeStaysInRoot` |
 | A huge file on the share (a request, job record or status) was read whole and could make a node run out of memory | Files over 64 MiB are refused | `TestShareReadsAreCapped` |
+| A binary or `fkbr.yaml` kept on the share could be changed by anyone who can write there | Docs: keep both on local disk (operations.md, FAQ) | – |
 
 Each test fails with its fix taken out.
 

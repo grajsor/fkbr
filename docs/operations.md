@@ -29,6 +29,11 @@ with tighter permissions). Shares made by versions before this used
 `fkbr SHARE check` lists directories that are still closed and who owns
 them.
 
+**Keep the binary and `fkbr.yaml` on local disk**, not on the share.
+fkbr reads `fkbr.yaml` from beside the binary when it starts, so anyone who
+can write where they are could change either one and have it run as you
+on every host that starts it.
+
 The runtime dir is deliberately not `/run/user/<uid>`: logind deletes that
 when your last session logs out, while a node may keep running in `tmux`
 or under `nohup`. In `/tmp`, the node touches its lock and socket every 10
