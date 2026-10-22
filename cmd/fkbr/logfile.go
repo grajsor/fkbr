@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"sync"
+	"syscall"
 )
 
 // logFile is an append-only log that keeps at most two files of limit
@@ -29,7 +30,7 @@ func openLogFile(path string, limit int64) (*logFile, error) {
 }
 
 func (l *logFile) open() error {
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"path/filepath"
 	"slices"
@@ -58,14 +57,17 @@ func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(i
 		return nil, err
 	}
 	defer w.Abort()
+	rel, err := localfs.CleanRel(req.Path)
+	if err != nil {
+		return nil, err
+	}
 	h := inventory.Header{Node: e.Self(), Root: req.Root, Path: req.Path}
 	for _, r := range e.fs.Roots() {
 		if r.ID == req.Root {
 			// The base, not the root: a USB stick may be mounted below it.
-			base := filepath.Join(r.Path, filepath.FromSlash(req.Path))
-			if _, err := os.Stat(base); err != nil {
-				base = r.Path
-			}
+			// The probes below write there, so it must really be inside
+			// the root, not reached through a symlink.
+			base := insideRoot(r.Path, rel)
 			h.MtimeStep, h.NoModes = localfs.Limits(base)
 			if req.Target && r.Writable {
 				h.MtimeMin, h.MtimeMax = localfs.MtimeRange(base)
@@ -119,6 +121,23 @@ func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(i
 		}
 	}
 	return st, w.Commit(nil)
+}
+
+// insideRoot is root/rel with symlinks resolved, or root itself when that
+// does not exist or lies outside root.
+func insideRoot(root, rel string) string {
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return root
+	}
+	p, err := filepath.EvalSymlinks(filepath.Join(root, filepath.FromSlash(rel)))
+	if err != nil {
+		return root
+	}
+	if r, err := filepath.Rel(realRoot, p); err != nil || r == ".." || strings.HasPrefix(r, "../") {
+		return root
+	}
+	return p
 }
 
 // readHolders reads a scan's holders list (none if it has none).

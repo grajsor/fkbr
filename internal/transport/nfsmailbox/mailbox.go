@@ -164,7 +164,7 @@ func Open(root, self string, opts Options) (*Mailbox, error) {
 func (m *Mailbox) checkProtocol() error {
 	p := filepath.Join(m.root, "protocol-version")
 	want := strconv.Itoa(api.ProtocolVersion)
-	data, err := os.ReadFile(p)
+	data, err := readFile(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		if err := m.write(p, []byte(want+"\n")); err != nil {
 			return fmt.Errorf("nfsmailbox: %w", err)
@@ -246,7 +246,7 @@ func (m *Mailbox) Heartbeat(_ context.Context, token string) (string, error) {
 	p := m.path("nodes", m.self, "heartbeat")
 	var other string
 	m.freshFile(p)
-	if b, err := os.ReadFile(p); err == nil {
+	if b, err := readFile(p); err == nil {
 		// Older versions wrote a timestamp; only tokens count.
 		if t := strings.TrimSpace(string(b)); t != token && strings.HasPrefix(t, "w1 ") {
 			other = t
@@ -269,7 +269,7 @@ func (m *Mailbox) Heartbeat(_ context.Context, token string) (string, error) {
 	}
 	if err == nil {
 		var info api.NodeInfo
-		if data, err := os.ReadFile(m.path("nodes", m.self, "info.json")); err == nil && (json.Unmarshal(data, &info) != nil || info.ID != m.self) {
+		if data, err := readFile(m.path("nodes", m.self, "info.json")); err == nil && (json.Unmarshal(data, &info) != nil || info.ID != m.self) {
 			return other, transport.ErrNotRegistered
 		}
 	}
@@ -336,7 +336,7 @@ func (m *Mailbox) Nodes(_ context.Context) ([]api.Node, error) {
 		m.fresh(m.path("nodes", de.Name()))
 		// An entry that cannot be read is left out, so one damaged or
 		// half-created entry does not make every node fail.
-		data, err := os.ReadFile(m.path("nodes", de.Name(), "info.json"))
+		data, err := readFile(m.path("nodes", de.Name(), "info.json"))
 		if err != nil {
 			continue // never registered, or unreadable
 		}
@@ -496,7 +496,7 @@ func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
 	var out []*transport.Message
 	for _, n := range names {
 		p := m.path(m.inbox(m.self, "cur"), n)
-		data, err := os.ReadFile(p)
+		data, err := readFile(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			delete(m.claimed, n)
 			continue
@@ -511,7 +511,10 @@ func (m *Mailbox) Fetch(_ context.Context) ([]*transport.Message, error) {
 		}
 		delete(m.claimed, n)
 		var msg transport.Message
-		if err := json.Unmarshal(data, &msg); err != nil || msg.ID+".json" != n {
+		// From and ID name the reply folder: a forged "../" in them would
+		// reach outside the share's folder (security audit 2026-10-22).
+		if err := json.Unmarshal(data, &msg); err != nil || msg.ID+".json" != n ||
+			!config.ValidID(msg.ID) || !config.ValidID(msg.From) || !config.ValidID(msg.To) {
 			// Unreadable or renamed: park it where an operator can look.
 			os.Rename(p, m.path(m.inbox(m.self, "failed"), n))
 			continue
@@ -567,6 +570,9 @@ func listJSON(dir string) ([]string, error) {
 }
 
 func (m *Mailbox) Reply(_ context.Context, req *transport.Message, r *transport.Reply) error {
+	if !config.ValidID(req.From) || !config.ValidID(req.ID) {
+		return fmt.Errorf("nfsmailbox: no reply to %q request %q: invalid name", req.From, req.ID)
+	}
 	dir := m.path("reply", req.From, req.ID)
 	m.freshFile(dir)
 	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {

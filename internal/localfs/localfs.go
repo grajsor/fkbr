@@ -355,7 +355,11 @@ func ProbeDACOverride(dir string) bool {
 	if os.Geteuid() == 0 {
 		return true
 	}
-	defer probeDir(dir)()
+	done, ok := probeDir(dir)
+	defer done()
+	if !ok {
+		return false
+	}
 	d, err := os.MkdirTemp(dir, ".dac-probe-*")
 	if err != nil {
 		return false
@@ -381,7 +385,11 @@ func ProbeChown(dir string) bool {
 	if os.Geteuid() == 0 {
 		return true
 	}
-	defer probeDir(dir)()
+	done, ok := probeDir(dir)
+	defer done()
+	if !ok {
+		return false
+	}
 	f, err := os.CreateTemp(dir, ".chown-probe-*")
 	if err != nil {
 		return false
@@ -395,15 +403,15 @@ func ProbeChown(dir string) bool {
 
 // probeDir makes dir for a probe; the function it returns removes it again
 // if the probe created it (a CLI command that runs no node leaves no state
-// dir behind).
-func probeDir(dir string) func() {
-	if _, err := os.Stat(dir); err == nil {
-		return func() {}
+// dir behind). ok is false if dir is not ours alone (see PrivateDir).
+func probeDir(dir string) (done func(), ok bool) {
+	if _, err := os.Lstat(dir); err == nil {
+		return func() {}, CheckPrivateDir(dir) == nil
 	}
-	if os.MkdirAll(dir, 0o700) != nil {
-		return func() {}
+	if PrivateDir(dir) != nil {
+		return func() {}, false
 	}
-	return func() { os.Remove(dir) }
+	return func() { os.Remove(dir) }, true
 }
 
 // Limits says what the filesystem holding path cannot store: mtimes only

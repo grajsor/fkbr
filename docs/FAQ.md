@@ -102,6 +102,9 @@ Start one with `-node othername`.
 **"already running on this host"?**
 Another user (or `sudo`) already runs fkbr here under that name. Use that one, or start yours with `-node othername`. Started right after stopping the old one? Then it waits until the old one has stopped.
 
+**"belongs to uid N, not to this user"?**
+Someone else made fkbr's folder in `/tmp` before you did, so fkbr does not trust it. Ask them, or root, to remove it, or start with `-state /some/dir/of/yours`.
+
 **Two copies into the same folder at once?**
 Safe. Every file arrives whole. If both copies have the same file, you get one of them; which one is not defined.
 

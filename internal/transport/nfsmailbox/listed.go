@@ -58,7 +58,7 @@ func (m *Mailbox) readListed(dir, name string) ([]byte, error) {
 	if !ok {
 		return nil, &fs.PathError{Op: "open", Path: filepath.Join(dir, name), Err: fs.ErrNotExist}
 	}
-	return os.ReadFile(filepath.Join(dir, name))
+	return readFile(filepath.Join(dir, name))
 }
 
 // listed reports whether a fresh listing of dir shows name; a missing dir

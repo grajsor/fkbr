@@ -40,6 +40,26 @@ func validJobID(id string) error {
 	return nil
 }
 
+// checkJobNames refuses a job record whose source or target names could
+// not be node IDs: they become paths on the share (data/<src>/...,
+// acks/<target>), so a forged "../" would reach outside it (security
+// audit 2026-10-22).
+func checkJobNames(id string, j *api.Job) error {
+	if j.ID != id {
+		return fmt.Errorf("job %s: %w: it says it is %q", id, errBadRecord, j.ID)
+	}
+	for _, n := range append([]string{j.Request.SrcNode}, j.Request.DstNodes...) {
+		if !config.ValidID(n) {
+			return fmt.Errorf("job %s: %w: invalid node name %q", id, errBadRecord, n)
+		}
+	}
+	return nil
+}
+
+// errBadRecord: a job record no node could have written. Nobody can run
+// such a job, so pruning removes it once it is old.
+var errBadRecord = errors.New("bad job record")
+
 func chunkName(seq int, ext string) string { return fmt.Sprintf("%08d%s", seq, ext) }
 
 func (m *Mailbox) CreateJob(_ context.Context, job *api.Job) error {
@@ -82,7 +102,7 @@ func (m *Mailbox) GetJob(_ context.Context, id string) (*api.Job, error) {
 	m.fresh(dir)
 	m.fresh(filepath.Join(dir, "status"))
 	m.fresh(filepath.Join(dir, "detached"))
-	data, err := os.ReadFile(filepath.Join(dir, "job.json"))
+	data, err := readFile(filepath.Join(dir, "job.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", api.ErrUnknownJob, id)
 	}
@@ -91,7 +111,10 @@ func (m *Mailbox) GetJob(_ context.Context, id string) (*api.Job, error) {
 	}
 	var job api.Job
 	if err := json.Unmarshal(data, &job); err != nil {
-		return nil, fmt.Errorf("job %s: %w", id, err)
+		return nil, fmt.Errorf("job %s: %w: %w", id, errBadRecord, err)
+	}
+	if err := checkJobNames(id, &job); err != nil {
+		return nil, err
 	}
 	// Markers appear later, so look for them by listing (see listed.go).
 	if b, err := m.readListed(dir, "COMPLETE"); err == nil {
@@ -104,7 +127,7 @@ func (m *Mailbox) GetJob(_ context.Context, id string) (*api.Job, error) {
 	if names, err := listJSON(filepath.Join(dir, "detached")); err == nil {
 		for _, n := range names {
 			var d api.Detached
-			if b, err := os.ReadFile(filepath.Join(dir, "detached", n)); err == nil && json.Unmarshal(b, &d) == nil {
+			if b, err := readFile(filepath.Join(dir, "detached", n)); err == nil && json.Unmarshal(b, &d) == nil {
 				job.Detached = append(job.Detached, d)
 			}
 		}
@@ -114,7 +137,7 @@ func (m *Mailbox) GetJob(_ context.Context, id string) (*api.Job, error) {
 		return nil, err
 	}
 	for _, n := range names {
-		b, err := os.ReadFile(filepath.Join(dir, "status", n))
+		b, err := readFile(filepath.Join(dir, "status", n))
 		if err != nil {
 			continue
 		}
@@ -401,6 +424,10 @@ func (m *Mailbox) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 			continue
 		}
 		j, err := m.GetJob(ctx, de.Name())
+		if errors.Is(err, errBadRecord) {
+			errs = append(errs, removeRacing(dir))
+			continue
+		}
 		if err != nil {
 			continue
 		}

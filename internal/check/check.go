@@ -95,8 +95,8 @@ func (c *checker) roots() {
 const nfsSuperMagic = 0x6969
 
 func (c *checker) stateDir() {
-	if err := os.MkdirAll(c.cfg.StateDir, 0o700); err != nil {
-		c.add(Fail, "state_dir", "%s: %v", c.cfg.StateDir, err)
+	if err := localfs.PrivateDir(c.cfg.StateDir); err != nil {
+		c.add(Fail, "state_dir", "%v", err) // names the path
 		return
 	}
 	var st syscall.Statfs_t

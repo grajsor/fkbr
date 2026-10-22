@@ -29,6 +29,7 @@ import (
 	"fkbr/internal/engine"
 	"fkbr/internal/frontend/cli"
 	"fkbr/internal/frontend/tui"
+	"fkbr/internal/localfs"
 	"fkbr/internal/product"
 	"fkbr/internal/safetext"
 )
@@ -344,6 +345,10 @@ func connect(ctx context.Context, cfg *config.Config, forceLocal bool, log *slog
 // that shares other directories than this command would (started
 // elsewhere, or with other -root/-ro) is used, with a notice saying so.
 func dialNode(ctx context.Context, cfg *config.Config) (*remote.Client, string, error) {
+	// A socket in a directory someone else controls may not be our node.
+	if err := localfs.CheckPrivateDir(filepath.Dir(cfg.Socket)); errors.Is(err, localfs.ErrNotPrivate) {
+		return nil, "", err
+	}
 	c, err := remote.Dial(ctx, cfg.Socket)
 	if err != nil {
 		return nil, "", nil
@@ -400,7 +405,7 @@ func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger, leave 
 	if leave {
 		c.LeaveOnStop()
 	}
-	if err := os.MkdirAll(cfg.StateDir, 0o700); err != nil {
+	if err := localfs.PrivateDir(cfg.StateDir); err != nil {
 		c.Close()
 		return nil, err
 	}
@@ -487,7 +492,7 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, opts tui.O
 	// Log lines would draw over the UI, so the node logs to a file beside
 	// its lock and socket; it stays after exit for looking at problems.
 	log, logPath := slog.New(slog.DiscardHandler), ""
-	if err := os.MkdirAll(cfg.StateDir, 0o700); err == nil {
+	if err := localfs.PrivateDir(cfg.StateDir); err == nil {
 		p := filepath.Join(cfg.StateDir, "node.log")
 		if lf, err := openLogFile(p, 1<<20); err == nil {
 			defer lf.Close()

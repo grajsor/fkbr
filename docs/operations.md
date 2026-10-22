@@ -102,6 +102,9 @@ fkbr /mnt/nfs/xfer
   the command (`fkbr /mnt/nfs/xfer daemon -ro`). `--` ends them. The share
   can also come from `-share` or `$FKBR_SHARE`.
 - **Runtime dir:** `-state DIR` overrides where the lock and socket go.
+  It must belong to the user running fkbr and not be writable by others;
+  fkbr refuses one that isn't (another user could have made the default
+  `/tmp/fkbr-<uid>-<node>` first).
 
 **The TUI is the node.** While a TUI runs, it does all of this node's work:
 - heartbeats

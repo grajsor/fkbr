@@ -640,7 +640,7 @@ type workerLock struct {
 }
 
 func lockWorker(stateDir string, log *slog.Logger) (l *workerLock, waitedFor int, err error) {
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	if err := localfs.PrivateDir(stateDir); err != nil {
 		return nil, 0, err
 	}
 	l = &workerLock{path: filepath.Join(stateDir, "worker.lock"), lastTouch: time.Now()}
@@ -706,7 +706,7 @@ func (l *workerLock) state(s string) {
 // take opens the lock path and flocks it, failing with ErrLockLost if
 // another process holds it.
 func (l *workerLock) take() error {
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR, 0o600)
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return err
 	}

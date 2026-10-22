@@ -157,6 +157,22 @@ A second, 90-minute run on the fixed build (da7f98f) checked the 17 again
 | A registry entry damaged between a worker's Register and its first heartbeat stopped the worker (found by `-race` on rhel10) | Registers again, as the heartbeat loop does | `TestEntryLostAtStart` |
 | A copy of a source path that does not exist ended `done` with one error (seen in the regression pass; asked for) | Refused at submit on the source, or the source fails the job before sending | `TestMissingSourcePathFails` |
 
+## 9. Security audit (2026-10-22)
+
+Who may do what: anyone who can write to the share can read and change
+what every node shares. That is by design (the share is where the trust
+is; see protocol.md, "Write policy"). The audit looked for ways past
+that: from the share onto a node's host, and from another local user.
+
+| Found | Fixed | Test |
+|---|---|---|
+| Another local user could make the state dir in `/tmp` first (its name is easy to guess); the node then wrote its lock, log and socket in their folder, following symlinks (shown on the Pi: a planted lock link made the node overwrite a file of the user) | The state dir must be the user's, not writable by others, or the node, CLI and `check` refuse it; lock and log are opened without following symlinks | `TestPrivateDir`, `TestWorkerLockRefusesPlantedStateDir` |
+| Node names and IDs in requests and job records were not checked, so a forged `../` reached outside fkbr's folder on the share (reply files, ack folders) | Checked when read; bad job records are pruned | `TestForgedNamesStayOnTheShare` |
+| A sync scan probed (wrote a file in) the folder it was asked for before checking the path: `../x`, or a symlink out of the root, led it elsewhere | Path checked first; probes only in a folder inside the root | `TestScanProbeStaysInRoot` |
+| A huge file on the share (a request, job record or status) was read whole and could make a node run out of memory | Files over 64 MiB are refused | `TestShareReadsAreCapped` |
+
+Each test fails with its fix taken out.
+
 ## How to run the lab tests
 
 - **Torture** (`~/fkbr-lab/torture`): rounds of random copies and syncs

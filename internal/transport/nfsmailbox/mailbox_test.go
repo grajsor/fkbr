@@ -264,8 +264,8 @@ func TestPruneLegacyAndUnstartedJobs(t *testing.T) {
 	os.MkdirAll(legacy, 0o770)
 	os.WriteFile(filepath.Join(legacy, "x.json"), nil, 0o644)
 
-	old := &api.Job{ID: "000000000000000000000001"}
-	young := &api.Job{ID: "000000000000000000000002"}
+	old := &api.Job{ID: "000000000000000000000001", Request: api.TransferRequest{SrcNode: "a"}}
+	young := &api.Job{ID: "000000000000000000000002", Request: api.TransferRequest{SrcNode: "a"}}
 	for j, age := range map[*api.Job]time.Duration{old: 25 * time.Hour, young: 2 * time.Hour} {
 		if err := a.CreateJob(ctx, j); err != nil {
 			t.Fatal(err)
