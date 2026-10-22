@@ -407,7 +407,9 @@ func (e *Engine) Run(ctx context.Context) error {
 			e.prune(ctx)
 		case <-poll.C:
 			msgs, err := e.tr.Fetch(ctx)
-			if err != nil {
+			// Cut off because the worker stops (over ssh a fetch waits on
+			// the home node): what it claimed comes again with the next link.
+			if err != nil && ctx.Err() == nil {
 				e.log.Warn("fetch failed", "err", err)
 			}
 			for _, m := range msgs {

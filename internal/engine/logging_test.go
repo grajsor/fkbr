@@ -3,14 +3,17 @@ package engine
 import (
 	"bytes"
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"fkbr/internal/api"
 	"fkbr/internal/localfs"
+	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
 )
 
@@ -106,6 +109,48 @@ func TestWaitLog(t *testing.T) {
 	w.done("chunk", 3)
 	if !strings.Contains(buf.String(), `msg="waiting for chunk: over"`) {
 		t.Errorf("end of a logged wait not logged:\n%s", buf.String())
+	}
+}
+
+// cancelledFetch fails its first Fetch, then waits for a request until the
+// worker stops, as a linked node's Fetch waits on the home node.
+type cancelledFetch struct {
+	transport.Transport
+	failed, waiting atomic.Bool
+}
+
+func (f *cancelledFetch) Fetch(ctx context.Context) ([]*transport.Message, error) {
+	if !f.failed.Swap(true) {
+		return nil, errors.New("inbox unreadable")
+	}
+	f.waiting.Store(true)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// A fetch cut off because the worker stops is no failure: over ssh one is
+// always waiting when the worker stops, and its warning read like a lost
+// request (lab ssh test 2026-10-22). A real failure is still logged.
+func TestStopLogsNoFetchFailure(t *testing.T) {
+	var log syncBuffer
+	cfg := nodeCfg(t, t.TempDir(), "a")
+	fsys, err := localfs.Open(cfg.Roots)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mb, err := nfsmailbox.Open(cfg.NFSRoot, cfg.NodeID, nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := slog.NewTextHandler(&log, &slog.HandlerOptions{Level: slog.LevelInfo})
+	tr := &cancelledFetch{Transport: mb}
+	e := New(cfg, fsys, tr, mb, Options{Version: "test", Logger: slog.New(h)})
+	t.Cleanup(func() { e.Close() })
+	stop := runWorker(t, e)
+	waitUntil(t, tr.waiting.Load, "a fetch waiting")
+	stop()
+	if n := strings.Count(log.String(), `msg="fetch failed"`); n != 1 {
+		t.Errorf("%d fetch failures logged, want the real one only:\n%s", n, log.String())
 	}
 }
 
