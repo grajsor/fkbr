@@ -2,10 +2,12 @@ package sshlink
 
 import (
 	"context"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -169,5 +171,56 @@ func TestOlderLinkRefused(t *testing.T) {
 	err = do(ctx, sess, "hello", &hello{Node: "web01", Protocol: api.ProtocolVersion, Version: "old"}, &now)
 	if err == nil || !strings.Contains(err.Error(), "link 0") {
 		t.Fatalf("hello without a link version: %v", err)
+	}
+}
+
+// syncLog is a log sink for a Home serving several links.
+type syncLog struct {
+	mu sync.Mutex
+	b  strings.Builder
+}
+
+func (l *syncLog) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *syncLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// A link the home node ended by stopping its node is no link down; one
+// that ends by itself still is (lab ssh test 2026-10-22).
+func TestStopLogsNoLinkDown(t *testing.T) {
+	var log syncLog
+	h := NewHome(t.TempDir(), "home", store.Options{}, slog.New(slog.NewTextHandler(&log, nil)))
+	if _, err := h.Open(); err != nil {
+		t.Fatal(err)
+	}
+	dial := func(node string) (*Remote, chan struct{}) {
+		a, b := net.Pipe()
+		served := make(chan struct{})
+		go func() { h.ServeConn(context.Background(), b, node+"-host", frame.Options{}); close(served) }()
+		r, err := Dial(context.Background(), a, node, "test", filepath.Join(t.TempDir(), "chunks"), frame.Options{}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return r, served
+	}
+	lost, lostDone := dial("web01")
+	lost.Close() // ends by itself
+	<-lostDone
+	if !strings.Contains(log.String(), `msg="ssh link down"`) {
+		t.Fatalf("a lost link not logged:\n%s", log.String())
+	}
+	r, done := dial("web02")
+	go func() { <-r.Stopping(); r.Close() }() // as fkbr link does
+	h.Stop(5 * time.Second)
+	<-done
+	if n := strings.Count(log.String(), `msg="ssh link down"`); n != 1 {
+		t.Errorf("%d links down logged, want only the lost one:\n%s", n, log.String())
 	}
 }

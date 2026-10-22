@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"fkbr/internal/api"
@@ -47,6 +48,9 @@ type Home struct {
 	peers map[string]*peer
 	// hosts is the link state by host, for Nodes and the TUI.
 	hosts map[string]*hostState
+	// stopping: Stop asked the linked nodes to stop, so their links end
+	// as they should.
+	stopping atomic.Bool
 }
 
 type peer struct {
@@ -255,6 +259,7 @@ func (h *Home) ServeConn(ctx context.Context, conn io.ReadWriteCloser, host stri
 	if len(sess.Banner) > 0 {
 		h.log.Info("ssh link: the remote shell printed before fkbr started", "host", host, "text", firstLine(sess.Banner))
 	}
+	caller := ctx // ctx below also ends with the session
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	go func() {
@@ -286,7 +291,10 @@ func (h *Home) ServeConn(ctx context.Context, conn io.ReadWriteCloser, host stri
 	}()
 	serve(ctx, sess, h.handlers(p), h.log)
 	<-sess.Done()
-	if ctx.Err() == nil {
+	switch {
+	case h.stopping.Load():
+		h.log.Info("ssh link closed: the node stopped", "host", host, "node", p.node)
+	case caller.Err() == nil:
 		h.log.Warn("ssh link down", "host", host, "node", p.node, "err", sess.Err())
 	}
 	return sess.Err()
@@ -331,6 +339,7 @@ func (h *Home) greet(ctx context.Context, st *frame.Stream, sess *frame.Session,
 // Stop asks every linked node to stop, so each leaves while its link is
 // still up, and waits for them up to wait.
 func (h *Home) Stop(wait time.Duration) {
+	h.stopping.Store(true)
 	h.mu.Lock()
 	var ps []*peer
 	for _, p := range h.peers {

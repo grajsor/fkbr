@@ -216,6 +216,7 @@ role in a status file name, a quoted `~/` in `ssh_bin`).
 | A target on the build before deleted what changed since the dry run, unseen | An apply that deletes there is refused: update it first | `TestRecheckNeedsSupport` |
 | `ssh_bin: ~/fkbr/fkbr` from fkbr.yaml reached the remote shell quoted | `~/` is the remote home | `TestRemoteCommandQuoting` |
 | Lab ssh test: each linked node logged "fetch failed: context canceled" when the home node stopped, which read like a lost request | A fetch cut off because the worker stops is not logged | `TestStopLogsNoFetchFailure` |
+| Lab ssh test: stopping the home node logged "ssh link down" for the nodes it had stopped, and a link that really died was logged only now and then (the check read a context the session's end cancels) | A link the home node ended logs as closed; one that dies always logs as down | `TestStopLogsNoLinkDown` |
 | The home node forgot a request once it handed it out: a fetch answer lost while the link stayed up (unreadable, or over the 64 MiB line) left it unsent until the next link | Requests stay on the home node until the next fetch acks the answer, else go out again, alone; one that never arrives is parked in failed/ after 20 tries. An answer carries at most 16 MiB; a linked build without acks is refused | `TestLostFetchAnswerSentAgain`, `TestRemoteFetchAcks`, `TestFetchAnswerBounded`, `TestRequestThatNeverArrivesParked`, `TestOlderLinkRefused` |
 
 Each test fails with its fix taken out.
