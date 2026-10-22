@@ -85,7 +85,15 @@ func nodes(ctx context.Context, c api.Client, args []string, out io.Writer) erro
 		return writeJSON(out, ns)
 	}
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "NODE\tSTATE\tLAST SEEN\tHOST\tOS\tROLES\tROOTS\tCHOWN\tWRITERS\tVERSION")
+	links := false // an ssh swarm: say how each node is reached
+	for _, n := range ns {
+		links = links || n.Link != ""
+	}
+	head := "NODE\tSTATE\tLAST SEEN\tHOST\tOS\tROLES\tROOTS\tCHOWN\tWRITERS\tVERSION"
+	if links {
+		head += "\tLINK"
+	}
+	fmt.Fprintln(tw, head)
 	for _, n := range ns {
 		name := n.ID
 		if n.Self {
@@ -110,8 +118,16 @@ func nodes(ctx context.Context, c api.Client, args []string, out io.Writer) erro
 		if len(n.AcceptWritesFrom) > 0 {
 			writers = strings.Join(n.AcceptWritesFrom, ",")
 		}
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%v\t%s\t%s\n", name, state, seen, n.Hostname, n.OS,
+		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%v\t%s\t%s", name, state, seen, n.Hostname, n.OS,
 			dash(strings.Join(n.Roles, ",")), dash(strings.Join(roots, ",")), chownLabel(n.NodeInfo), writers, dash(n.Version))
+		if links {
+			link := n.Link
+			if n.Self {
+				link = "home"
+			}
+			fmt.Fprintf(tw, "\t%s", dash(link))
+		}
+		fmt.Fprintln(tw)
 	}
 	return tw.Flush()
 }

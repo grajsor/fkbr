@@ -193,6 +193,39 @@ ride this out: on `EIO`, `ETIMEDOUT` or `ESTALE` the source or target
 waits and retries, for up to 3 minutes of consecutive errors, and the log
 shows when it started and recovered. `check` warns about `soft`.
 
+## Over ssh
+
+Hosts without a share in common, that this host reaches with ssh, can
+work as one swarm instead (design: `ssh.md`):
+
+```
+cd /srv/data
+fkbr ssh:web01:/srv/www,db01:/var/backups
+```
+
+This host (the home node) shares the current directory, starts fkbr on
+each listed host over ssh, sharing the directory given there (the login
+directory without one), and opens the TUI with all of them.
+
+- **ssh:** fkbr runs your `ssh` with `BatchMode`, so keys or the agent
+  must work without a password prompt; `~/.ssh/config`, `ProxyJump` and
+  `known_hosts` apply as for any ssh. `fkbr ssh:... check` tries each
+  host and shows its fkbr version.
+- **The other hosts** need the fkbr binary, on their `PATH` or named with
+  `-ssh-bin /path/fkbr`. Nothing else: no daemon, no open port.
+- **Names:** a host's node is named after its short hostname, as always.
+- **Data** goes straight from source to target. Between two of the other
+  hosts it passes through this host's memory, never its disk.
+- **A dropped link** is started again (after 1 s, doubling up to 1 min);
+  transfers wait for it for up to 3 min, after that the node is detached
+  and `catchup` sends the rest. `nodes` and the TUI node list show each
+  link's state.
+- **Quitting** the home node stops the others: each leaves the swarm.
+- **Runtime files:** the home node keeps the swarm's records in
+  `/tmp/fkbr-<uid>-<node>/ssh`; another host keeps the data it sends in
+  `/tmp/fkbr-<uid>-<node>-link` until the targets have it (up to
+  `transfer.job_quota` per job). Both are private to the user.
+
 ## Commands
 
 All of these attach to the running node (TUI or daemon) through its socket.

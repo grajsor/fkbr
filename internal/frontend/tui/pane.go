@@ -148,6 +148,9 @@ func (p *pane) setNodes(nodes []api.Node) {
 		if n.Self {
 			info += "  (this node)"
 		}
+		if n.Link != "" && !strings.HasSuffix(n.Link, ": connected") {
+			info += "  " + n.Link // an ssh link that is not up, and why
+		}
 		p.rows = append(p.rows, row{name: n.ID, isDir: true, info: info, dim: !n.Online})
 	}
 	p.cursorTo(keep)
