@@ -197,6 +197,27 @@ faults into a share directory's files are skipped there).
 | A link cut mid-transfer (network, not a kill), both directions; the home node killed | Rides it out or detaches; resumes after | **todo** (lab) |
 | x86-64 and ARM64 hosts in one ssh swarm; a host with /tmp in memory | Same results; staging bounded by `job_quota` | **todo** (lab) |
 
+## 11. Review of the ssh feature (2026-10-22)
+
+A multi-agent code review of the ssh work, then a pass of our own (the
+role in a status file name, a quoted `~/` in `ssh_bin`).
+
+| Found | Fixed | Test |
+|---|---|---|
+| A linked host's names (request, job and source IDs, a status's role) became paths on the home node unchecked: it could remove, write or read files anywhere in the home user's account | Every name a caller sends is checked in the store before it becomes a path | `TestRemoteCallsStayInTheShare` (hostile names in every field of every call) |
+| A link cut mid-transfer was noticed only when TCP gave up (about 2 h): the keepalive waited behind the stuck write | Pings and pongs go out on their own; the session ends 45 s after the peer went quiet | `TestDeadLinkWhileWriting` |
+| Something ssh left running (a ControlPersist master) holding its output open hung the session, the home node's stop and `check` | The session follows ssh's exit; its output is read 2 s more | `TestLingeringSSHDoesNotHang` |
+| `fkbr /mnt/nfs/xfer` with `ssh:` in fkbr.yaml took the NFS share for the swarm's private records and chmodded it to 0700 | A share given on the command line replaces the file's; a file with both is refused | `TestPickShare`, `TestNFSAndSSHBothRefused` |
+| A plan applied an hour after its dry run had lost its scans to pruning; every delete failed | A plan's scans are kept as long as the plan | `TestPruneKeepsScansWithTheirPlan` |
+| An upload from a linked host that failed halfway was published cut short | The call is reset, not ended | `TestAbortedBlobNotCommitted` |
+| Two hosts with one node name could both link | Name checked and claimed in one step | `TestSameNameLinksOnce` |
+| A linked host killed mid-job kept its chunks and half-written files | Swept at link-up and with every prune | `TestLinkedNodeSweepsItsChunks` |
+| Each batch of 1000 deletes read the target's whole scan again | One cursor reads it forward across an apply's batches | `TestScanReadOnceAcrossBatches` |
+| A target on the build before deleted what changed since the dry run, unseen | An apply that deletes there is refused: update it first | `TestRecheckNeedsSupport` |
+| `ssh_bin: ~/fkbr/fkbr` from fkbr.yaml reached the remote shell quoted | `~/` is the remote home | `TestRemoteCommandQuoting` |
+
+Each test fails with its fix taken out.
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): rounds of random copies and syncs
