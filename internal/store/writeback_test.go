@@ -1,4 +1,4 @@
-package nfsmailbox
+package store
 
 import (
 	"context"

@@ -14,8 +14,8 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/sshlink/frame"
+	"fkbr/internal/store"
 	"fkbr/internal/transport"
-	"fkbr/internal/transport/nfsmailbox"
 )
 
 // Remote is a node's end of its link to the home node. Records go to the
@@ -24,7 +24,7 @@ import (
 type Remote struct {
 	sess     *frame.Session
 	self     string
-	chunks   *nfsmailbox.Mailbox
+	chunks   *store.Dir
 	chunkDir string
 	log      *slog.Logger
 	offset   atomic.Int64 // home clock minus ours, ns
@@ -55,7 +55,7 @@ func Dial(ctx context.Context, conn io.ReadWriteCloser, self, version, chunkDir 
 	if err := os.MkdirAll(chunkDir, 0o700); err != nil {
 		return nil, err
 	}
-	chunks, err := nfsmailbox.Open(chunkDir, self, nfsmailbox.Options{})
+	chunks, err := store.Open(chunkDir, self, store.Options{Private: true})
 	if err != nil {
 		return nil, err
 	}

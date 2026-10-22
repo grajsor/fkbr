@@ -11,8 +11,9 @@ Two separate things:
 
 ## 1. A share on any file system
 
-This already works: the share is a directory, and the mailbox only needs
-atomic rename-over, `fsync` and directory listings. Tests run on temp
+This already works: the share is a directory, and the share store
+(`internal/store`) only needs atomic rename-over, `fsync` and directory
+listings. Tests run on temp
 dirs. What changes is that it becomes a supported setup, not a test
 setup:
 
@@ -67,8 +68,8 @@ plans, excludes, `max_deletes`, resumable jobs and checks.
 | `internal/check` | file system checks for any share; local-mode checks |
 | `cmd/fkbr` | `-local`, `-drives` |
 
-The share in local mode is the mailbox (`nfsmailbox`) on local disk, so
-the protocol code is the one NFS uses.
+The share in local mode is the share store (`internal/store`) on a
+private directory, as on an ssh swarm's home node.
 
 ## Testing
 

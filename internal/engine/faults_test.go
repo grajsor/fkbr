@@ -15,13 +15,14 @@ import (
 	"fkbr/internal/api"
 	"fkbr/internal/config"
 	"fkbr/internal/localfs"
+	"fkbr/internal/store"
 	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
 )
 
 // faultStore injects storage faults into the share.
 type faultStore struct {
-	*nfsmailbox.Mailbox
+	*store.Dir
 	mu         sync.Mutex
 	noSpaceAt  int // chunk seq whose first write fails with ENOSPC (-1: never)
 	noSpaceHit bool
@@ -52,7 +53,7 @@ func (w noSpaceWriter) Write([]byte) (int, error) {
 }
 
 func (f *faultStore) CreateChunk(ctx context.Context, id string, seq int) (transport.ChunkWriter, error) {
-	w, err := f.Mailbox.CreateChunk(ctx, id, seq)
+	w, err := f.Dir.CreateChunk(ctx, id, seq)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err == nil && seq == f.noSpaceAt && !f.noSpaceHit {
@@ -89,7 +90,7 @@ func (f *faultStore) OpenChunk(ctx context.Context, src, id string, seq int) (io
 		return nil, &os.PathError{Op: "open", Path: "chunk", Err: syscall.EIO}
 	}
 	f.mu.Unlock()
-	rc, err := f.Mailbox.OpenChunk(ctx, src, id, seq)
+	rc, err := f.Dir.OpenChunk(ctx, src, id, seq)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err == nil && seq == f.corruptSeq && !(f.corruptOnce && f.corrupted) {
@@ -110,7 +111,7 @@ func buildFaulty(t *testing.T, cfg *config.Config) (*Engine, *faultStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := &faultStore{Mailbox: mb, noSpaceAt: -1, corruptSeq: -1, eioWriteAt: -1, eioReadSeq: -1}
+	fs := &faultStore{Dir: mb, noSpaceAt: -1, corruptSeq: -1, eioWriteAt: -1, eioReadSeq: -1}
 	e := New(cfg, fsys, mb, fs, Options{Version: "test"})
 	t.Cleanup(func() { e.Close() })
 	return e, fs
@@ -435,7 +436,7 @@ func TestIOErrorsGiveUp(t *testing.T) {
 // stuckInbox blocks Fetch until released, like a slow request or a share
 // that hangs while listing the inbox.
 type stuckInbox struct {
-	*nfsmailbox.Mailbox
+	*store.Dir
 	release chan struct{}
 }
 
@@ -444,7 +445,7 @@ func (s *stuckInbox) Fetch(ctx context.Context) ([]*transport.Message, error) {
 	case <-s.release:
 	case <-ctx.Done():
 	}
-	return s.Mailbox.Fetch(ctx)
+	return s.Dir.Fetch(ctx)
 }
 
 // A busy inbox loop must not make the node look offline.
@@ -459,7 +460,7 @@ func TestHeartbeatWhileInboxBusy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stuck := &stuckInbox{Mailbox: mb, release: make(chan struct{})}
+	stuck := &stuckInbox{Dir: mb, release: make(chan struct{})}
 	a := New(cfg, fsys, stuck, mb, Options{Version: "test"})
 	t.Cleanup(func() { a.Close() })
 	defer close(stuck.release)

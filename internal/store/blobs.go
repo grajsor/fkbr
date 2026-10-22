@@ -1,4 +1,4 @@
-package nfsmailbox
+package store
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 
 var blobPart = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 
-func blobPath(m *Mailbox, name string) (string, error) {
+func blobPath(m *Dir, name string) (string, error) {
 	parts := strings.Split(name, "/")
 	if len(parts) != 3 {
 		return "", fmt.Errorf("%w: blob name %q must be kind/id/file", api.ErrBadPath, name)
@@ -34,24 +34,25 @@ func blobPath(m *Mailbox, name string) (string, error) {
 }
 
 type blobWriter struct {
+	m    *Dir
 	f    *syncedFile
 	dest string
 	done bool
 }
 
-func (m *Mailbox) CreateBlob(_ context.Context, name string) (transport.ChunkWriter, error) {
+func (m *Dir) CreateBlob(_ context.Context, name string) (transport.ChunkWriter, error) {
 	dest, err := blobPath(m, name)
 	if err != nil {
 		return nil, err
 	}
-	if err := mkdir(filepath.Dir(dest)); err != nil {
+	if err := m.mkdir(filepath.Dir(dest)); err != nil {
 		return nil, err
 	}
 	f, err := os.CreateTemp(m.path("tmp"), ".blob-*")
 	if err != nil {
 		return nil, err
 	}
-	return &blobWriter{f: newSyncedFile(f), dest: dest}, nil
+	return &blobWriter{m: m, f: newSyncedFile(f), dest: dest}, nil
 }
 
 func (w *blobWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
@@ -64,7 +65,7 @@ func (w *blobWriter) Commit([]byte) error {
 	if err := w.f.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(w.f.Name(), shareFileMode); err != nil {
+	if err := os.Chmod(w.f.Name(), w.m.fileMode()); err != nil {
 		return err
 	}
 	if err := os.Rename(w.f.Name(), w.dest); err != nil {
@@ -82,7 +83,7 @@ func (w *blobWriter) Abort() {
 	}
 }
 
-func (m *Mailbox) OpenBlob(_ context.Context, name string) (io.ReadCloser, error) {
+func (m *Dir) OpenBlob(_ context.Context, name string) (io.ReadCloser, error) {
 	p, err := blobPath(m, name)
 	if err != nil {
 		return nil, err
@@ -91,7 +92,7 @@ func (m *Mailbox) OpenBlob(_ context.Context, name string) (io.ReadCloser, error
 	return os.Open(p)
 }
 
-func (m *Mailbox) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
+func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	kinds, err := os.ReadDir(m.path("blobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -101,7 +102,7 @@ func (m *Mailbox) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	}
 	now, err := m.serverNow() // see Prune
 	if err != nil {
-		return fmt.Errorf("nfsmailbox: probe: %w", err)
+		return fmt.Errorf("store: probe: %w", err)
 	}
 	cutoff := now.Add(-max(maxAge, minBlobAge))
 	// A sync's transfers read their path lists while they run, however

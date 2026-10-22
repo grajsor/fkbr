@@ -68,6 +68,7 @@ bubbletea/lipgloss/bubbles v2 (charm.land) would be a port, not a bump.
 make            # both arches + dist/SHA256SUMS, bin/fkbr -> host arch
 make vet        # go vet + gofmt check
 go test ./...   # ~90 s on a small arm64 box; engine tests run real nodes on temp dirs
+FKBR_TEST_TRANSPORT=ssh go test ./internal/engine   # the same, nodes linked as over ssh
 make test-race  # needs a 48-bit VMA: fails on some arm64 kernels; on a 2-CPU box run
                 # single passes (-count=3 OOMs bundle.test, slows TestContract past 15 s)
 scripts/bench.sh -n 3   # 1 source + N targets on one machine
@@ -99,11 +100,14 @@ cmd/fkbr/main.go            arg parsing (SHARE positional, default cmd tui; glob
                             flags after the command too), node startup (waits for Ready)
 internal/api                frontend-facing types + Service interface, error codes
 internal/api/local          in-process client (engine + localfs + nfsmailbox)
+internal/store              the share: registry, inboxes, jobs, chunks, blobs in a directory;
+                            layout() self-heal; Options.Private for a share only this user reaches
 internal/api/remote         HTTP+JSON over the unix socket, SSE events, ServeSocket self-heal
 internal/engine             jobs, send/recv, fan-out/detach, sync, files ops, events,
                             worker lock, instance.go (one worker per node ID)
 internal/transport          Transport (messaging) + Store (jobs/data/blobs) interfaces
-internal/transport/nfsmailbox  the share implementation; refresh trick; layout() self-heal
+internal/transport/nfsmailbox  the store on NFS: the refresh trick
+internal/sshlink            nodes over ssh (docs/ssh.md); sshlink/frame the link protocol
 internal/bundle             chunks in fkbr's own format (native.go, optional zstd); big files
                             split into segments over consecutive chunks
 internal/receive            os.Root-confined staging (.fkbr-tmp), commit, metadata order
@@ -127,8 +131,8 @@ Every runtime use of the name comes from `internal/product`.
   file is replaced by rename, never edited in place.
 - **NFS attribute caching:** shares are often NFSv3 with `actimeo=1800`;
   clients then see stale directories and negative dentries for up to
-  30 min. `nfs_refresh: auto` detects this from the mount options; the
-  mailbox creates and removes a tiny `.r-*` file in a directory before
+  30 min. `nfs_refresh: auto` detects this from the mount options;
+  nfsmailbox creates and removes a tiny `.r-*` file in a directory before
   reading it (throttled to 100 ms per directory); if that fails with
   ENOENT the parent is refreshed too.
 - **Never look up a name before it exists; wait by listing** (`listed.go`:
@@ -202,7 +206,7 @@ package tests; docs/testplan.md lists them.
 - Names not valid UTF-8 travel as NUL+base64 (`api.EncodeName`, custom
   JSON methods on every API type with paths). Chunk names up to 64 KiB
   (`bundle.MaxNameLen`). Bulk share writes `Sync()` every ~2 s of data
-  (`nfsmailbox/writeback.go`) so heartbeats don't queue behind a chunk.
+  (`store/writeback.go`) so heartbeats don't queue behind a chunk.
   Share reads are capped at 64 MiB.
 - Target scans probe the mtime range (`localfs.MtimeRange`, inside the
   root, never writing on `sync -n`) and name rules (`localfs.Names`: vfat,

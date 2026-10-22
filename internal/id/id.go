@@ -14,7 +14,7 @@ import (
 func New() string { return At(time.Now()) }
 
 // At is New for a given creation time (the share's clock: see
-// nfsmailbox.Mailbox.Now), so IDs from a host whose clock is off still
+// store.Dir.Now), so IDs from a host whose clock is off still
 // sort with everyone else's.
 func At(t time.Time) string {
 	return fmt.Sprintf("%016x%08x", t.UnixNano(), rand.Uint32())

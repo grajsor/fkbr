@@ -16,6 +16,7 @@ import (
 	"fkbr/internal/localfs"
 	"fkbr/internal/sshlink"
 	"fkbr/internal/sshlink/frame"
+	"fkbr/internal/store"
 	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
 )
@@ -91,14 +92,14 @@ type testSwarm struct {
 
 var swarms sync.Map // share -> *testSwarm
 
-func linked(t *testing.T, cfg *config.Config, opts nfsmailbox.Options) (transport.Transport, transport.Store) {
+func linked(t *testing.T, cfg *config.Config, nfs nfsmailbox.Options) (transport.Transport, transport.Store) {
 	t.Helper()
 	v, loaded := swarms.LoadOrStore(cfg.NFSRoot, &testSwarm{id: cfg.NodeID, links: map[string]*sshlink.Remote{}})
 	sw := v.(*testSwarm)
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 	if !loaded {
-		sw.home = sshlink.NewHome(cfg.NFSRoot, cfg.NodeID, opts, nil)
+		sw.home = sshlink.NewHome(cfg.NFSRoot, cfg.NodeID, store.Options{Poll: nfs.Poll, OfflineAfter: nfs.OfflineAfter}, nil)
 	}
 	if cfg.NodeID == sw.id {
 		n, err := sw.home.Open()

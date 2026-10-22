@@ -1,6 +1,7 @@
 // Package transport defines how nodes exchange requests and replies. The
-// engine only sees this interface; nfsmailbox is the implementation over a
-// shared NFS directory, and another (SSH, S3, ...) could replace it.
+// engine only sees these interfaces. store implements them over a share
+// directory (nfsmailbox opens one on NFS); sshlink over ssh sessions to a
+// home node.
 package transport
 
 import (

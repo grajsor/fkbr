@@ -1,4 +1,4 @@
-package nfsmailbox
+package store
 
 import (
 	"errors"
@@ -22,19 +22,39 @@ const (
 	shareFileMode = 0o644
 )
 
-// mkdir creates dir and any missing parents with shareDirMode.
-func mkdir(dir string) error {
-	err := os.Mkdir(dir, shareDirMode)
+// Private shares (Options.Private) are this user's alone.
+const (
+	privateDirMode  = 0o700
+	privateFileMode = 0o600
+)
+
+func (m *Dir) dirMode() fs.FileMode {
+	if m.opts.Private {
+		return privateDirMode
+	}
+	return shareDirMode
+}
+
+func (m *Dir) fileMode() fs.FileMode {
+	if m.opts.Private {
+		return privateFileMode
+	}
+	return shareFileMode
+}
+
+// mkdir creates dir and any missing parents with the share's mode.
+func (m *Dir) mkdir(dir string) error {
+	err := os.Mkdir(dir, m.dirMode())
 	switch {
 	case err == nil:
-		return os.Chmod(dir, shareDirMode) // Mkdir applied the umask
+		return os.Chmod(dir, m.dirMode()) // Mkdir applied the umask
 	case errors.Is(err, fs.ErrExist):
 		return nil
 	case errors.Is(err, fs.ErrNotExist) && filepath.Dir(dir) != dir:
-		if err := mkdir(filepath.Dir(dir)); err != nil {
+		if err := m.mkdir(filepath.Dir(dir)); err != nil {
 			return err
 		}
-		return mkdir(dir)
+		return m.mkdir(dir)
 	}
 	return err
 }
@@ -43,7 +63,7 @@ func mkdir(dir string) error {
 // earlier versions used 0770 and 0660, which locked out nodes running as
 // other users; each node fixes what it created, and leaves the rest to
 // their owners.
-func (m *Mailbox) openUp() {
+func (m *Dir) openUp() {
 	uid := uint32(os.Geteuid())
 	filepath.WalkDir(m.root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -56,9 +76,9 @@ func (m *Mailbox) openUp() {
 		if st, ok := fi.Sys().(*syscall.Stat_t); !ok || st.Uid != uid {
 			return nil
 		}
-		want := fs.FileMode(shareFileMode)
+		want := m.fileMode()
 		if d.IsDir() {
-			want = shareDirMode
+			want = m.dirMode()
 		}
 		if fi.Mode().Perm() != want {
 			os.Chmod(p, want)
