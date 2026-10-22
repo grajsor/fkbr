@@ -178,6 +178,9 @@ func TestStalledTargetDetached(t *testing.T) {
 }
 
 func TestFailedTargetDetached(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
 	share := t.TempDir()
 	master, mroot := node(t, share, "master")
 	s1, r1 := node(t, share, "s1")

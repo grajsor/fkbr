@@ -269,14 +269,14 @@ func TestScanRealTree(t *testing.T) {
 		}
 		got = append(got, s)
 	}
-	want := ".:d,a:d,a/x:f,a-b:f,link:l,locked:d!,z:f"
+	want, wantBytes, wantErrors := ".:d,a:d,a/x:f,a-b:f,link:l,locked:d!,z:f", int64(6), int64(1)
 	if os.Geteuid() == 0 { // root can read the locked dir
-		want = ".:d,a:d,a/x:f,a-b:f,link:l,locked:d,locked/secret:f,z:f"
+		want, wantBytes, wantErrors = ".:d,a:d,a/x:f,a-b:f,link:l,locked:d,locked/secret:f,z:f", 7, 0
 	}
 	if strings.Join(got, ",") != want {
 		t.Errorf("scan:\n got %s\nwant %s", strings.Join(got, ","), want)
 	}
-	if st.Bytes != 6 || (os.Geteuid() != 0 && st.Errors != 1) {
+	if st.Bytes != wantBytes || st.Errors != wantErrors {
 		t.Errorf("stats %+v", st)
 	}
 
