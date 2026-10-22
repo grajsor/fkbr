@@ -118,17 +118,27 @@ func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	} else {
 		return err // not knowing which are in use, delete nothing
 	}
-	var errs []error
+	// Blobs of one ID (a plan and its scans) go together, by the newest:
+	// applying a plan long after its dry run refreshes the plan, and its
+	// deletes still read the scans.
+	newest := map[string]time.Time{}
+	var dirs [][2]string // kind, id
 	for _, k := range kinds {
 		ids, err := os.ReadDir(m.path("blobs", k.Name()))
 		if err != nil {
 			continue
 		}
 		for _, id := range ids {
-			dir := m.path("blobs", k.Name(), id.Name())
-			if !inUse[id.Name()] && newestMtime(dir).Before(cutoff) {
-				errs = append(errs, removeRacing(dir))
+			if t := newestMtime(m.path("blobs", k.Name(), id.Name())); t.After(newest[id.Name()]) {
+				newest[id.Name()] = t
 			}
+			dirs = append(dirs, [2]string{k.Name(), id.Name()})
+		}
+	}
+	var errs []error
+	for _, d := range dirs {
+		if !inUse[d[1]] && newest[d[1]].Before(cutoff) {
+			errs = append(errs, removeRacing(m.path("blobs", d[0], d[1])))
 		}
 	}
 	return errors.Join(errs...)

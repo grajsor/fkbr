@@ -455,3 +455,34 @@ func TestPruneKeepsPlansInUse(t *testing.T) {
 		t.Errorf("an old unused plan survived: %v", err)
 	}
 }
+
+// A plan's scans are kept as long as the plan: applying it a while after
+// the dry run refreshes the plan, and its deletes still need the scans.
+func TestPruneKeepsScansWithTheirPlan(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	blob := func(name string, age time.Duration) {
+		w, _ := a.CreateBlob(ctx, name)
+		w.Write([]byte("x"))
+		w.Commit(nil)
+		old := time.Now().Add(-age)
+		p := filepath.Join(share, "blobs", name)
+		os.Chtimes(p, old, old)
+		os.Chtimes(filepath.Dir(p), old, old)
+	}
+	blob("scans/plan1/a.snap", 3*time.Hour) // planned long ago
+	blob("plans/plan1/plan.json", 0)        // applied just now
+	blob("scans/plan2/a.snap", 3*time.Hour) // planned long ago, never applied
+	blob("plans/plan2/plan.json", 3*time.Hour)
+	if err := a.PruneBlobs(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(share, "blobs", "scans", "plan1")); err != nil {
+		t.Errorf("the scans of a fresh plan were pruned: %v", err)
+	}
+	for _, d := range []string{"scans/plan2", "plans/plan2"} {
+		if _, err := os.Stat(filepath.Join(share, "blobs", d)); !os.IsNotExist(err) {
+			t.Errorf("%s: old and unused, but kept: %v", d, err)
+		}
+	}
+}
