@@ -462,8 +462,11 @@ func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api
 		if t.Delete+t.Replace == 0 {
 			continue
 		}
-		errs := e.applyDeletes(ctx, plan.ID, t.Node, req.DstRoot, req.Exclude, req.DstPath)
+		errs, kept := e.applyDeletes(ctx, plan.ID, t.Node, req.DstRoot, req.Exclude, req.DstPath)
 		plan.DeleteErrors = append(plan.DeleteErrors, errs...)
+		for _, k := range kept {
+			plan.Problems = append(plan.Problems, fmt.Sprintf("%s: kept %s: new or changed since the dry run", t.Node, k))
+		}
 	}
 	for _, g := range plan.Groups {
 		jid, err := e.Submit(ctx, api.TransferRequest{
@@ -484,13 +487,13 @@ func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api
 }
 
 // applyDeletes removes a plan's deletions on node; what the sync excludes
-// (patterns relative to base) stays, with the folders holding it.
-func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string, excl []string, base string) []string {
-	var errs []string
+// (patterns relative to base) stays, with the folders holding it, and so
+// does what is new or changed since node's scan (returned as kept).
+func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string, excl []string, base string) (errs, kept []string) {
 	fail := func(err error) []string { return append(errs, fmt.Sprintf("%s: %v", node, err)) }
 	rc, err := e.st.OpenBlob(ctx, "plans/"+planID+"/delete-"+node)
 	if err != nil {
-		return fail(err)
+		return fail(err), nil
 	}
 	defer rc.Close()
 	var batch []string
@@ -498,7 +501,7 @@ func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string, ex
 		if len(batch) == 0 {
 			return
 		}
-		res, err := e.Remove(ctx, api.RemoveRequest{Node: node, Root: root, Paths: batch, Exclude: excl, Base: base})
+		res, err := e.Remove(ctx, api.RemoveRequest{Node: node, Root: root, Paths: batch, Exclude: excl, Base: base, Plan: planID})
 		if err != nil {
 			errs = fail(err)
 		} else {
@@ -507,6 +510,7 @@ func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string, ex
 					errs = append(errs, node+": "+m)
 				}
 			}
+			kept = append(kept, res.Kept[:min(len(res.Kept), 100-len(kept))]...)
 		}
 		batch = batch[:0]
 	}
@@ -521,7 +525,7 @@ func (e *Engine) applyDeletes(ctx context.Context, planID, node, root string, ex
 	if err != nil {
 		errs = fail(err)
 	}
-	return errs
+	return errs, kept
 }
 
 // Path lists hold one JSON-quoted path per line, so any file name survives.

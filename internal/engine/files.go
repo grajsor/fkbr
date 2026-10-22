@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,7 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/exclude"
+	"fkbr/internal/inventory"
 	"fkbr/internal/localfs"
 	"fkbr/internal/product"
 	"fkbr/internal/receive"
@@ -34,7 +36,7 @@ func (e *Engine) Mkdir(ctx context.Context, req api.MkdirRequest) error {
 
 func (e *Engine) Remove(ctx context.Context, req api.RemoveRequest) (*api.RemoveResult, error) {
 	if req.Node == "" || req.Node == e.Self() {
-		return e.removeLocal(req)
+		return e.removeLocal(ctx, req)
 	}
 	var res api.RemoveResult
 	if err := e.remoteCall(ctx, req.Node, transport.TypeRemove, req, &res, removeTimeoutFactor); err != nil {
@@ -122,7 +124,47 @@ func (e *Engine) mkdirLocal(req api.MkdirRequest) error {
 	return root.MkdirAll(p, 0o755)
 }
 
-func (e *Engine) removeLocal(req api.RemoveRequest) (*api.RemoveResult, error) {
+// scannedBelow reads this node's scan for a sync plan and returns its
+// entries at and below paths (root-relative), keyed relative to base.
+func (e *Engine) scannedBelow(ctx context.Context, planID, base string, paths []string) (map[string]*inventory.Entry, error) {
+	tops := map[string]bool{}
+	for _, p := range paths {
+		if c, err := localfs.CleanRel(p); err == nil {
+			tops[inventoryRel(base, c)] = true
+		}
+	}
+	rc, err := e.st.OpenBlob(ctx, snapshotBlob(planID, e.Self()))
+	if err != nil {
+		return nil, err
+	}
+	defer rc.Close()
+	r, err := inventory.NewReader(bufio.NewReaderSize(rc, 256<<10))
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	m := map[string]*inventory.Entry{}
+	for {
+		ent, err := r.Next()
+		if errors.Is(err, io.EOF) {
+			return m, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		for q := ent.P; ; q = path.Dir(q) {
+			if tops[q] {
+				m[ent.P] = ent
+				break
+			}
+			if q == "." || q == "/" {
+				break
+			}
+		}
+	}
+}
+
+func (e *Engine) removeLocal(ctx context.Context, req api.RemoveRequest) (*api.RemoveResult, error) {
 	root, err := e.fs.WritableRoot(req.Root)
 	if err != nil {
 		return nil, err
@@ -143,10 +185,34 @@ func (e *Engine) removeLocal(req api.RemoveRequest) (*api.RemoveResult, error) {
 		}
 	}
 	res := &api.RemoveResult{}
+	var scanned map[string]*inventory.Entry
+	if req.Plan != "" {
+		if scanned, err = e.scannedBelow(ctx, req.Plan, base, req.Paths); err != nil {
+			return nil, fmt.Errorf("sync plan %s: %w", req.Plan, err)
+		}
+	}
+	keep := func(q string, dir bool) bool {
+		rel := inventoryRel(base, q)
+		if ex != nil && ex.Match(rel, dir) {
+			return true
+		}
+		if scanned == nil {
+			return false
+		}
+		if s := scanned[rel]; s != nil {
+			if live, err := e.fs.Stat(req.Root, q); err == nil && s.Unchanged(live) {
+				return false
+			}
+		}
+		if len(res.Kept) < 100 {
+			res.Kept = append(res.Kept, q)
+		}
+		return true
+	}
 	for _, raw := range req.Paths {
 		p, err := e.writablePath(req.Root, raw)
-		if err == nil && ex != nil {
-			err = removeExcept(root, p, func(q string, dir bool) bool { return ex.Match(inventoryRel(base, q), dir) })
+		if err == nil && (ex != nil || scanned != nil) {
+			err = removeExcept(root, p, keep)
 		} else if err == nil {
 			err = removeAll(root, p)
 		}
@@ -271,7 +337,7 @@ func (e *Engine) serveFileOp(ctx context.Context, m *transport.Message) error {
 		if err := e.acceptWrite(ctx, m.From); err != nil {
 			return err
 		}
-		res, err := e.removeLocal(req)
+		res, err := e.removeLocal(ctx, req)
 		if err != nil {
 			return err
 		}

@@ -69,6 +69,10 @@ const FeatureExclude = "exclude"
 // FeatureMove: as a source, the node refuses a move onto its own sources.
 const FeatureMove = "move"
 
+// FeatureRecheck: a sync's deletions on the node keep what changed since
+// its scan (RemoveRequest.Plan).
+const FeatureRecheck = "recheck"
+
 // Has reports whether the node's build has feature f.
 func (n *NodeInfo) Has(f string) bool { return slices.Contains(n.Features, f) }
 
@@ -388,11 +392,16 @@ type RemoveRequest struct {
 	// never take excluded files along.
 	Exclude []string `json:"exclude,omitempty"`
 	Base    string   `json:"base,omitempty"`
+	// Plan marks a sync's deletions: the node deletes only what its scan
+	// for that plan saw as it still is. Whatever is new or changed since
+	// stays, with the folders holding it, and is listed in Kept.
+	Plan string `json:"plan,omitempty"`
 }
 
 type RemoveResult struct {
 	Removed int      `json:"removed"` // paths fully removed
 	Errors  []string `json:"errors,omitempty"`
+	Kept    []string `json:"kept,omitempty"` // with Plan: changed since the scan
 }
 
 type ReadRequest struct {

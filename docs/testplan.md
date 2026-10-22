@@ -23,6 +23,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Hostile chunk on the share: escaping or overlong names, bad lengths and offsets, truncation, unknown kinds | Rejected before anything is written | auto, fuzzed (`FuzzReadNative`, 6 million inputs) |
 | Resume after a crash with ramped chunk sizes and read-ahead | The source regenerates identical chunks | auto, lab (torture) |
 | One sync plan applied four times at once through a node (TUI and CLI), then from another node | Applied once, one job; the others refused (all four ran, each submitting a job) | auto (`TestSyncPlanAppliesOnceAtATime`) |
+| A mirror applied after files appeared or changed on the target since its dry run | Only what the dry run showed is deleted; the rest is kept and reported, and the next dry run shows it (a file made after the dry run was deleted) | auto (`TestSyncKeepsChangesSinceTheDryRun`) |
 | A type change whose source entry is gone by the time it is sent | Target entry deleted, the job reports it vanished, the next sync has nothing to do | auto (`TestSyncSourceGoneAfterDeletes`) |
 
 ## 2. Process failures

@@ -294,7 +294,8 @@ plan and applies it. Only differences are transferred.
 - `-mirror` also deletes extra entries on the targets. If any target would
   lose more than `sync.max_deletes` entries (default 1000), the apply is
   refused unless you pass `-force`. `-max-deletes N` changes the limit for
-  one run.
+  one run. Only what the plan showed is deleted: a file that appeared or
+  changed on a target since the plan stays, and the apply lists it.
 - DST may name several nodes, `@all` or `@role`. Each entry is sent once for all
   the targets that need it.
 - In the TUI, F4 always shows the plan for confirmation first, with the
