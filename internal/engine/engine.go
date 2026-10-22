@@ -47,6 +47,10 @@ type Engine struct {
 	info api.NodeInfo
 	log  *slog.Logger
 
+	// applyMu makes ApplySync's check and mark of plan.Applied one step
+	// for every client of this node (TUI, CLI, socket).
+	applyMu sync.Mutex
+
 	// Job execution state, used only by Run.
 	jobsWG  sync.WaitGroup
 	jobsMu  sync.Mutex

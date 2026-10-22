@@ -423,7 +423,13 @@ func (e *Engine) SyncPlan(ctx context.Context, planID string) (*api.SyncPlan, er
 
 // ApplySync deletes first (mirror removals and type changes), then submits
 // one transfer per group of targets needing the same entries.
-func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api.SyncPlan, error) {
+// claimPlan marks a plan applied on the share before anything runs, even
+// partially: a plan is never applied twice. Applies through this node are
+// serialised; two nodes applying the same plan at the same moment can both
+// get past the check, as the share has no exclusive create.
+func (e *Engine) claimPlan(ctx context.Context, planID string, force bool) (*api.SyncPlan, error) {
+	e.applyMu.Lock()
+	defer e.applyMu.Unlock()
 	plan, err := e.SyncPlan(ctx, planID)
 	if err != nil {
 		return nil, err
@@ -439,8 +445,19 @@ func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api
 			}
 		}
 	}
+	plan.Applied = true
+	if err := e.savePlan(ctx, plan); err != nil {
+		return nil, fmt.Errorf("sync plan %s: %w", planID, err)
+	}
+	return plan, nil
+}
+
+func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api.SyncPlan, error) {
+	plan, err := e.claimPlan(ctx, planID, force)
+	if err != nil {
+		return nil, err
+	}
 	req := plan.Request
-	plan.Applied = true // even partially: a plan is never applied twice
 	for _, t := range plan.Targets {
 		if t.Delete+t.Replace == 0 {
 			continue

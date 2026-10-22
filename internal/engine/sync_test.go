@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -136,6 +138,94 @@ func TestSyncMirrorDeletesWithLimit(t *testing.T) {
 		t.Error("a plan must not apply twice")
 	}
 	nothingToDo(t, mustPlan(t, master, req))
+}
+
+// The TUI and a CLI apply the same plan through one node at once: it runs
+// once. Another node applying it afterwards is refused too.
+func TestSyncPlanAppliesOnceAtATime(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	s1, sroot := node(t, share, "s1")
+	makeTree(t, mroot, 5, 10<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	ctx := context.Background()
+	req := api.SyncRequest{SrcRoot: "data", SrcPath: "tree", DstNodes: []string{"s1"}, DstRoot: "data", DstPath: "m", Mode: api.SyncMirror}
+	applyAndWait(t, master, mustPlan(t, master, req), false)
+	os.WriteFile(filepath.Join(sroot, "m/stale"), nil, 0o644)
+	os.WriteFile(filepath.Join(mroot, "tree/new"), []byte("n"), 0o644)
+	plan := mustPlan(t, master, req)
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var applied []*api.SyncPlan
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if p, err := master.ApplySync(ctx, plan.ID, false); err == nil {
+				mu.Lock()
+				applied = append(applied, p)
+				mu.Unlock()
+			}
+		}()
+	}
+	wg.Wait()
+	if len(applied) != 1 || len(applied[0].Jobs) != 1 {
+		t.Fatalf("%d applies succeeded, want 1", len(applied))
+	}
+	if _, err := s1.ApplySync(ctx, plan.ID, false); err == nil {
+		t.Error("another node applied the plan again")
+	}
+	if j := waitJob(t, master, applied[0].Jobs[0], 30*time.Second); j.State != api.JobDone {
+		t.Fatalf("job: %s", j.State)
+	}
+	if jobs, _ := master.Jobs(ctx); len(jobs) != 2 { // the first sync and this one
+		t.Errorf("%d jobs on the share, want 2", len(jobs))
+	}
+	sameTree(t, filepath.Join(mroot, "tree"), filepath.Join(sroot, "m"))
+}
+
+// A type change deletes the target's entry first; if the source entry is
+// gone by the time it is sent, the job says so and the next sync settles.
+func TestSyncSourceGoneAfterDeletes(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	s1, sroot := node(t, share, "s1")
+	makeTree(t, mroot, 5, 10<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	ctx := context.Background()
+	req := api.SyncRequest{SrcRoot: "data", SrcPath: "tree", DstNodes: []string{"s1"}, DstRoot: "data", DstPath: "m", Mode: api.SyncMirror}
+	applyAndWait(t, master, mustPlan(t, master, req), false)
+	os.Remove(filepath.Join(mroot, "tree/sub/f001"))
+	os.MkdirAll(filepath.Join(mroot, "tree/sub/f001"), 0o755) // file -> dir
+	os.WriteFile(filepath.Join(mroot, "tree/sub/f001/in"), []byte("i"), 0o644)
+	plan := mustPlan(t, master, req)
+	if tg := target(plan, "s1"); tg.Replace != 1 {
+		t.Fatalf("plan: %+v", tg)
+	}
+	os.RemoveAll(filepath.Join(mroot, "tree/sub/f001"))
+
+	p, err := master.ApplySync(ctx, plan.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var problems []string
+	for _, id := range p.Jobs {
+		j := waitJob(t, master, id, 30*time.Second)
+		for _, pt := range j.Participants {
+			problems = append(problems, pt.Problems...)
+		}
+	}
+	if len(problems) == 0 || !strings.Contains(strings.Join(problems, "\n"), "f001: vanished") {
+		t.Errorf("job problems: %q", problems)
+	}
+	if _, err := os.Lstat(filepath.Join(sroot, "m/sub/f001")); !os.IsNotExist(err) {
+		t.Errorf("target f001: %v", err)
+	}
+	nothingToDo(t, mustPlan(t, master, req))
+	sameTree(t, filepath.Join(mroot, "tree"), filepath.Join(sroot, "m"))
 }
 
 func TestSyncFanOutGroups(t *testing.T) {

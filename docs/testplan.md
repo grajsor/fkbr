@@ -22,6 +22,8 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | Metadata: modes, mtimes, setuid without privileges, ownership with CAP_CHOWN only | As documented in protocol.md | auto |
 | Hostile chunk on the share: escaping or overlong names, bad lengths and offsets, truncation, unknown kinds | Rejected before anything is written | auto, fuzzed (`FuzzReadNative`, 6 million inputs) |
 | Resume after a crash with ramped chunk sizes and read-ahead | The source regenerates identical chunks | auto, lab (torture) |
+| One sync plan applied four times at once through a node (TUI and CLI), then from another node | Applied once, one job; the others refused (all four ran, each submitting a job) | auto (`TestSyncPlanAppliesOnceAtATime`) |
+| A type change whose source entry is gone by the time it is sent | Target entry deleted, the job reports it vanished, the next sync has nothing to do | auto (`TestSyncSourceGoneAfterDeletes`) |
 
 ## 2. Process failures
 
