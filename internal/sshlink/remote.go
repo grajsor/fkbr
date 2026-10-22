@@ -96,18 +96,36 @@ func (r *Remote) measure(before, home time.Time) {
 // Now is the home node's clock, as the share's clock is on NFS.
 func (r *Remote) Now() time.Time { return time.Now().Add(time.Duration(r.offset.Load())) }
 
-// sweep removes staged chunks of jobs the home node no longer has (left
-// by a node that stopped before it could clean up).
+// sweep removes what a node killed mid-job left in its chunk store: the
+// chunks of jobs the home node no longer has or in which this node's
+// source part has ended (the source keeps them only until every active
+// target acked), and half-written chunks in tmp/. It runs when the link
+// comes up and with every prune.
 func (r *Remote) sweep(ctx context.Context) {
-	des, err := os.ReadDir(filepath.Join(r.chunkDir, "data", r.self))
-	if err != nil {
-		return
-	}
-	for _, de := range des {
-		if _, err := r.GetJob(ctx, de.Name()); errors.Is(err, api.ErrUnknownJob) {
-			r.chunks.RemoveJobData(ctx, de.Name())
+	if des, err := os.ReadDir(filepath.Join(r.chunkDir, "data", r.self)); err == nil {
+		for _, de := range des {
+			j, err := r.GetJob(ctx, de.Name())
+			if errors.Is(err, api.ErrUnknownJob) || (err == nil && r.sourceEnded(j)) {
+				r.chunks.RemoveJobData(ctx, de.Name())
+			}
 		}
 	}
+	if des, err := os.ReadDir(filepath.Join(r.chunkDir, "tmp")); err == nil {
+		for _, de := range des {
+			if fi, err := de.Info(); err == nil && time.Since(fi.ModTime()) > store.StaleTmp {
+				os.Remove(filepath.Join(r.chunkDir, "tmp", de.Name()))
+			}
+		}
+	}
+}
+
+func (r *Remote) sourceEnded(j *api.Job) bool {
+	for _, p := range j.Participants {
+		if p.Node == r.self && p.Role == api.RoleSource {
+			return p.State.Terminal()
+		}
+	}
+	return false
 }
 
 func (r *Remote) handlers() map[string]handler {
@@ -275,6 +293,7 @@ func (r *Remote) Finish(ctx context.Context, msg *transport.Message, failed bool
 }
 
 func (r *Remote) Prune(ctx context.Context, maxAge time.Duration) error {
+	r.sweep(ctx)
 	return r.rec(ctx, "prune", map[string]time.Duration{"max_age": maxAge}, nil)
 }
 

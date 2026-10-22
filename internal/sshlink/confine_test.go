@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -189,5 +190,53 @@ func TestSameNameLinksOnce(t *testing.T) {
 		if linked != 1 {
 			t.Fatalf("round %d: %d links named web01, want 1", round, linked)
 		}
+	}
+}
+
+// A linked node killed mid-job leaves chunks behind; its next prune
+// removes those no job needs any more, and stale half-written ones.
+func TestLinkedNodeSweepsItsChunks(t *testing.T) {
+	ctx := context.Background()
+	_, mb, cli := linked(t, t.TempDir())
+	chunkDir := t.TempDir()
+	chunks, err := store.Open(chunkDir, "web01", store.Options{Private: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Remote{sess: cli, self: "web01", chunks: chunks, chunkDir: chunkDir, log: slog.New(slog.DiscardHandler)}
+	for id, state := range map[string]api.JobState{"j1": api.JobDone, "j2": api.JobRunning, "j3": ""} {
+		if state != "" { // j3: forgotten by the home node
+			mb.CreateJob(ctx, &api.Job{ID: id, Request: api.TransferRequest{SrcNode: "web01", DstNodes: []string{"home"}}})
+			mb.PutStatus(ctx, id, &api.JobStatus{Node: "web01", Role: api.RoleSource, State: state})
+		}
+		w, err := chunks.CreateChunk(ctx, id, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Write([]byte("chunk"))
+		if err := w.Commit([]byte("{}")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stale, fresh := filepath.Join(chunkDir, "tmp", ".half-old"), filepath.Join(chunkDir, "tmp", ".half-new")
+	os.WriteFile(stale, nil, 0o600)
+	os.WriteFile(fresh, nil, 0o600)
+	old := time.Now().Add(-2 * store.StaleTmp)
+	os.Chtimes(stale, old, old)
+
+	if err := r.Prune(ctx, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]bool{"j1": false, "j2": true, "j3": false} {
+		_, err := os.Stat(filepath.Join(chunkDir, "data", "web01", id))
+		if got := err == nil; got != want {
+			t.Errorf("%s: chunks kept %v, want %v", id, got, want)
+		}
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale tmp file kept: %v", err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("fresh tmp file removed: %v", err)
 	}
 }
