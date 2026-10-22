@@ -421,8 +421,6 @@ func (e *Engine) SyncPlan(ctx context.Context, planID string) (*api.SyncPlan, er
 	return &p, json.NewDecoder(rc).Decode(&p)
 }
 
-// ApplySync deletes first (mirror removals and type changes), then submits
-// one transfer per group of targets needing the same entries.
 // claimPlan marks a plan applied on the share before anything runs, even
 // partially: a plan is never applied twice. Applies through this node are
 // serialised; two nodes applying the same plan at the same moment can both
@@ -452,6 +450,8 @@ func (e *Engine) claimPlan(ctx context.Context, planID string, force bool) (*api
 	return plan, nil
 }
 
+// ApplySync deletes first (mirror removals and type changes), then submits
+// one transfer per group of targets needing the same entries.
 func (e *Engine) ApplySync(ctx context.Context, planID string, force bool) (*api.SyncPlan, error) {
 	plan, err := e.claimPlan(ctx, planID, force)
 	if err != nil {
