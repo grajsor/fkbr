@@ -121,6 +121,8 @@ the commit it was built from.
 - `docs/testplan.md`: what could break, how it is tested, and the results
 - `examples/config.yaml`: every option, for those who prefer a config file
   to flags
+- `docs/ssh.md`, `docs/local.md`: designs for nodes over ssh and for
+  local file systems (not built yet)
 
 ## Development
 
