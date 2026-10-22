@@ -237,7 +237,7 @@ func run() error {
 	if *stateDir != "" {
 		cfg.StateDir = *stateDir
 	}
-	if len(cfg.SSH) > 0 && cfg.NFSRoot == "" { // the swarm's records: private, in the state dir
+	if (cfg.Home || len(cfg.SSH) > 0) && cfg.NFSRoot == "" { // the swarm's records: private, in the state dir
 		if cfg.StateDir == "" {
 			cfg.StateDir = config.DefaultStateDir(cfg.NodeID)
 		}

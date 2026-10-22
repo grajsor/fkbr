@@ -95,7 +95,7 @@ func Open(roots []config.Root) (*Local, error) {
 			return nil, fmt.Errorf("root %q: %w", rc.ID, err)
 		}
 		l.roots[rc.ID] = &root{cfg: rc, r: r}
-		l.order = append(l.order, api.Root{ID: rc.ID, Path: rc.Path, Writable: rc.AllowWrite})
+		l.order = append(l.order, api.Root{ID: rc.ID, Path: rc.Path, Writable: rc.AllowWrite, Local: rc.Local})
 	}
 	return l, nil
 }

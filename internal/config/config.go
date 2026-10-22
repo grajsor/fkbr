@@ -23,6 +23,9 @@ type Root struct {
 	ID         string `yaml:"id"`
 	Path       string `yaml:"path"`
 	AllowWrite bool   `yaml:"allow_write"`
+	// Local: shown only to this node's own TUI and CLI; never published,
+	// never reachable by other nodes (see LocalRoot).
+	Local bool `yaml:"local"`
 	// Hide is the share's path inside this root, if it is there (cd ~ &&
 	// fkbr ~/box): left out of listings and transfers, never written. Set
 	// by Finish.
@@ -46,9 +49,17 @@ type Config struct {
 	SSH []string `yaml:"ssh"`
 	// SSHBin is fkbr on the ssh hosts (default "fkbr", on their PATH).
 	SSHBin string `yaml:"ssh_bin"`
+	// LocalRoot is a directory this node's own TUI and CLI may browse and
+	// copy from (and, without a share anyone else writes, into) but no
+	// other node sees: root "local". Default "/"; "none" turns it off.
+	LocalRoot string `yaml:"local_root"`
 	// Link: this node runs under `fkbr link`, linked to a home node over
 	// ssh; its share is where it keeps the chunks it sends.
 	Link bool `yaml:"-"`
+	// Home: this node is the home node of an ssh swarm (SSH lists hosts,
+	// or there is no share at all and hosts may be added later); its share
+	// is a private directory in StateDir.
+	Home bool `yaml:"-"`
 	// StateDir is local (never NFS) runtime storage: worker lock, socket.
 	// Default $TMPDIR (normally /tmp)/fkbr-<uid>-<node>.
 	StateDir string `yaml:"state_dir"`
@@ -284,7 +295,8 @@ func (c *Config) applyDefaults() {
 		// again at once.
 		setDur(&c.Poll.Active, 10*time.Millisecond)
 		setDur(&c.Poll.Idle, 10*time.Millisecond)
-	case len(c.SSH) > 0:
+	case c.Home || len(c.SSH) > 0:
+		c.Home = true
 		if c.NFSRoot == "" && c.StateDir != "" {
 			c.NFSRoot = filepath.Join(c.StateDir, "ssh")
 		}
@@ -444,6 +456,11 @@ func DirRoot(dir, share string, writable bool) (Root, error) {
 	}
 	return Root{ID: DefaultRootID, Path: abs, AllowWrite: writable}, nil
 }
+
+// PrivateShare reports whether nobody but this swarm's nodes can write the
+// share: an ssh swarm's records and links, where no directory is open to
+// others.
+func (c *Config) PrivateShare() bool { return c.Link || c.Home }
 
 // RefreshNFS decides whether to compensate for NFS attribute caching on
 // the share (nfs_refresh: auto looks at its mount options).

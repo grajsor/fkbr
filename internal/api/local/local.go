@@ -32,7 +32,7 @@ func Open(cfg *config.Config, version string, log *slog.Logger) (*Client, error)
 	if err != nil {
 		return nil, err
 	}
-	if len(cfg.SSH) > 0 {
+	if cfg.Home || len(cfg.SSH) > 0 {
 		c, err := openHome(cfg, fsys, version, log)
 		if err != nil {
 			fsys.Close()

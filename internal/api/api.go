@@ -31,6 +31,9 @@ type Root struct {
 	ID       string `json:"id"`
 	Path     string `json:"path"`
 	Writable bool   `json:"writable"`
+	// Local: this node's own TUI and CLI see it, nobody else. It is not
+	// published, and other nodes cannot reach it (engine/localroot.go).
+	Local bool `json:"local,omitempty"`
 }
 
 // NodeInfo is what a node publishes about itself in the shared registry.

@@ -26,6 +26,9 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if err := e.checkOwn(job, api.RoleTarget); err != nil {
+		return e.newStatus(id, api.RoleTarget).finish(ctx, api.JobFailed, err)
+	}
 	status := e.newStatus(id, api.RoleTarget)
 	if prev := ownStatus(job, e.Self(), api.RoleTarget); prev != nil {
 		if prev.State.Terminal() {

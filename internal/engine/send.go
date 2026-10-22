@@ -59,6 +59,9 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	if err := e.checkOwn(job, api.RoleSource); err != nil {
+		return e.newStatus(id, api.RoleSource).finish(ctx, api.JobFailed, err)
+	}
 	s := &sender{
 		e: e, job: job, status: e.newStatus(id, api.RoleSource),
 		detached: map[string]bool{}, acks: map[string]int{}, progress: map[string]time.Time{}, gone: map[string]time.Time{},
