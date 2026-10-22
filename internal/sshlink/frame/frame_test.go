@@ -222,6 +222,29 @@ func TestSilentPeerEndsSession(t *testing.T) {
 	}
 }
 
+// A link that dies mid-transfer: the peer stops reading and sending, so a
+// writer blocks in conn.Write holding the write lock. The session must
+// still end after Dead, not when TCP gives up hours later.
+func TestDeadLinkWhileWriting(t *testing.T) {
+	a, b := net.Pipe()
+	go io.WriteString(b, Magic)
+	go io.ReadFull(b, make([]byte, len(Magic))) // then nobody reads b again
+	c, err := Client(a, Options{Ping: 20 * time.Millisecond, Dead: 80 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { c.Close(); b.Close() })
+	go c.Open() // blocks in conn.Write, holding the write lock
+	select {
+	case <-c.Done():
+		if !strings.Contains(c.Err().Error(), "nothing from the other side") {
+			t.Errorf("err %v", c.Err())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("session with a writer stuck on a dead link did not end")
+	}
+}
+
 func frameBytes(typ byte, id uint32, payload []byte) []byte {
 	b := make([]byte, headerLen+len(payload))
 	b[0] = typ

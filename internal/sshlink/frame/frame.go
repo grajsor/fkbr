@@ -88,6 +88,10 @@ type Session struct {
 	done    chan struct{}
 
 	lastRecv atomic.Int64 // unix ns
+	// A ping or pong being written. They go out on their own goroutine,
+	// so the keepalive never waits for a writer stuck on a dead link
+	// (it holds wmu) and still ends the session after Dead.
+	pinging, ponging atomic.Bool
 }
 
 // Client starts the side that dialed (odd stream IDs).
@@ -252,8 +256,20 @@ func (s *Session) keepalive() {
 				s.fail(fmt.Errorf("%w: nothing from the other side for %s", ErrClosed, s.opts.Dead))
 				return
 			}
-			s.write(typePing, 0, nil)
+			s.control(&s.pinging, typePing)
 		}
+	}
+}
+
+// control sends a ping or pong without waiting for it, at most one of each
+// at a time: any frame from the peer shows it is alive, so one dropped
+// while another is still on its way costs nothing.
+func (s *Session) control(busy *atomic.Bool, typ byte) {
+	if busy.CompareAndSwap(false, true) {
+		go func() {
+			defer busy.Store(false)
+			s.write(typ, 0, nil)
+		}()
 	}
 }
 
@@ -314,7 +330,7 @@ func checkLen(typ byte, n uint32) error {
 func (s *Session) dispatch(typ byte, id uint32, payload []byte) error {
 	switch typ {
 	case typePing:
-		go s.write(typePong, 0, nil) // never block the reader on a write
+		s.control(&s.ponging, typePong) // never block the reader on a write
 		return nil
 	case typePong:
 		return nil
