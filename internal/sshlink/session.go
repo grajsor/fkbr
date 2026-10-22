@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -102,6 +103,9 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// sshGrace is how long ssh's output is read after it exited or was told to.
+const sshGrace = 2 * time.Second
+
 // Backoff between attempts to start a host's session.
 var (
 	backoffMin = time.Second
@@ -161,21 +165,48 @@ func (h *Home) session(ctx context.Context, host Host, o *SessionOptions) error 
 	// Its own process group: Ctrl+C in the TUI's terminal must not kill ssh
 	// before the remote node could leave.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdin, err := cmd.StdinPipe()
+	// Our own pipes, not Std*Pipe: once ssh has exited, what it wrote is
+	// read for sshGrace, then the read ends are closed. Something ssh left
+	// running (a ControlPersist master) may hold its stdout and stderr open
+	// for good; ssh's exit, not their EOF, ends the session.
+	stdout, outW, err := os.Pipe()
 	if err != nil {
 		return err
 	}
-	stdout, err := cmd.StdoutPipe()
+	inR, stdin, err := os.Pipe()
 	if err != nil {
+		stdout.Close()
+		outW.Close()
 		return err
 	}
-	stderr, err := cmd.StderrPipe()
+	stderr, errW, err := os.Pipe()
 	if err != nil {
+		stdout.Close()
+		outW.Close()
+		inR.Close()
+		stdin.Close()
 		return err
 	}
-	if err := cmd.Start(); err != nil {
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = inR, outW, errW
+	err = cmd.Start()
+	inR.Close() // ssh has its own copies now
+	outW.Close()
+	errW.Close()
+	if err != nil {
+		stdout.Close()
+		stdin.Close()
+		stderr.Close()
 		return fmt.Errorf("starting %s: %w", o.SSH[0], err)
 	}
+	exited := make(chan error, 1)
+	go func() {
+		err := cmd.Wait()
+		time.AfterFunc(sshGrace, func() {
+			stdout.Close()
+			stderr.Close()
+		})
+		exited <- err
+	}()
 	last := &lastLine{}
 	logged := make(chan struct{})
 	go func() {
@@ -205,16 +236,16 @@ func (h *Home) session(ctx context.Context, host Host, o *SessionOptions) error 
 	conn := &pipeConn{r: stdout, w: stdin}
 	err = h.ServeConn(context.WithoutCancel(ctx), conn, name, o.Frame)
 	close(served)
-	// The session has ended (or never started): let ssh go.
+	// The session has ended (or never started): let ssh go, and read its
+	// last words on stderr.
 	stdin.Close()
-	exited := make(chan error, 1)
-	go func() { <-logged; exited <- cmd.Wait() }()
 	select {
 	case <-exited:
 	case <-time.After(5 * time.Second):
 		cmd.Process.Kill()
 		<-exited
 	}
+	<-logged // ends at stderr's EOF, or sshGrace after ssh exited
 	if l := last.get(); l != "" && !errors.Is(err, frame.ErrClosed) {
 		return fmt.Errorf("%v (ssh: %s)", err, l)
 	} else if l != "" {
@@ -262,7 +293,11 @@ func Probe(ctx context.Context, host Host, o SessionOptions) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, o.SSH[0], sshArgs(&o, host, remoteCommand(&o, host, "version"))...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = sshGrace // output held open after ssh exited (see session)
 	out, err := cmd.CombinedOutput()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		err = nil // ssh succeeded; only its output stayed open
+	}
 	text := strings.TrimSpace(string(out))
 	if err != nil {
 		if i := strings.LastIndexByte(text, '\n'); i >= 0 {
