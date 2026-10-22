@@ -223,18 +223,18 @@ func (h *Home) greet(ctx context.Context, st *frame.Stream, sess *frame.Session,
 		if a.Node == h.self {
 			return nil, fmt.Errorf("%w: %s on %s has the home node's name; pass -node with another name there", api.ErrNotAllowed, a.Node, host)
 		}
-		h.mu.Lock()
-		other := h.peers[a.Node]
-		h.mu.Unlock()
-		if other != nil {
-			return nil, fmt.Errorf("%w: a node named %s is linked already (from %s)", api.ErrNotAllowed, a.Node, other.host)
-		}
 		mb, err := store.Open(h.dir, a.Node, h.opts)
 		if err != nil {
 			return nil, err
 		}
-		p = &peer{node: a.Node, host: host, sess: sess, mb: mb}
+		// One step: two hosts saying the same name at once must not
+		// both get in.
 		h.mu.Lock()
+		if other := h.peers[a.Node]; other != nil {
+			h.mu.Unlock()
+			return nil, fmt.Errorf("%w: a node named %s is linked already (from %s)", api.ErrNotAllowed, a.Node, other.host)
+		}
+		p = &peer{node: a.Node, host: host, sess: sess, mb: mb}
 		h.peers[a.Node] = p
 		h.mu.Unlock()
 		return mb.Now(), nil

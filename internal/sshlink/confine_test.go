@@ -2,6 +2,7 @@ package sshlink
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"net"
 	"os"
@@ -151,5 +152,42 @@ func TestAbortedBlobNotCommitted(t *testing.T) {
 	if rc, err := mb.OpenBlob(context.Background(), "plans/p1/copy-x"); err == nil {
 		rc.Close()
 		t.Error("an aborted blob was published")
+	}
+}
+
+// Two hosts that both say they are web01, at the same moment: one links,
+// the other is refused.
+func TestSameNameLinksOnce(t *testing.T) {
+	for round := range 20 {
+		dir := t.TempDir()
+		h := NewHome(dir, "home", store.Options{}, nil)
+		if _, err := h.Open(); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		type result struct {
+			r   *Remote
+			err error
+		}
+		results := make(chan result, 2)
+		for i := range 2 {
+			a, b := net.Pipe()
+			go h.ServeConn(ctx, b, fmt.Sprint("host", i), frame.Options{})
+			go func() {
+				r, err := Dial(ctx, a, "web01", "test", filepath.Join(t.TempDir(), "chunks"), frame.Options{}, nil)
+				results <- result{r, err}
+			}()
+		}
+		linked := 0
+		for range 2 {
+			if res := <-results; res.err == nil {
+				linked++
+				defer res.r.Close()
+			}
+		}
+		cancel()
+		if linked != 1 {
+			t.Fatalf("round %d: %d links named web01, want 1", round, linked)
+		}
 	}
 }
