@@ -26,6 +26,27 @@ func open(t *testing.T, share, self string) *Dir {
 	return m
 }
 
+// A job folder CreateJob has just made, with nothing in it yet, is not
+// an orphan: a prune at that moment removed it, and Submit failed with
+// "chmod jobs/<id>: no such file or directory" (or lost a job it had just
+// written).
+func TestPruneKeepsJobBeingCreated(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	dir := filepath.Join(share, "jobs", "000000000000000000000009")
+	os.MkdirAll(dir, 0o777)
+	a.PruneJobs(ctx, 0)
+	if _, err := os.Stat(dir); err != nil {
+		t.Fatal("an empty job folder made a moment ago was pruned")
+	}
+	old := time.Now().Add(-time.Hour)
+	os.Chtimes(dir, old, old)
+	a.PruneJobs(ctx, 0)
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatal("an old empty job folder was never pruned")
+	}
+}
+
 func TestProtocolMismatch(t *testing.T) {
 	share := t.TempDir()
 	open(t, share, "a")

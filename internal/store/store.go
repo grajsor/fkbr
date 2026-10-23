@@ -456,7 +456,13 @@ func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 		if errors.Is(err, fs.ErrNotExist) {
 			// A folder without its record: half pruned (a status written
 			// as it went), or recreated by a late writer. Nobody reads it.
-			if validJobID(de.Name()) == nil && now.Sub(newestEntry(dir)) > max(maxAge, minBlobAge) {
+			// One with nothing in it yet may be a job CreateJob is making:
+			// its own mtime tells.
+			newest := newestEntry(dir)
+			if fi, err := os.Stat(dir); err == nil && newest.IsZero() {
+				newest = fi.ModTime()
+			}
+			if validJobID(de.Name()) == nil && now.Sub(newest) > max(maxAge, minBlobAge) {
 				errs = append(errs, removeRacing(dir))
 			}
 			continue
