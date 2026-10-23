@@ -8,23 +8,21 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"fkbr/internal/api"
 	"fkbr/internal/sshlink/frame"
-	"fkbr/internal/store"
 	"fkbr/internal/transport"
 )
 
 // Remote is a node's end of its link to the home node. Records go to the
-// home node; the chunks this node sends stay in a private directory on
-// its own disk (chunkDir) until every target has them.
+// home node; the chunks this node sends stay in its memory until every
+// active target has read them (memChunks).
 type Remote struct {
 	sess     *frame.Session
 	self     string
-	chunks   *store.Dir
+	chunks   *memChunks
 	chunkDir string
 	log      *slog.Logger
 	offset   atomic.Int64  // home clock minus ours, ns
@@ -47,19 +45,14 @@ var (
 )
 
 // Dial starts the remote end on conn (stdin and stdout under ssh): the
-// handshake, then hello as node self. chunkDir must be private and on
-// local disk.
+// handshake, then hello as node self. chunkDir is where builds before
+// this one staged chunks on disk; what one left there is removed.
 func Dial(ctx context.Context, conn io.ReadWriteCloser, self, version, chunkDir string, opts frame.Options, log *slog.Logger) (*Remote, error) {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	if err := os.MkdirAll(chunkDir, 0o700); err != nil {
-		return nil, err
-	}
-	chunks, err := store.Open(chunkDir, self, store.Options{Private: true, NoSync: true})
-	if err != nil {
-		return nil, err
-	}
+	os.RemoveAll(chunkDir)
+	chunks := newMemChunks(self)
 	sess, err := frame.Server(conn, opts)
 	if err != nil {
 		return nil, err
@@ -97,25 +90,15 @@ func (r *Remote) measure(before, home time.Time) {
 // Now is the home node's clock, as the share's clock is on NFS.
 func (r *Remote) Now() time.Time { return time.Now().Add(time.Duration(r.offset.Load())) }
 
-// sweep removes what a node killed mid-job left in its chunk store: the
-// chunks of jobs the home node no longer has or in which this node's
-// source part has ended (the source keeps them only until every active
-// target acked), and half-written chunks in tmp/. It runs when the link
-// comes up and with every prune.
+// sweep drops the chunks of jobs the home node no longer has, or in which
+// this node's source part has ended (the source keeps them only until
+// every active target read them): a job that ended without its source
+// cleaning up. It runs when the link comes up and with every prune.
 func (r *Remote) sweep(ctx context.Context) {
-	if des, err := os.ReadDir(filepath.Join(r.chunkDir, "data", r.self)); err == nil {
-		for _, de := range des {
-			j, err := r.GetJob(ctx, de.Name())
-			if errors.Is(err, api.ErrUnknownJob) || (err == nil && r.sourceEnded(j)) {
-				r.chunks.RemoveJobData(ctx, de.Name())
-			}
-		}
-	}
-	if des, err := os.ReadDir(filepath.Join(r.chunkDir, "tmp")); err == nil {
-		for _, de := range des {
-			if fi, err := de.Info(); err == nil && time.Since(fi.ModTime()) > store.StaleTmp {
-				os.Remove(filepath.Join(r.chunkDir, "tmp", de.Name()))
-			}
+	for _, id := range r.chunks.jobIDs() {
+		j, err := r.GetJob(ctx, id)
+		if errors.Is(err, api.ErrUnknownJob) || (err == nil && r.sourceEnded(j)) {
+			r.chunks.RemoveJobData(ctx, id)
 		}
 	}
 }
@@ -239,7 +222,7 @@ func (r *Remote) Unregister(ctx context.Context, node string) error {
 // chunks from local disk.
 func (r *Remote) Leave(ctx context.Context) error {
 	err := r.rec(ctx, "leave", nil, nil)
-	os.RemoveAll(filepath.Join(r.chunkDir, "data", r.self))
+	r.chunks.RemoveAll()
 	return err
 }
 
@@ -383,8 +366,14 @@ func (r *Remote) StagedBytes(ctx context.Context, id string) (int64, int64, erro
 	return r.chunks.StagedBytes(ctx, id)
 }
 
-// FreeBytes is the space left here, where the chunks are staged.
+// FreeBytes is the memory the chunks staged here may still take.
 func (r *Remote) FreeBytes() (int64, error) { return r.chunks.FreeBytes() }
+
+// ChunksInMemory: a restart loses the chunks staged here (send.go).
+func (r *Remote) ChunksInMemory() bool { return true }
+
+// ChunkPeak is the most memory this node's chunks ever held (tests).
+func (r *Remote) ChunkPeak() int64 { return r.chunks.Peak() }
 
 // RemoveJobData removes the chunks here and the acks on the home node.
 func (r *Remote) RemoveJobData(ctx context.Context, id string) error {

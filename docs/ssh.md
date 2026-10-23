@@ -90,17 +90,16 @@ and acks).
 ### Data: straight from source to target
 
 - A source keeps the chunks it makes (FKB2, zstd, SHA-256, as everywhere)
-  in a private directory on its own disk until every active target has
-  acked them; `job_quota` bounds them per job and `staging_quota` in all.
-  The home node's `chunk_size` and quotas apply on every host: it passes
-  those it changed to `fkbr link`. A chunk that would not fit the disk is
-  waited for (targets consuming) before it is started.
-- Over ssh chunks are 32 MiB and `job_quota` is 128 MiB (on a share 128
-  MiB and 1 GiB), and they are not synced: a chunk is usually read and
-  deleted before the kernel writes it out, so the source's disk only
-  reads what it sends. Synced 128 MiB chunks made the source write each
-  one to disk while reading the next: a 1 GiB copy took 15.6 s, now
-  about 10 s (`benchmarks.md`, against rsync).
+  in its memory until every active target has read them. **No chunk is
+  written to any disk**, on the source, the target or the home node.
+  `job_quota` bounds them per job and `staging_quota` in all; a chunk is
+  also started only while the host's `MemAvailable` less 64 MiB has room
+  for it, so a small box waits for its targets instead of swapping.
+- Over ssh chunks are 32 MiB, `job_quota` is 128 MiB and
+  `staging_quota` a quarter of the host's RAM, at most 512 MiB (on a
+  share 128 MiB, 1 GiB and 4 GiB). The home node's `chunk_size` and
+  quotas apply on every host: it passes those it changed to `fkbr link`;
+  a host's own default `staging_quota` is sized to its own RAM.
 - A target reads each chunk from its source over the links and checks it
   with the strict chunk reader, as it would any chunk. Between the home
   node and a remote node the path is their session; between two remote
@@ -118,9 +117,16 @@ and acks).
   the cause, not a bare reset. A node whose link stays down goes offline
   after `offline_after` and is detached, as any offline node; a target
   whose job failed anyway gets it again with `catchup`.
-- A restarted node asks its source for the first chunk it has not acked;
-  the source builds chunks the same way every time and sends from there.
-  Nothing partial is ever installed.
+- A restarted target asks its source for the first chunk it has not
+  acked; the source still holds it (the slowest target holds the
+  window). Nothing partial is ever installed.
+- A restarted source has lost the chunks it held. It builds them again
+  from the lowest chunk an active target has not acked (chunks come out
+  the same every time; those before it are made and dropped). Each
+  target records the SHA-256 of the last chunk it applied; if the
+  rebuilt one differs, the source's files changed and the job fails
+  ("start the copy again"). A target that read a chunk's meta just
+  before the restart waits for the chunk again.
 - When the home node quits, it asks every remote node to stop: each
   leaves the swarm while its link is still up, then ssh closes.
 - A request handed to a remote node stays on the home node until that

@@ -133,28 +133,54 @@ func TestLinkArgs(t *testing.T) {
 	}
 }
 
-// Over ssh chunks are staged on local disk: smaller and fewer, on the
-// home node and its linked hosts alike, so they need no flags for it.
+// fakeMemInfo makes MemInfo read a meminfo saying total bytes of RAM.
+func fakeMemInfo(t *testing.T, total int64) {
+	p := filepath.Join(t.TempDir(), "meminfo")
+	os.WriteFile(p, []byte(fmt.Sprintf("MemTotal:       %d kB\nMemFree:          1000 kB\nMemAvailable:   %d kB\n", total>>10, total>>11)), 0o644)
+	old := MemInfoPath
+	MemInfoPath = p
+	t.Cleanup(func() { MemInfoPath = old })
+}
+
+func TestMemInfo(t *testing.T) {
+	fakeMemInfo(t, 1740<<20)
+	if n, err := MemInfo("MemTotal"); err != nil || n != 1740<<20 {
+		t.Errorf("MemTotal: %d %v", n, err)
+	}
+	if n, err := MemInfo("MemAvailable"); err != nil || n != 870<<20 {
+		t.Errorf("MemAvailable: %d %v", n, err)
+	}
+	if _, err := MemInfo("Mem"); err == nil {
+		t.Error("a field that is not there: no error")
+	}
+}
+
+// Over ssh chunks are staged in memory: smaller and fewer, on the home
+// node and its linked hosts alike, so they need no flags for it; the
+// staging quota is sized to each host's RAM.
 func TestSSHTransferDefaults(t *testing.T) {
+	fakeMemInfo(t, 1740<<20)
 	for _, c := range []struct {
-		cfg         Config
-		chunk, job  ByteSize
-		description string
+		cfg                 Config
+		chunk, job, staging ByteSize
+		description         string
 	}{
-		{Config{NFSRoot: t.TempDir()}, DefaultChunkSize, DefaultJobQuota, "share"},
-		{Config{Home: true}, SSHChunkSize, SSHJobQuota, "home"},
-		{Config{Link: true}, SSHChunkSize, SSHJobQuota, "link"},
-		{Config{Home: true, Transfer: Transfer{ChunkSize: 256 << 20}}, 256 << 20, 256 << 20, "home, bigger chunks"},
+		{Config{NFSRoot: t.TempDir()}, DefaultChunkSize, DefaultJobQuota, DefaultStagingQuota, "share"},
+		{Config{Home: true}, SSHChunkSize, SSHJobQuota, 435 << 20, "home"},
+		{Config{Link: true}, SSHChunkSize, SSHJobQuota, 435 << 20, "link"},
+		{Config{Home: true, Transfer: Transfer{ChunkSize: 256 << 20}}, 256 << 20, 256 << 20, 435 << 20, "home, bigger chunks"},
+		{Config{Home: true, Transfer: Transfer{JobQuota: 1 << 30}}, SSHChunkSize, 1 << 30, 1 << 30, "home, a bigger job quota"},
 	} {
 		cfg := c.cfg
 		cfg.NodeID, cfg.StateDir, cfg.Roots = "n", t.TempDir(), []Root{{ID: "files", Path: t.TempDir()}}
 		if err := cfg.Finish(); err != nil {
 			t.Fatalf("%s: %v", c.description, err)
 		}
-		if cfg.Transfer.ChunkSize != c.chunk || cfg.Transfer.JobQuota != c.job {
-			t.Errorf("%s: chunk %d job %d, want %d %d", c.description, cfg.Transfer.ChunkSize, cfg.Transfer.JobQuota, c.chunk, c.job)
+		if cfg.Transfer.ChunkSize != c.chunk || cfg.Transfer.JobQuota != c.job || cfg.Transfer.StagingQuota != c.staging {
+			t.Errorf("%s: chunk %d job %d staging %d, want %d %d %d", c.description,
+				cfg.Transfer.ChunkSize, cfg.Transfer.JobQuota, cfg.Transfer.StagingQuota, c.chunk, c.job, c.staging)
 		}
-		if cfg.Home && c.chunk == SSHChunkSize && len(cfg.LinkArgs()) != 0 {
+		if cfg.Home && c.chunk == SSHChunkSize && c.job == SSHJobQuota && len(cfg.LinkArgs()) != 0 {
 			t.Errorf("%s: link args %q", c.description, cfg.LinkArgs())
 		}
 	}

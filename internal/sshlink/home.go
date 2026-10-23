@@ -44,7 +44,9 @@ type Home struct {
 	opts store.Options
 	log  *slog.Logger
 
-	mu    sync.Mutex
+	mu sync.Mutex
+	// own are the chunks the home node sends, in memory (Open).
+	own   *memChunks
 	peers map[string]*peer
 	// hosts is the link state by host, for Nodes and the TUI.
 	hosts map[string]*hostState
@@ -157,21 +159,67 @@ func NewHome(dir, self string, opts store.Options, log *slog.Logger) *Home {
 	return &Home{dir: dir, self: self, opts: opts, log: log, peers: map[string]*peer{}, hosts: map[string]*hostState{}, started: make(chan struct{})}
 }
 
-// Open returns the home node's own transport and store: the mailbox on
-// the private share, with chunk reads from linked nodes going to them.
+// Open returns the home node's own transport and store: the records on
+// the private share, its own chunks in memory, chunk reads from linked
+// nodes going to them. Each Open starts with no chunks, as a restarted
+// home node does.
 func (h *Home) Open() (*HomeNode, error) {
 	mb, err := store.Open(h.dir, h.self, h.opts)
 	if err != nil {
 		return nil, err
 	}
-	return &HomeNode{Dir: mb, h: h}, nil
+	n := &HomeNode{Dir: mb, h: h, chunks: newMemChunks(h.self)}
+	h.mu.Lock()
+	h.own = n.chunks
+	h.mu.Unlock()
+	return n, nil
+}
+
+// ownChunks are the chunks the home node itself sends.
+func (h *Home) ownChunks() *memChunks {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.own == nil {
+		h.own = newMemChunks(h.self)
+	}
+	return h.own
 }
 
 // HomeNode is the home node's transport.Transport and transport.Store.
+// Its records are in Dir, acks included; the chunks it sends are in
+// memory (memChunks), never in Dir.
 type HomeNode struct {
 	*store.Dir
-	h *Home
+	h      *Home
+	chunks *memChunks
 }
+
+func (n *HomeNode) CreateChunk(ctx context.Context, id string, seq int) (transport.ChunkWriter, error) {
+	return n.chunks.CreateChunk(ctx, id, seq)
+}
+
+func (n *HomeNode) DeleteChunk(ctx context.Context, id string, seq int) error {
+	return n.chunks.DeleteChunk(ctx, id, seq)
+}
+
+func (n *HomeNode) StagedBytes(ctx context.Context, id string) (int64, int64, error) {
+	return n.chunks.StagedBytes(ctx, id)
+}
+
+// FreeBytes is the memory the home node's chunks may still take.
+func (n *HomeNode) FreeBytes() (int64, error) { return n.chunks.FreeBytes() }
+
+// RemoveJobData drops the job's chunks and its acks (records in Dir).
+func (n *HomeNode) RemoveJobData(ctx context.Context, id string) error {
+	n.chunks.RemoveJobData(ctx, id)
+	return n.Dir.RemoveJobData(ctx, id)
+}
+
+// ChunksInMemory: a restart loses the chunks staged here (send.go).
+func (n *HomeNode) ChunksInMemory() bool { return true }
+
+// ChunkPeak is the most memory the home node's chunks ever held (tests).
+func (n *HomeNode) ChunkPeak() int64 { return n.chunks.Peak() }
 
 var (
 	_ transport.Transport = (*HomeNode)(nil)
@@ -180,14 +228,14 @@ var (
 
 func (n *HomeNode) ChunkMeta(ctx context.Context, src, id string, seq int) ([]byte, error) {
 	if src == n.h.self {
-		return n.Dir.ChunkMeta(ctx, src, id, seq)
+		return n.chunks.ChunkMeta(ctx, src, id, seq)
 	}
 	return n.h.chunkMeta(ctx, src, id, seq)
 }
 
 func (n *HomeNode) OpenChunk(ctx context.Context, src, id string, seq int) (io.ReadCloser, error) {
 	if src == n.h.self {
-		return n.Dir.OpenChunk(ctx, src, id, seq)
+		return n.chunks.OpenChunk(ctx, src, id, seq)
 	}
 	return n.h.openChunk(ctx, src, id, seq)
 }
@@ -609,7 +657,7 @@ func (h *Home) handlers(p *peer) map[string]handler {
 				return nil, err
 			}
 			if a.Src == h.self {
-				return waitMeta(ctx, mb, a)
+				return waitMeta(ctx, h.ownChunks(), a)
 			}
 			return h.chunkMeta(ctx, a.Src, a.ID, a.Seq)
 		},
@@ -623,7 +671,7 @@ func (h *Home) handlers(p *peer) map[string]handler {
 			}
 			var rc io.ReadCloser
 			if a.Src == h.self {
-				rc, err = mb.OpenChunk(ctx, a.Src, a.ID, a.Seq)
+				rc, err = h.ownChunks().OpenChunk(ctx, a.Src, a.ID, a.Seq)
 			} else {
 				rc, err = h.openChunk(ctx, a.Src, a.ID, a.Seq)
 			}
@@ -640,9 +688,9 @@ func (h *Home) handlers(p *peer) map[string]handler {
 	}
 }
 
-// waitMeta answers a chunk-meta call from local disk, waiting up to
-// metaWait for the chunk to be published.
-func waitMeta(ctx context.Context, st transport.Store, a *chunkRef) ([]byte, error) {
+// waitMeta answers a chunk-meta call from the chunks staged here, waiting
+// up to metaWait for the chunk to be published.
+func waitMeta(ctx context.Context, st chunkSource, a *chunkRef) ([]byte, error) {
 	deadline := time.Now().Add(metaWait)
 	for {
 		meta, err := st.ChunkMeta(ctx, a.Src, a.ID, a.Seq)

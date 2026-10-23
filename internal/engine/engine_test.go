@@ -56,16 +56,25 @@ func nodeCfg(t *testing.T, share, id string) *config.Config {
 // simulate restarts.
 func build(t *testing.T, cfg *config.Config) *Engine {
 	t.Helper()
+	return buildWrapped(t, cfg, nil)
+}
+
+// buildWrapped is build with the node's store wrapped (nil: as it is).
+func buildWrapped(t *testing.T, cfg *config.Config, wrap func(transport.Store) transport.Store) *Engine {
+	t.Helper()
 	fsys, err := localfs.Open(cfg.Roots)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if wrap == nil {
+		wrap = func(st transport.Store) transport.Store { return st }
 	}
 	// Refresh on: exercises the NFS-compensation paths everywhere (on a
 	// local filesystem they change nothing observable).
 	opts := nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter, Refresh: true}
 	if linkTest {
 		tr, st := linked(t, cfg, opts)
-		e := New(cfg, fsys, tr, st, Options{Version: "test"})
+		e := New(cfg, fsys, tr, wrap(st), Options{Version: "test"})
 		t.Cleanup(func() { e.Close() })
 		return e
 	}
@@ -73,7 +82,7 @@ func build(t *testing.T, cfg *config.Config) *Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := New(cfg, fsys, mb, mb, Options{Version: "test"})
+	e := New(cfg, fsys, mb, wrap(mb), Options{Version: "test"})
 	t.Cleanup(func() { e.Close() })
 	return e
 }

@@ -15,7 +15,7 @@ Tested on CentOS 7, Rocky 8, 9 and 10, and Debian 12.
 | `<root>/.fkbr-tmp/` in a destination root | staging for a transfer in progress | removed when the transfer ends; leftovers of a node that was down are removed at its next prune |
 | the share directory you pass | node registry; finished job records, sync plans and failed requests | records pruned after `keep_done` (1h), see below |
 | `/tmp/fkbr-<uid>-<node>-ssh/` | without a share, or with `ssh:`: the same as the share above, private to you | as above |
-| `/tmp/fkbr-<uid>-<node>-link/` | on a host linked over ssh: lock, socket, and the data it sends until its targets have it | data removed when the job ends; the rest on a clean exit |
+| `/tmp/fkbr-<uid>-<node>-link/` | on a host linked over ssh: lock and socket (the data it sends stays in memory) | removed on a clean exit |
 | `~/.fkbr.conf` | only if there is no other config file: the ssh hosts you linked from the TUI (F7) | until you unlink them (F8) or delete it |
 
 Nothing is written to `/etc` or `/var`. The one file fkbr may put in your
@@ -241,15 +241,17 @@ directory without one), and opens the TUI with all of them.
   refused there. A config file with `nfs_root` gets no `ssh:` list.
   A host whose link is not up shows in the node list with why.
 - **Runtime files:** the home node keeps the swarm's records in
-  `/tmp/fkbr-<uid>-<node>-ssh/ssh`; another host keeps the data it sends in
-  `/tmp/fkbr-<uid>-<node>-link` until the targets have it (up to
-  `transfer.job_quota`, 128 MiB over ssh, per job; `staging_quota`, 4 GiB,
-  in all). Chunks are 32 MiB over ssh, so a chunk is usually read and
-  gone before it reaches the disk.
-  Both are private to the user. Where `/tmp` is in memory, that is RAM:
-  set the quotas on the home node (config file or `-job-quota 256M`,
-  `-staging-quota 512M`), they apply on every host it links. When the
-  disk fills, the sender waits for the targets.
+  `/tmp/fkbr-<uid>-<node>-ssh/ssh`; another host keeps only its lock and
+  socket in `/tmp/fkbr-<uid>-<node>-link`. Both are private to the user.
+- **Memory:** the data a host sends is never written to disk. It stays
+  in that host's memory until its targets have it: up to
+  `transfer.job_quota` (128 MiB over ssh) per job and `staging_quota` (a
+  quarter of the host's RAM, at most 512 MiB) in all, in 32 MiB chunks.
+  When memory runs low (`MemAvailable` under 64 MiB more than a chunk),
+  the sender waits for the targets. Set other quotas on the home node
+  (config file or `-job-quota 256M`, `-staging-quota 1G`); they apply on
+  every host it links. A sender restarted mid-job makes the chunks its
+  targets do not have yet again.
 
 ## Without a share
 

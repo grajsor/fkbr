@@ -15,32 +15,39 @@ import (
 
 	"fkbr/internal/api"
 	"fkbr/internal/localfs"
-	"fkbr/internal/store"
 	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
 )
 
 // lossyInbox drops the first n receive notifies, as if they were lost.
 type lossyInbox struct {
-	*store.Dir
+	transport.Transport
 	mu   sync.Mutex
 	drop int
 }
 
 func (l *lossyInbox) Fetch(ctx context.Context) ([]*transport.Message, error) {
-	msgs, err := l.Dir.Fetch(ctx)
+	msgs, err := l.Transport.Fetch(ctx)
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	var out []*transport.Message
 	for _, m := range msgs {
 		if m.Type == transport.TypeReceive && l.drop != 0 {
 			l.drop--
-			l.Dir.Finish(ctx, m, false)
+			l.Transport.Finish(ctx, m, false)
 			continue
 		}
 		out = append(out, m)
 	}
 	return out, err
+}
+
+// Now is the share clock, as the engine would read it unwrapped.
+func (l *lossyInbox) Now() time.Time {
+	if c, ok := l.Transport.(interface{ Now() time.Time }); ok {
+		return c.Now()
+	}
+	return time.Now()
 }
 
 func buildLossy(t *testing.T, share, id string, drop int) (*Engine, string) {
@@ -50,11 +57,19 @@ func buildLossy(t *testing.T, share, id string, drop int) (*Engine, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mb, err := nfsmailbox.Open(share, id, nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter})
-	if err != nil {
-		t.Fatal(err)
+	opts := nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter}
+	var tr transport.Transport
+	var st transport.Store
+	if linkTest {
+		tr, st = linked(t, cfg, opts)
+	} else {
+		mb, err := nfsmailbox.Open(share, id, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr, st = mb, mb
 	}
-	e := New(cfg, fsys, &lossyInbox{Dir: mb, drop: drop}, mb, Options{Version: "test"})
+	e := New(cfg, fsys, &lossyInbox{Transport: tr, drop: drop}, st, Options{Version: "test"})
 	t.Cleanup(func() { e.Close() })
 	return e, cfg.Roots[0].Path
 }

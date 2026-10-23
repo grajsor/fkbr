@@ -2,8 +2,9 @@ package engine
 
 import "sync"
 
-// spaceBook keeps the disk space that chunks being written may still
-// take, so senders running at once do not each count the same free space
+// spaceBook keeps the space (disk, or memory over ssh) that chunks being
+// written may still take, so senders running at once do not each count
+// the same free space
 // (two jobs on a host with /tmp in memory both started a chunk that fit
 // alone, and filled it).
 type spaceBook struct {

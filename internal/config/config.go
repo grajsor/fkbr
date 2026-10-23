@@ -328,12 +328,12 @@ const (
 	DefaultChunkSize    = 128 << 20
 	DefaultJobQuota     = 1 << 30
 	DefaultStagingQuota = 4 << 30
-	// Over ssh chunks are staged on the source's own disk: smaller and
-	// fewer, so each is read and deleted before the kernel writes it out
-	// and the disk only reads what is sent (a 1 GiB copy: 15.6 s with
-	// the defaults above, 9.5 s with these).
-	SSHChunkSize = 32 << 20
-	SSHJobQuota  = 128 << 20
+	// Over ssh chunks are staged in the source's memory: smaller, and
+	// fewer at a time. The staging quota is at most this, and a quarter
+	// of the RAM (sshStagingQuota).
+	SSHChunkSize    = 32 << 20
+	SSHJobQuota     = 128 << 20
+	SSHStagingQuota = 512 << 20
 )
 
 // transferDefaults are the chunk size and job quota for this kind of node.
@@ -344,10 +344,19 @@ func (c *Config) transferDefaults() (chunk, job ByteSize) {
 	return DefaultChunkSize, DefaultJobQuota
 }
 
+// stagingDefault is staging_quota's default for this kind of node, given
+// its job quota.
+func (c *Config) stagingDefault(job ByteSize) ByteSize {
+	if c.Home || c.Link {
+		return sshStagingQuota(job)
+	}
+	return DefaultStagingQuota
+}
+
 // LinkArgs are the flags a home node gives `fkbr link` on its hosts: its
-// chunk size and quotas, which bound what they stage (in their /tmp, maybe
-// memory). Only those not at their default, so an older build there still
-// links while nobody changed them.
+// chunk size and quotas, which bound what they stage in memory. Only those
+// not at their default, so an older build there still links while nobody
+// changed them; staging_quota's default there is sized to that host's RAM.
 func (c *Config) LinkArgs() []string {
 	chunk, job := c.transferDefaults()
 	var args []string
@@ -357,7 +366,7 @@ func (c *Config) LinkArgs() []string {
 	}{
 		{"-chunk-size", c.Transfer.ChunkSize, chunk},
 		{"-job-quota", c.Transfer.JobQuota, job},
-		{"-staging-quota", c.Transfer.StagingQuota, DefaultStagingQuota},
+		{"-staging-quota", c.Transfer.StagingQuota, c.stagingDefault(c.Transfer.JobQuota)},
 	} {
 		if s.v != 0 && s.v != s.def {
 			args = append(args, s.flag, strconv.FormatInt(int64(s.v), 10))
@@ -427,11 +436,11 @@ func (c *Config) applyDefaults() {
 	if t.ChunkSize == 0 {
 		t.ChunkSize = chunk
 	}
-	if t.StagingQuota == 0 {
-		t.StagingQuota = DefaultStagingQuota
-	}
 	if t.JobQuota == 0 {
 		t.JobQuota = max(job, t.ChunkSize) // a bigger chunk_size alone is fine
+	}
+	if t.StagingQuota == 0 {
+		t.StagingQuota = c.stagingDefault(t.JobQuota)
 	}
 	if t.MaxJobs == 0 {
 		t.MaxJobs = 2

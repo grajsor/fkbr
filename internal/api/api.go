@@ -329,16 +329,20 @@ const (
 
 // JobStatus is one participant's view of a job, published by that node.
 type JobStatus struct {
-	Node    string   `json:"node"`
-	Role    Role     `json:"role"`
-	State   JobState `json:"state"`
-	Phase   string   `json:"phase,omitempty"` // human-readable detail
-	Files   int64    `json:"files"`
-	Bytes   int64    `json:"bytes"`
-	Chunks  int      `json:"chunks"`
-	Skipped int64    `json:"skipped"`
-	Errors  int64    `json:"errors"`
-	Error   string   `json:"error,omitempty"`
+	Node   string   `json:"node"`
+	Role   Role     `json:"role"`
+	State  JobState `json:"state"`
+	Phase  string   `json:"phase,omitempty"` // human-readable detail
+	Files  int64    `json:"files"`
+	Bytes  int64    `json:"bytes"`
+	Chunks int      `json:"chunks"`
+	// ChunkSHA is a target's SHA-256 of chunk Chunks-1, the last it
+	// applied, where sources keep chunks in memory (ssh): a restarted
+	// source rebuilds them and checks that one against it.
+	ChunkSHA string `json:"chunk_sha,omitempty"`
+	Skipped  int64  `json:"skipped"`
+	Errors   int64  `json:"errors"`
+	Error    string `json:"error,omitempty"`
 	// Problems holds up to a few hundred per-entry messages (skips, errors).
 	Problems []string  `json:"problems,omitempty"`
 	Updated  time.Time `json:"updated"`

@@ -32,7 +32,10 @@ type sender struct {
 	// they are regenerated (the walk is deterministic) but not re-staged.
 	resumeFrom int
 	// purged is the number of leading chunks already deleted from the share.
-	purged    int
+	purged int
+	// applied is, by chunk, the SHA-256 a target applied (ChunkSHA), for
+	// chunks rebuilt after a restart lost them from memory.
+	applied   map[int]string
 	lastCheck time.Time
 
 	// Fan-out bookkeeping: dropped targets, last seen ack counts and when
@@ -161,22 +164,32 @@ func (s *sender) run(ctx context.Context) error {
 		}
 	}
 	s.lastNotify = time.Now()
-	for _, d := range s.job.Request.DstNodes {
-		if n, err := e.st.Acked(ctx, e.Self(), s.job.ID, d); err == nil {
-			s.resumeFrom = max(s.resumeFrom, n)
+	ride := &rideOut{log: s.log}
+	rebuild := false
+	if e.chunksInMemory() {
+		// What an earlier run staged was in memory and is gone: build
+		// again from the lowest chunk an active target has not acked.
+		if err := s.rebuildFrom(ctx, ride); err != nil {
+			return err
+		}
+		rebuild = s.job.TotalChunks > 0 && s.resumeFrom < s.job.TotalChunks
+	} else {
+		for _, d := range s.job.Request.DstNodes {
+			if n, err := e.st.Acked(ctx, e.Self(), s.job.ID, d); err == nil {
+				s.resumeFrom = max(s.resumeFrom, n)
+			}
 		}
 	}
 
 	total := s.job.TotalChunks
-	if total > 0 { // produced by an earlier run
+	if total > 0 && !rebuild { // produced by an earlier run
 		s.totals.finish(s.status.st.Files, s.status.st.Bytes, true)
 	} else {
 		cctx, cancel := context.WithCancel(ctx)
 		defer cancel()
 		go s.count(cctx)
 	}
-	ride := &rideOut{log: s.log}
-	for produced := total > 0; !produced; {
+	for produced := total > 0 && !rebuild; !produced; {
 		n, err := s.produce(ctx)
 		if err != nil && !isNoSpace(err) && ride.retry(ctx, err) {
 			s.resumeFrom = s.status.st.Chunks // regenerate, keep what is staged
@@ -194,6 +207,9 @@ func (s *sender) run(ctx context.Context) error {
 		}
 		if err != nil {
 			return err
+		}
+		if rebuild && n != total {
+			return fmt.Errorf("source changed since the interrupted run (%d chunks, was %d); start the copy again", n, total)
 		}
 		for {
 			err := e.st.SetComplete(ctx, s.job.ID, n)
@@ -233,6 +249,51 @@ func (s *sender) run(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+// rebuildFrom sets where a source whose store keeps chunks in memory
+// starts: at the lowest ack of an active target, the chunks below it
+// built but not staged again. A target's last applied chunk (ChunkSHA)
+// must come out the same, or the source changed since.
+func (s *sender) rebuildFrom(ctx context.Context, ride *rideOut) error {
+	done := map[string]bool{}
+	s.applied = map[int]string{}
+	for _, p := range s.job.Participants {
+		if p.Role != api.RoleTarget || s.detached[p.Node] {
+			continue
+		}
+		if p.State == api.JobDone {
+			done[p.Node] = true // its acks may be gone with the old run
+		}
+		if p.Chunks > 0 && p.ChunkSHA != "" {
+			s.applied[p.Chunks-1] = p.ChunkSHA
+		}
+	}
+	from := -1
+	for _, d := range s.active() {
+		if done[d] {
+			continue
+		}
+		for {
+			n, err := s.e.st.Acked(ctx, s.e.Self(), s.job.ID, d)
+			if err == nil {
+				if from < 0 || n < from {
+					from = n
+				}
+				break
+			}
+			if !ride.retry(ctx, err) {
+				return err
+			}
+		}
+	}
+	ride.ok()
+	if from < 0 { // every active target is done
+		from = s.job.TotalChunks
+	}
+	s.resumeFrom, s.purged = from, from
+	s.status.st.Chunks = from
+	return nil
 }
 
 // produce walks the source paths into chunks and returns the chunk count.
@@ -790,6 +851,9 @@ func (k *shareSink) Create(seq int) (io.WriteCloser, error) {
 
 func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
 	s := k.s
+	if sha, ok := s.applied[meta.Seq]; ok && sha != meta.SHA256 {
+		return fmt.Errorf("source changed since the interrupted run (chunk %d differs from what a target has); start the copy again", meta.Seq)
+	}
 	if k.cw == nil {
 		// Regenerated chunk from before a restart: if the old one is still
 		// staged it must be identical, or the source changed meanwhile.

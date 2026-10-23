@@ -110,6 +110,13 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 
 func (e *Engine) Self() string { return e.cfg.NodeID }
 
+// chunksInMemory: the store keeps staged chunks in memory (ssh), so a
+// restart loses them and a source rebuilds them (send.go).
+func (e *Engine) chunksInMemory() bool {
+	m, ok := e.st.(interface{ ChunksInMemory() bool })
+	return ok && m.ChunksInMemory()
+}
+
 // Share is the share directory this node runs on.
 func (e *Engine) Share() string { return e.cfg.NFSRoot }
 

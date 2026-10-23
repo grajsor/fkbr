@@ -115,6 +115,7 @@ internal/engine             jobs, send/recv, fan-out/detach, sync, files ops, ev
 internal/transport          Transport (messaging) + Store (jobs/data/blobs) interfaces
 internal/transport/nfsmailbox  the store on NFS: the refresh trick
 internal/sshlink            nodes over ssh (docs/ssh.md): home.go (records, relay), remote.go,
+                            memchunks.go (staged chunks in memory),
                             session.go (runs ssh, backoff, Probe); sshlink/frame the link protocol;
                             cmd/fkbr/link.go is `fkbr link`, the remote end (hidden command)
 internal/bundle             chunks in fkbr's own format (native.go, optional zstd); big files
@@ -220,10 +221,19 @@ package tests; docs/testplan.md lists them.
   JSON methods on every API type with paths). Chunk names up to 64 KiB
   (`bundle.MaxNameLen`). Bulk share writes `Sync()` every ~2 s of data
   (`store/writeback.go`) so heartbeats don't queue behind a chunk; the
-  ssh stores on local disk don't sync (`Options.NoSync`), and over ssh
-  chunks are 32 MiB, job_quota 128 MiB (`SSHChunkSize`): staged chunks
-  then never reach the disk. The receiver truncates a file only when its
-  size is wrong (on XFS a truncate writes the file out).
+  home node's records on local disk don't sync (`Options.NoSync`). The
+  receiver truncates a file only when its size is wrong (on XFS a
+  truncate writes the file out).
+- **Over ssh chunks are never on disk** (`sshlink/memchunks.go`): the
+  source holds them in memory until every active target read them;
+  32 MiB chunks, job_quota 128 MiB, staging_quota a quarter of the RAM
+  up to 512 MiB (`SSHChunkSize`, `sshStagingQuota`), FreeBytes is
+  MemAvailable − 64 MiB. Acks stay records on the home node. Stores say
+  so with `ChunksInMemory()`: a restarted source rebuilds from the
+  lowest active ack (`rebuildFrom`) and checks each target's `ChunkSHA`
+  (its last applied chunk, put before the ack); a target that finds a
+  chunk gone after its meta waits for it again. The NFS path is
+  unchanged.
   Share reads are capped at 64 MiB.
 - Target scans probe the mtime range (`localfs.MtimeRange`, inside the
   root, never writing on `sync -n`) and name rules (`localfs.Names`: vfat,

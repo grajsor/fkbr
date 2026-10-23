@@ -193,6 +193,12 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 		start := time.Now()
 		files, bytes := status.st.Files, status.st.Bytes
 		if err := e.applyChunk(ctx, src, id, &meta, rcv, status); err != nil {
+			if errors.Is(err, fs.ErrNotExist) && e.chunksInMemory() {
+				// Its source restarted since the meta was read, losing the
+				// chunks it held: wait for it to build this one again.
+				status.st.Files, status.st.Bytes = files, bytes
+				continue
+			}
 			if ride.retry(ctx, err) {
 				status.st.Files, status.st.Bytes = files, bytes // applied again from the start
 				continue
@@ -202,6 +208,13 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 		ride.ok()
 		log.Info("chunk applied", "chunk", next, "entries", meta.Entries, "stored", size(meta.Size), "took", time.Since(start).Round(time.Millisecond))
 		next++
+		if e.chunksInMemory() {
+			// What this target applied, before its ack: a source that
+			// restarts rebuilds from the lowest ack and checks the chunk
+			// before it against this (send.go, rebuilt).
+			status.st.Chunks, status.st.ChunkSHA = next, meta.SHA256
+			status.put(ctx, true)
+		}
 		for {
 			err := e.st.SetAcked(ctx, src, id, e.Self(), next)
 			if err == nil {
