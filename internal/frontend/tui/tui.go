@@ -42,6 +42,9 @@ type Options struct {
 	// NoMouse leaves the mouse to the terminal (text selection without
 	// Shift).
 	NoMouse bool
+	// StartInDirs opens the panes in this node's directory and its local
+	// root (or another node) instead of the node list.
+	StartInDirs bool
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -51,6 +54,7 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 	}
 	m := newModel(ctx, c)
 	m.runsNode = opts.RunsNode
+	m.startPanes = opts.StartInDirs
 	m.logPath = opts.LogPath
 	m.version = opts.Version
 	if opts.Notice != "" {
@@ -80,11 +84,16 @@ type moveInfo struct {
 }
 
 type model struct {
-	ctx    context.Context
-	c      api.Client
-	st     *styles
-	panes  [2]*pane
-	active int
+	ctx context.Context
+	c   api.Client
+	// links are an ssh swarm's hosts, if this node is its home node;
+	// startPanes and placed: see Options.StartInDirs (links.go).
+	links      []api.Link
+	startPanes bool
+	placed     bool
+	st         *styles
+	panes      [2]*pane
+	active     int
 	// lastExclude prefills the next copy or sync dialog's exclude field.
 	lastExclude string
 	// lastClick, dlgBox and drag serve the mouse (mouse.go, scrollbar.go);
@@ -134,8 +143,11 @@ func newModel(ctx context.Context, c api.Client) *model {
 
 // Messages produced by commands.
 type (
-	nodesMsg struct{ nodes []api.Node }
-	listMsg  struct {
+	nodesMsg struct {
+		nodes []api.Node
+		links []api.Link // an ssh swarm's home node: its hosts (links.go)
+	}
+	listMsg struct {
 		pane int
 		seq  int
 		res  *api.ListResult
@@ -176,7 +188,11 @@ type (
 type target struct{ node, root string }
 
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.loadNodes(), m.subscribe(), animTick(animEvery), spinTick())
+	cmds := []tea.Cmd{m.loadNodes(), m.subscribe(), animTick(animEvery), spinTick()}
+	if m.linker() != nil {
+		cmds = append(cmds, linksTick())
+	}
+	return tea.Batch(cmds...)
 }
 
 func (m *model) loadNodes() tea.Cmd {
@@ -185,7 +201,7 @@ func (m *model) loadNodes() tea.Cmd {
 		if err != nil {
 			return statusMsg{text: "nodes: " + err.Error(), err: true}
 		}
-		return nodesMsg{ns}
+		return nodesMsg{ns, m.fetchLinks()}
 	}
 }
 
@@ -284,8 +300,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, n := range msg.nodes {
 			m.nodes[n.ID] = n
 		}
+		m.links = msg.links
 		m.syncNodePanes()
-		return m, nil
+		return m, m.placePanes()
+
+	case linksTickMsg:
+		return m, tea.Batch(m.loadNodes(), linksTick())
 
 	case listMsg:
 		p := m.panes[msg.pane]
@@ -475,7 +495,7 @@ func (m *model) syncNodePanes() {
 	for _, p := range m.panes {
 		switch p.level {
 		case levelNodes:
-			p.setNodes(nodes)
+			p.setNodes(nodes, m.links)
 		case levelRoots:
 			if n, ok := m.nodes[p.node]; ok {
 				p.setRoots(n)
@@ -573,7 +593,7 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case "f2":
 		p.level, p.node, p.root, p.path, p.err = levelNodes, "", "", ".", ""
 		p.clearSelection()
-		p.setNodes(m.sortedNodes())
+		p.setNodes(m.sortedNodes(), m.links)
 		return m.loadNodes()
 	case "f3":
 		return m.view()
@@ -584,9 +604,17 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case "f6":
 		m.openTransfer(true)
 	case "f7":
-		m.openMkdir()
+		if p.level == levelNodes && m.linker() != nil {
+			m.openConnect()
+		} else {
+			m.openMkdir()
+		}
 	case "f8":
-		m.openDelete()
+		if p.level == levelNodes && m.linker() != nil {
+			m.openDisconnect()
+		} else {
+			m.openDelete()
+		}
 	case "f9":
 		if len(m.jobOrder) > 0 {
 			m.jobsFocus = true
@@ -641,6 +669,10 @@ func (m *model) enter(i int) tea.Cmd {
 	}
 	switch p.level {
 	case levelNodes:
+		if r.link {
+			m.setStatus(r.name+" is not linked yet: "+r.info, true)
+			return nil
+		}
 		n := m.nodes[r.name]
 		if !n.Online && !n.Self {
 			m.setStatus(n.ID+" is offline: its directories cannot be listed", true)
@@ -679,7 +711,7 @@ func (m *model) up(i int) tea.Cmd {
 		if p.path == "." && p.single {
 			keep := p.node
 			p.level, p.node, p.root, p.single = levelNodes, "", "", false
-			p.setNodes(m.sortedNodes())
+			p.setNodes(m.sortedNodes(), m.links)
 			p.cursorTo(keep)
 			return nil
 		}
@@ -694,7 +726,7 @@ func (m *model) up(i int) tea.Cmd {
 	case levelRoots:
 		keep := p.node
 		p.level, p.node = levelNodes, ""
-		p.setNodes(m.sortedNodes())
+		p.setNodes(m.sortedNodes(), m.links)
 		p.cursorTo(keep)
 	}
 	return nil

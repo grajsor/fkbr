@@ -34,6 +34,8 @@ type row struct {
 	entry api.Entry // levelDir only
 	info  string    // short text for nodes/roots
 	dim   bool      // offline node, read-only root
+	// link: in a node list, an ssh host with no node yet (links.go).
+	link bool
 }
 
 type pane struct {
@@ -130,7 +132,7 @@ func (p *pane) relPath(name string) string {
 func (p *pane) clearSelection() { p.selected = map[string]bool{} }
 
 // setNodes fills a nodes-level pane, keeping the cursor on the same node.
-func (p *pane) setNodes(nodes []api.Node) {
+func (p *pane) setNodes(nodes []api.Node, links []api.Link) {
 	keep := ""
 	if r := p.current(); r != nil {
 		keep = r.name
@@ -153,6 +155,7 @@ func (p *pane) setNodes(nodes []api.Node) {
 		}
 		p.rows = append(p.rows, row{name: n.ID, isDir: true, info: info, dim: !n.Online})
 	}
+	p.rows = append(p.rows, linkRows(nodes, links)...)
 	p.cursorTo(keep)
 }
 

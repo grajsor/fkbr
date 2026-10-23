@@ -83,6 +83,10 @@ func (c *checker) roots() {
 			c.add(Fail, "root "+r.ID, "%s: cannot list: %v", r.Path, err)
 			continue
 		}
+		if r.Local {
+			c.add(OK, "root "+r.ID, "%s readable; only this host's TUI and CLI see it", r.Path)
+			continue
+		}
 		if !r.AllowWrite {
 			c.add(OK, "root "+r.ID, "%s readable (read-only)", r.Path)
 			continue

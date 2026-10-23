@@ -51,6 +51,12 @@ type Home struct {
 	// stopping: Stop asked the linked nodes to stop, so their links end
 	// as they should.
 	stopping atomic.Bool
+	// While Run runs: its context and options, and how to stop each
+	// host's session (Add, Remove).
+	runCtx  context.Context
+	runOpts *SessionOptions
+	keepers map[string]context.CancelFunc
+	keeping sync.WaitGroup
 }
 
 type peer struct {
@@ -59,6 +65,8 @@ type peer struct {
 	sess *frame.Session
 	mb   *store.Dir // opened as this node
 	out  outbox
+	// stopped: Remove asked this node to stop.
+	stopped atomic.Bool
 }
 
 // fetchBudget bounds the requests in one fetch answer, well below the
@@ -292,7 +300,7 @@ func (h *Home) ServeConn(ctx context.Context, conn io.ReadWriteCloser, host stri
 	serve(ctx, sess, h.handlers(p), h.log)
 	<-sess.Done()
 	switch {
-	case h.stopping.Load():
+	case h.stopping.Load() || p.stopped.Load():
 		h.log.Info("ssh link closed: the node stopped", "host", host, "node", p.node)
 	case caller.Err() == nil:
 		h.log.Warn("ssh link down", "host", host, "node", p.node, "err", sess.Err())
@@ -716,6 +724,9 @@ type hostState struct {
 func (h *Home) setState(host, node, state, err string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if _, kept := h.keepers[host]; h.keepers != nil && !kept {
+		return // removed (Remove); its session is ending
+	}
 	hs := h.hosts[host]
 	if hs == nil {
 		hs = &hostState{}

@@ -6,9 +6,14 @@ package local
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
+	"slices"
+	"sort"
 	"sync"
 
+	"fkbr/internal/api"
 	"fkbr/internal/config"
 	"fkbr/internal/engine"
 	"fkbr/internal/localfs"
@@ -25,6 +30,7 @@ type Client struct {
 	home     *sshlink.Home
 	hosts    []sshlink.Host
 	sessions sshlink.SessionOptions
+	cfgPath  string // where linked hosts are kept (config.WritePath)
 }
 
 func Open(cfg *config.Config, version string, log *slog.Logger) (*Client, error) {
@@ -78,7 +84,7 @@ func openHome(cfg *config.Config, fsys localfs.FS, version string, log *slog.Log
 	}
 	return &Client{
 		Engine: engine.New(cfg, fsys, n, n, engine.Options{Version: version, Logger: log}),
-		home:   home, hosts: hosts, sessions: sshlink.SessionOptions{Bin: cfg.SSHBin},
+		home:   home, hosts: hosts, sessions: sshlink.SessionOptions{Bin: cfg.SSHBin}, cfgPath: cfg.ConfigPath,
 	}, nil
 }
 
@@ -118,8 +124,67 @@ func (c *Client) Run(ctx context.Context) error {
 	return err
 }
 
-// Links is the state of an ssh swarm's sessions (nil elsewhere).
-func (c *Client) Links() []sshlink.LinkState {
+var errNotHome = fmt.Errorf("%w: this node runs on a share; ssh hosts are linked by a node started without one, or with ssh:", api.ErrNotAllowed)
+
+var _ api.Linker = (*Client)(nil)
+
+// Links is the state of an ssh swarm's sessions.
+func (c *Client) Links(context.Context) ([]api.Link, error) {
+	if c.home == nil {
+		return nil, errNotHome
+	}
+	saved, _ := config.SavedHosts(c.cfgPath)
+	var out []api.Link
+	for _, l := range c.home.Links() {
+		out = append(out, api.Link{Host: l.Host, Node: l.Node, State: l.State, Error: l.Error, Saved: slices.Contains(saved, l.Host)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
+	return out, nil
+}
+
+// AddLink links one host (as on the command line: web01:/srv/www) while
+// the node runs, and with save keeps it in the config file's ssh list.
+func (c *Client) AddLink(_ context.Context, spec string, save bool) error {
+	if c.home == nil {
+		return errNotHome
+	}
+	hs, err := sshlink.ParseHosts(spec)
+	if err != nil {
+		return fmt.Errorf("%w: %w", api.ErrBadPath, err)
+	}
+	if len(hs) != 1 {
+		return fmt.Errorf("%w: one host at a time", api.ErrBadPath)
+	}
+	if err := c.home.Add(hs[0]); err != nil {
+		return err
+	}
+	if save {
+		if err := config.SaveHost(c.cfgPath, hs[0].String()); err != nil {
+			return fmt.Errorf("linked, but not saved: %w", err)
+		}
+	}
+	return nil
+}
+
+// RemoveLink stops linking host (its node leaves the swarm) and removes it
+// from the config file's ssh list.
+func (c *Client) RemoveLink(_ context.Context, host string) error {
+	if c.home == nil {
+		return errNotHome
+	}
+	saved, _ := config.SavedHosts(c.cfgPath)
+	err := c.home.Remove(host)
+	if slices.Contains(saved, host) {
+		if ferr := config.ForgetHost(c.cfgPath, host); ferr != nil {
+			return errors.Join(err, ferr)
+		}
+		return nil // a saved host that was not linked: forgotten
+	}
+	return err
+}
+
+// LinkStates is the state of an ssh swarm's sessions (tests).
+func (c *Client) LinkStates() []sshlink.LinkState {
 	if c.home == nil {
 		return nil
 	}

@@ -116,6 +116,25 @@ type Node struct {
 	Link string `json:"link,omitempty"`
 }
 
+// Link is one host of an ssh swarm as its home node reaches it.
+type Link struct {
+	Host  string `json:"host"`            // as given: web01:/srv/www
+	Node  string `json:"node,omitempty"`  // its node, once it said hello
+	State string `json:"state"`           // connecting, connected, retrying in 4s, ...
+	Error string `json:"error,omitempty"` // why it is not connected
+	Saved bool   `json:"saved,omitempty"` // in the config file's ssh list
+}
+
+// Linker is offered by an ssh swarm's home node (and its socket): the
+// hosts it links, and adding or removing one while it runs.
+type Linker interface {
+	Links(ctx context.Context) ([]Link, error)
+	// AddLink links host; save also keeps it in the config file.
+	AddLink(ctx context.Context, host string, save bool) error
+	// RemoveLink stops linking host and removes it from the config file.
+	RemoveLink(ctx context.Context, host string) error
+}
+
 type EntryType string
 
 const (

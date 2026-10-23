@@ -200,8 +200,8 @@ func (h *harness) key(keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlO}
 		case "f4":
 			msg = tea.KeyMsg{Type: tea.KeyF4}
-		case "f3", "f5", "f6", "f7", "f8", "f9":
-			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"f3": tea.KeyF3, "f5": tea.KeyF5, "f6": tea.KeyF6, "f7": tea.KeyF7, "f8": tea.KeyF8, "f9": tea.KeyF9}[k]}
+		case "f2", "f3", "f5", "f6", "f7", "f8", "f9":
+			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"f2": tea.KeyF2, "f3": tea.KeyF3, "f5": tea.KeyF5, "f6": tea.KeyF6, "f7": tea.KeyF7, "f8": tea.KeyF8, "f9": tea.KeyF9}[k]}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}

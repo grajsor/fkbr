@@ -135,6 +135,7 @@ func run() error {
 	node := flag.String("node", "", "this node's ID (default: short hostname)")
 	share := flag.String("share", "", "the shared directory (alternative to the SHARE argument)")
 	sshBin := flag.String("ssh-bin", "", product.Expand("{name} on the hosts of an ssh: share (default {name}, on their PATH)"))
+	localRoot := flag.String("local-root", "", "a directory only this host's TUI and CLI see, as root \"local\" (default /; none: no such root)")
 	readOnly := flag.Bool("ro", false, "share the current directory read-only")
 	stateDir := flag.String("state", "", product.Expand("local runtime dir for lock and socket (default /tmp/{name}-<uid>-<node>)"))
 	var roots rootFlags
@@ -154,10 +155,6 @@ func run() error {
 			return fmt.Errorf("link takes no arguments: %q", strings.Join(args[1:], " "))
 		}
 		return runLink(linkFlags{node: *node, state: *stateDir, roots: roots, readOnly: *readOnly, roles: *roles, verbose: *verbose})
-	}
-	if len(args) == 0 && *share == "" && os.Getenv(product.EnvPrefix+"SHARE") == "" && *cfgPath == "" && config.DefaultPath() == "" {
-		usage()
-		return fmt.Errorf("which shared directory? e.g. %s /mnt/nfs/xfer", product.Name)
 	}
 	shareArg := ""
 	if len(args) > 0 && !isCommand(args[0]) {
@@ -198,6 +195,8 @@ func run() error {
 			return err
 		}
 	}
+	// Where the TUI keeps the ssh hosts it links (F7).
+	cfg.ConfigPath = config.WritePath(*cfgPath)
 	// Arguments and flags override the file; then fall back to defaults:
 	// node named after the host, sharing the current directory.
 	if err := pickShare(cfg, shareArg, *share, os.Getenv(product.EnvPrefix+"SHARE")); err != nil {
@@ -206,8 +205,13 @@ func run() error {
 	if *sshBin != "" {
 		cfg.SSHBin = *sshBin
 	}
-	if cfg.NFSRoot == "" && len(cfg.SSH) == 0 {
-		return fmt.Errorf("which shared directory? e.g. %s /mnt/nfs/xfer", product.Name)
+	if cfg.NFSRoot == "" {
+		// No share: this host on its own, as the home node of an ssh swarm
+		// with the hosts in the config file's ssh list, if any.
+		cfg.Home = true
+	}
+	if *localRoot != "" {
+		cfg.LocalRoot = *localRoot
 	}
 	var err error
 	if cfg.NFSRoot != "" {
@@ -228,7 +232,8 @@ func run() error {
 	}
 	if (cfg.Home || len(cfg.SSH) > 0) && cfg.NFSRoot == "" { // the swarm's records: private, in the state dir
 		if cfg.StateDir == "" {
-			cfg.StateDir = config.DefaultStateDir(cfg.NodeID)
+			// Not the state dir of a node of this name on a share.
+			cfg.StateDir = config.DefaultStateDir(cfg.NodeID) + "-ssh"
 		}
 		cfg.NFSRoot = filepath.Join(cfg.StateDir, "ssh")
 	}
@@ -249,6 +254,7 @@ func run() error {
 	if *roles != "" {
 		cfg.Roles = strings.Split(*roles, ",")
 	}
+	addLocalRoot(cfg)
 	if *nfsRefresh != "" {
 		cfg.NFSRefresh = *nfsRefresh
 	}
@@ -280,7 +286,7 @@ func run() error {
 	case "check":
 		return runCheck(ctx, cfg)
 	case "tui":
-		return runTUI(ctx, cfg, *forceLocal, tui.Options{Colors: *colors, Version: version, NoMouse: !*mouse}, level)
+		return runTUI(ctx, cfg, *forceLocal, tui.Options{Colors: *colors, Version: version, NoMouse: !*mouse, StartInDirs: true}, level)
 	}
 	c, err := connect(ctx, cfg, *forceLocal, log)
 	if err != nil {
@@ -288,6 +294,31 @@ func run() error {
 	}
 	defer c.Close()
 	return cli.Run(ctx, c, cmd, args, stdout())
+}
+
+// addLocalRoot adds the root only this host's TUI and CLI see (config
+// LocalRoot, default /), if it can be listed and no root has its ID.
+func addLocalRoot(cfg *config.Config) {
+	p := cfg.LocalRoot
+	switch p {
+	case "none":
+		return
+	case "":
+		p = "/"
+	}
+	for _, r := range cfg.Roots {
+		if r.ID == config.LocalRootID {
+			return
+		}
+	}
+	if _, err := os.ReadDir(p); err != nil {
+		return
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return
+	}
+	cfg.Roots = append(cfg.Roots, config.Root{ID: config.LocalRootID, Path: abs, AllowWrite: true, Local: true})
 }
 
 // stdout cleans what goes to a terminal of control characters (names and

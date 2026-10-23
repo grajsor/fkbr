@@ -121,18 +121,82 @@ var (
 // sessions.
 func (h *Home) Run(ctx context.Context, hosts []Host, o SessionOptions) {
 	o.defaults()
-	var wg sync.WaitGroup
+	h.mu.Lock()
+	h.runCtx, h.runOpts, h.keepers = ctx, &o, map[string]context.CancelFunc{}
+	h.mu.Unlock()
 	for _, host := range hosts {
-		h.setState(host.String(), "", "connecting", "")
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			h.keep(ctx, host, &o)
-		}()
+		if err := h.Add(host); err != nil {
+			h.log.Warn("ssh host not linked", "host", host.String(), "err", err)
+		}
 	}
 	<-ctx.Done()
 	h.Stop(o.StopWait)
-	wg.Wait()
+	h.keeping.Wait()
+}
+
+// ErrNotRunning: hosts are added while the home node runs (Run).
+var ErrNotRunning = errors.New("the home node is not running")
+
+// Add links host while Run runs.
+func (h *Home) Add(host Host) error {
+	key := host.String()
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.runCtx == nil || h.runCtx.Err() != nil {
+		return ErrNotRunning
+	}
+	if _, ok := h.keepers[key]; ok {
+		return fmt.Errorf("%s is linked already", key)
+	}
+	ctx, cancel := context.WithCancel(h.runCtx)
+	h.keepers[key] = cancel
+	hs := h.hosts[key]
+	if hs == nil {
+		hs = &hostState{}
+		h.hosts[key] = hs
+	}
+	hs.state, hs.err = "connecting", ""
+	h.keeping.Add(1)
+	go func() {
+		defer h.keeping.Done()
+		h.keep(ctx, host, h.runOpts)
+	}()
+	return nil
+}
+
+// Remove stops linking host: its node is asked to stop (it leaves the
+// swarm), then its session ends.
+func (h *Home) Remove(host string) error {
+	h.mu.Lock()
+	cancel := h.keepers[host]
+	delete(h.keepers, host)
+	delete(h.hosts, host)
+	var p *peer
+	for _, q := range h.peers {
+		if q.host == host {
+			p = q
+		}
+	}
+	wait := time.Second
+	if h.runOpts != nil {
+		wait = h.runOpts.StopWait
+	}
+	h.mu.Unlock()
+	if cancel == nil {
+		return fmt.Errorf("%s is not linked", host)
+	}
+	if p != nil {
+		p.stopped.Store(true)
+		ctx, done := context.WithTimeout(context.Background(), wait)
+		do(ctx, p.sess, "stop", nil, nil)
+		select {
+		case <-p.sess.Done():
+		case <-ctx.Done():
+		}
+		done()
+	}
+	cancel()
+	return nil
 }
 
 func (h *Home) keep(ctx context.Context, host Host, o *SessionOptions) {
@@ -149,6 +213,9 @@ func (h *Home) keep(ctx context.Context, host Host, o *SessionOptions) {
 		msg := "ended"
 		if err != nil {
 			msg = err.Error()
+		}
+		if ctx.Err() != nil {
+			return
 		}
 		h.setState(host.String(), "", "retrying in "+wait.String(), msg)
 		h.log.Warn("ssh session ended; starting it again", "host", host.String(), "err", msg, "in", wait)
