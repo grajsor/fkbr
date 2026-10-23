@@ -155,8 +155,9 @@ func (c *Client) AddLink(_ context.Context, spec string, save bool) error {
 	if len(hs) != 1 {
 		return fmt.Errorf("%w: one host at a time", api.ErrBadPath)
 	}
-	if err := c.home.Add(hs[0]); err != nil {
-		return err
+	err = c.home.Add(hs[0])
+	if err != nil && !(save && errors.Is(err, sshlink.ErrLinked)) {
+		return err // linked already but not saved (ssh: on the command line): save it
 	}
 	if save {
 		if err := config.SaveHost(c.cfgPath, hs[0].String()); err != nil {

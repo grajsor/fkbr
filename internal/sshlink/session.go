@@ -135,7 +135,11 @@ func (h *Home) Run(ctx context.Context, hosts []Host, o SessionOptions) {
 }
 
 // ErrNotRunning: hosts are added while the home node runs (Run).
-var ErrNotRunning = errors.New("the home node is not running")
+// ErrLinked: Add of a host linked already.
+var (
+	ErrNotRunning = errors.New("the home node is not running")
+	ErrLinked     = errors.New("linked already")
+)
 
 // Add links host while Run runs.
 func (h *Home) Add(host Host) error {
@@ -146,7 +150,7 @@ func (h *Home) Add(host Host) error {
 		return ErrNotRunning
 	}
 	if _, ok := h.keepers[key]; ok {
-		return fmt.Errorf("%s is linked already", key)
+		return fmt.Errorf("%s: %w", key, ErrLinked)
 	}
 	ctx, cancel := context.WithCancel(h.runCtx)
 	h.keepers[key] = cancel

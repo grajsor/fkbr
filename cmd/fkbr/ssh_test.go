@@ -381,8 +381,16 @@ func TestSSHHostsLinkedAtRuntime(t *testing.T) {
 		t.Fatalf("links at start: %v %v", ls, err)
 	}
 	host := "hosta:" + filepath.Join(base, "hosta")
-	if err := c.AddLink(ctx, host, true); err != nil {
+	// Linked first without saving (as from ssh: on the command line);
+	// F7 on it then saves it.
+	if err := c.AddLink(ctx, host, false); err != nil {
 		t.Fatal(err)
+	}
+	if saved, _ := config.SavedHosts(conf); len(saved) != 0 {
+		t.Fatalf("saved without asking: %v", saved)
+	}
+	if err := c.AddLink(ctx, host, true); err != nil {
+		t.Fatalf("F7 on a host linked already: %v", err)
 	}
 	waitFor(t, "hosta online", 30*time.Second, func() bool { return online(c, "hosta") })
 	saved, _ := config.SavedHosts(conf)
