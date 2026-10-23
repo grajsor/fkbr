@@ -96,7 +96,7 @@ func openHome(cfg *config.Config, fsys localfs.FS, version string, log *slog.Log
 	}
 	return &Client{
 		Engine: engine.New(cfg, fsys, n, n, engine.Options{Version: version, Logger: log}),
-		home:   home, hosts: hosts, sessions: sshlink.SessionOptions{Bin: cfg.SSHBin}, cfgPath: cfg.ConfigPath,
+		home:   home, hosts: hosts, sessions: sshlink.SessionOptions{Bin: cfg.SSHBin, Args: cfg.LinkArgs()}, cfgPath: cfg.ConfigPath,
 		sockMode: cfg.SocketMode,
 	}, nil
 }

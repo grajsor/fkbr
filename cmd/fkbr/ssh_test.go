@@ -47,6 +47,7 @@ node=$(printf '%s' "$2" | sed -n "s|.*'-node' '\\([^']*\\)'.*|\\1|p")
 add=
 if [ -z "$node" ]; then node=$dest; add="'-node' '$dest' "; fi
 cmd=$(printf '%s' "$2" | sed "s|'link'\$|$add'-state' '$FKBR_TEST_STATE/$node' 'link'|")
+printf '%s\n' "$cmd" >> "$FKBR_TEST_STATE/commands"
 echo "Welcome to $dest"
 exec sh -c "$cmd"
 `
@@ -355,6 +356,7 @@ func TestSSHHostsLinkedAtRuntime(t *testing.T) {
 			ConfigPath: conf,
 			StateDir:   filepath.Join(base, "state", "home"),
 			Roots:      []config.Root{{ID: "files", Path: filepath.Join(base, "home"), AllowWrite: true}},
+			Transfer:   config.Transfer{JobQuota: 256 << 20}, // passed on to the hosts
 		}
 		if err := cfg.Finish(); err != nil {
 			t.Fatal(err)
@@ -363,7 +365,7 @@ func TestSSHHostsLinkedAtRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		c.SetSessions(sshlink.SessionOptions{SSH: []string{ssh}, Bin: os.Args[0], StopWait: 10 * time.Second})
+		c.SetSessions(sshlink.SessionOptions{SSH: []string{ssh}, Bin: os.Args[0], StopWait: 10 * time.Second, Args: cfg.LinkArgs()})
 		n, err := startNodeWith(context.Background(), cfg, slog.New(slog.DiscardHandler), true, c)
 		if err != nil {
 			t.Fatal(err)
@@ -397,6 +399,9 @@ func TestSSHHostsLinkedAtRuntime(t *testing.T) {
 		t.Fatalf("F7 on a host linked already: %v", err)
 	}
 	waitFor(t, "hosta online", 30*time.Second, func() bool { return online(c, "hosta") })
+	if b, _ := os.ReadFile(filepath.Join(base, "state", "commands")); !strings.Contains(string(b), "'-job-quota' '268435456'") {
+		t.Errorf("hosta got no job quota:\n%s", b)
+	}
 	saved, _ := config.SavedHosts(conf)
 	if len(saved) != 1 || saved[0] != host {
 		t.Fatalf("saved: %v", saved)

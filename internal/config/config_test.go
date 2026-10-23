@@ -107,6 +107,32 @@ func TestDefaultsWithoutFile(t *testing.T) {
 	}
 }
 
+// A home node passes its chunk size and quotas to the hosts it links, but
+// only those it changed (an older fkbr there knows no such flags).
+func TestLinkArgs(t *testing.T) {
+	c := &Config{NodeID: "home", Home: true, StateDir: t.TempDir(), Roots: []Root{{ID: "files", Path: t.TempDir()}}}
+	if err := c.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if a := c.LinkArgs(); len(a) != 0 {
+		t.Errorf("defaults passed: %q", a)
+	}
+	if err := c.SetTransfer("", "256M", ""); err != nil {
+		t.Fatal(err)
+	}
+	a := c.LinkArgs()
+	if strings.Join(a, " ") != "-job-quota 268435456" {
+		t.Fatalf("args %q", a)
+	}
+	var l Config
+	if err := l.SetTransfer("", a[1], ""); err != nil || l.Transfer.JobQuota != 256<<20 {
+		t.Errorf("read back: %d %v", l.Transfer.JobQuota, err)
+	}
+	if err := l.SetTransfer("lots", "", ""); err == nil {
+		t.Error("a bad size accepted")
+	}
+}
+
 // A linked node asks the home node for requests again at once, but its
 // jobs' waits keep the usual pace: each look there is a round trip.
 func TestLinkPolls(t *testing.T) {

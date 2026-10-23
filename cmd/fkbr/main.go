@@ -144,6 +144,9 @@ func run() error {
 	keep := flag.Duration("keep", 0, "how long finished jobs, sync plans and failed requests stay on the share (default 1h)")
 	nfsRefresh := flag.String("nfs-refresh", "", "compensate for NFS attribute caching: auto (default), always, never")
 	forceLocal := flag.Bool("local", false, "do not attach to a running node; run the engine in this process")
+	chunkSize := flag.String("chunk-size", "", "largest chunk staged for a transfer, e.g. 64M (default 128M)")
+	jobQuota := flag.String("job-quota", "", "most bytes staged for one job (default 1G; a home node passes its own to its ssh hosts)")
+	stagingQuota := flag.String("staging-quota", "", "most bytes staged for all jobs (default 4G; a home node passes its own to its ssh hosts)")
 	verbose := flag.Bool("v", false, "debug logging")
 	colors := flag.String("colors", "auto", "TUI colours: auto, true, 256, 16 or none")
 	mouse := flag.Bool("mouse", true, "TUI: clicks, right-click marks, wheel (-mouse=false leaves the mouse to the terminal)")
@@ -154,7 +157,8 @@ func run() error {
 		if len(args) > 1 {
 			return fmt.Errorf("link takes no arguments: %q", strings.Join(args[1:], " "))
 		}
-		return runLink(linkFlags{node: *node, state: *stateDir, roots: roots, readOnly: *readOnly, roles: *roles, verbose: *verbose})
+		return runLink(linkFlags{node: *node, state: *stateDir, roots: roots, readOnly: *readOnly, roles: *roles, verbose: *verbose,
+			chunkSize: *chunkSize, jobQuota: *jobQuota, stagingQuota: *stagingQuota})
 	}
 	shareArg := ""
 	if len(args) > 0 && !isCommand(args[0]) {
@@ -204,6 +208,9 @@ func run() error {
 	}
 	if *sshBin != "" {
 		cfg.SSHBin = *sshBin
+	}
+	if err := cfg.SetTransfer(*chunkSize, *jobQuota, *stagingQuota); err != nil {
+		return err
 	}
 	if cfg.NFSRoot == "" {
 		// No share: this host on its own, as the home node of an ssh swarm

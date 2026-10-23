@@ -22,6 +22,8 @@ type linkFlags struct {
 	readOnly    bool
 	roles       string
 	verbose     bool
+	// From the home node: what may be staged here.
+	chunkSize, jobQuota, stagingQuota string
 }
 
 // runLink is `fkbr link`: this host's node in an ssh swarm (docs/ssh.md),
@@ -57,6 +59,9 @@ func runLink(f linkFlags) error {
 	}
 	if f.roles != "" {
 		cfg.Roles = strings.Split(f.roles, ",")
+	}
+	if err := cfg.SetTransfer(f.chunkSize, f.jobQuota, f.stagingQuota); err != nil {
+		return err
 	}
 	if err := cfg.Finish(); err != nil {
 		return err

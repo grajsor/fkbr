@@ -323,6 +323,52 @@ func DefaultStateDir(node string) string {
 	return filepath.Join(os.TempDir(), fmt.Sprintf("%s-%d-%s", product.Name, os.Getuid(), node))
 }
 
+// Transfer defaults.
+const (
+	DefaultChunkSize    = 128 << 20
+	DefaultJobQuota     = 1 << 30
+	DefaultStagingQuota = 4 << 30
+)
+
+// LinkArgs are the flags a home node gives `fkbr link` on its hosts: its
+// chunk size and quotas, which bound what they stage (in their /tmp, maybe
+// memory). Only those not at their default, so an older build there still
+// links while nobody changed them.
+func (c *Config) LinkArgs() []string {
+	var args []string
+	for _, s := range []struct {
+		flag   string
+		v, def ByteSize
+	}{
+		{"-chunk-size", c.Transfer.ChunkSize, DefaultChunkSize},
+		{"-job-quota", c.Transfer.JobQuota, DefaultJobQuota},
+		{"-staging-quota", c.Transfer.StagingQuota, DefaultStagingQuota},
+	} {
+		if s.v != 0 && s.v != s.def {
+			args = append(args, s.flag, strconv.FormatInt(int64(s.v), 10))
+		}
+	}
+	return args
+}
+
+// SetTransfer sets the chunk size and quotas given as flags ("" keeps one).
+func (c *Config) SetTransfer(chunk, job, staging string) error {
+	for _, s := range []struct {
+		v   string
+		dst *ByteSize
+	}{{chunk, &c.Transfer.ChunkSize}, {job, &c.Transfer.JobQuota}, {staging, &c.Transfer.StagingQuota}} {
+		if s.v == "" {
+			continue
+		}
+		b, err := ParseByteSize(s.v)
+		if err != nil {
+			return err
+		}
+		*s.dst = b
+	}
+	return nil
+}
+
 func (c *Config) applyDefaults() {
 	if c.StateDir == "" && c.NodeID != "" {
 		c.StateDir = DefaultStateDir(c.NodeID)
@@ -363,13 +409,13 @@ func (c *Config) applyDefaults() {
 	setDur(&c.ForgetAfter, 7*24*time.Hour)
 	t := &c.Transfer
 	if t.ChunkSize == 0 {
-		t.ChunkSize = 128 << 20
+		t.ChunkSize = DefaultChunkSize
 	}
 	if t.StagingQuota == 0 {
-		t.StagingQuota = 4 << 30
+		t.StagingQuota = DefaultStagingQuota
 	}
 	if t.JobQuota == 0 {
-		t.JobQuota = 1 << 30
+		t.JobQuota = DefaultJobQuota
 	}
 	if t.MaxJobs == 0 {
 		t.MaxJobs = 2
