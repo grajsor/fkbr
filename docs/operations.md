@@ -110,7 +110,8 @@ fkbr /mnt/nfs/xfer
   otherwise; every node is equal.
 - **Flags:** they can go anywhere: before or after the share, or after
   the command (`fkbr /mnt/nfs/xfer daemon -ro`). `--` ends them. The share
-  can also come from `-share` or `$FKBR_SHARE`.
+  can also come from `-share` or `$FKBR_SHARE` (which wins over a config
+  file's `ssh:` list, but not over its `nfs_root`).
 - **Runtime dir:** `-state DIR` overrides where the lock and socket go.
   It must belong to the user running fkbr and not be writable by others;
   fkbr refuses one that isn't (another user could have made the default
@@ -222,6 +223,8 @@ directory without one), and opens the TUI with all of them.
   `-ssh-bin /path/fkbr` (`~/` is their home). Nothing else: no daemon,
   no open port.
 - **Names:** a host's node is named after its short hostname, as always.
+  `www=web01:/srv/www` names it `www`: two directories on one host, or
+  two hosts with the same short name, need a name each.
 - **Data** goes straight from source to target. Between two of the other
   hosts it passes through this host's memory, never its disk.
 - **A dropped link** is started again (after 1 s, doubling up to 1 min);
@@ -233,7 +236,9 @@ directory without one), and opens the TUI with all of them.
   to the config file's `ssh:` list (the file is created if there is none:
   `~/.fkbr.conf`), F8 unlinks one and removes it. The file's hosts are
   linked whenever fkbr starts without a share; `ssh:` on the command line
-  links exactly the hosts it names.
+  links exactly the hosts it names. A node whose `socket_mode` lets
+  other users in links only the hosts in its config file: F7 and F8 are
+  refused there. A config file with `nfs_root` gets no `ssh:` list.
   A host whose link is not up shows in the node list with why.
 - **Runtime files:** the home node keeps the swarm's records in
   `/tmp/fkbr-<uid>-<node>-ssh/ssh`; another host keeps the data it sends in
@@ -260,7 +265,9 @@ shares the directory you started in with it, as on a share.
   on a share too, as a source. A daemon has no root `local`, nor a node
   whose `socket_mode` lets other users in: whoever reaches the socket
   would reach all of it as you. A copy on it that a reboot cuts off
-  fails (its record was in `/tmp`); start it again.
+  fails (its record was in `/tmp`); start it again. In the CLI, `local/x`
+  is in root `local`; if the shared directory has a folder `local`
+  (`cd /usr`), `local/x` is refused and `files/local/x` names the folder.
 - **Which file:** the config file fkbr reads (`-config`, else
   `$FKBR_CONFIG`, else `fkbr.yaml` beside the binary if it is there),
   else `~/.fkbr.conf`, created with mode 0600. fkbr changes only its

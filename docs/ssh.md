@@ -26,6 +26,8 @@ starts fkbr on web01 and db01 over ssh, sharing `/srv/www` and
 `/var/backups` there, and opens the TUI with all three nodes. Every node
 can be a source or a target: copy, move, sync, view and delete work
 between any two. Without `:/path`, a host shares its login directory.
+A host's node is named after its short hostname; `www=web01:/srv/www`
+names it `www` (two directories on one host need a name each).
 `-ssh-bin PATH` names fkbr on the other hosts (default: `fkbr` on their
 `PATH`). CLI commands attach to this host's node.
 

@@ -255,6 +255,21 @@ Found by a code review of this part (2026-10-23):
 | A move between overlapping roots submitted by another node was not checked | The source refuses it | `TestMoveAcrossOverlappingRootsFromElsewhere` |
 | A copy on root `local` cut off by a reboot cannot resume (its record is in `/tmp`) | Known; it fails, start it again | (documented) |
 
+Found by a code review of the whole ssh branch (2026-10-23):
+
+| Found | Fixed | Test |
+|---|---|---|
+| `cd /usr && fkbr`, then `fkbr rm /local/x`: root `local` (`/`) took the path that meant `/usr/local/x` | A path that could mean either is refused; `files/local/x` names the folder | `TestResolveRoot` |
+| `fkbr ssh:web01` with a config file that sets `nfs_root`, then F7: the `ssh:` list written beside it made the file unreadable | Not saved there; the host is linked, with the reason | `TestSaveHostBesideShare` |
+| Once F7 had written `~/.fkbr.conf`, `$FKBR_SHARE` was ignored: fkbr became an ssh home node | `$FKBR_SHARE` wins over the file's `ssh:` list | `TestPickShare` |
+| With `socket_mode` open to others, anyone reaching the socket could make the node ssh anywhere with the owner's keys | Linking at runtime (F7, F8, the socket) is refused on such a node | `TestNoLinksOverAnOpenSocket` |
+| A linked host's node was always named after its short hostname: two directories on one host, or two hosts of one short name, could not both link | `NAME=host[:path]` names the node | `TestParseHosts`, `TestSSHHostsLinkedAtRuntime` |
+| A remote that stayed up but never started `fkbr link` left the host "connecting" for good | The start is given up after 45 s and tried again | `TestSilentStartGivenUp` |
+| A linked node's 10 ms poll also paced its jobs' waits, each a round trip to the home node | Only asking for requests is that quick | `TestLinkPolls` |
+| A CLI attached to a daemon always said "using the running node X, which shares ...", because of root `local` | Root `local` is not compared | `TestSameRootsLeavesOutLocal` |
+| The TUI asked a node on a share for its links on every node list refresh | Asked once | `TestNotHomeAskedOnce` |
+| Two `firstLine` helpers that differed on long lines | One | (none) |
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): rounds of random copies and syncs

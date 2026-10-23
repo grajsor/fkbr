@@ -14,7 +14,8 @@ node_id: hosta
 nfs_root: /mnt/transfer/fkbr
 
 # Or no share: the hosts to link over ssh (docs/ssh.md), host or
-# host:/dir to share there, as ssh takes the host. Not with nfs_root.
+# host:/dir to share there, as ssh takes the host; NAME=host:/dir names
+# its node (default: its short hostname). Not with nfs_root.
 # F7 and F8 in the TUI's node list add and remove entries here.
 # ssh: [web01:/srv/www, db01]
 # fkbr on those hosts (default: fkbr on their PATH); ~/ is their home.
