@@ -416,6 +416,9 @@ func (r *Receiver) apply(h *bundle.Header, data io.Reader) error {
 // openStaged opens a staged file; tests replace it to fail.
 var openStaged = (*os.Root).OpenFile
 
+// truncateStaged sets a staged file's size; tests replace it to count.
+var truncateStaged = (*os.File).Truncate
+
 // applyFile stages one file (segment) as name in the open staging dir d.
 func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.Reader) error {
 	// A previous run may have left a non-file here; replace it.
@@ -444,9 +447,14 @@ func (r *Receiver) applyFile(d *os.Root, name string, h *bundle.Header, data io.
 		return fmt.Errorf("%s: wrote %d of %d bytes: %w", h.Name, n, h.Length, err)
 	}
 	if h.Last() {
-		if err := f.Truncate(h.Entry.Size); err != nil {
-			f.Close()
-			return err
+		// Only a file without its size yet (a hole at the end, or longer
+		// from an earlier run) is truncated: on XFS a truncate writes the
+		// file out at once, which made every small file a disk write.
+		if fi, err := f.Stat(); err != nil || fi.Size() != h.Entry.Size {
+			if err := truncateStaged(f, h.Entry.Size); err != nil {
+				f.Close()
+				return err
+			}
 		}
 		// Through the open file: each path-based call would resolve the
 		// whole staging path again, one component at a time.

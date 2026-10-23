@@ -307,6 +307,57 @@ func TestSparseFiles(t *testing.T) {
 	}
 }
 
+// A staged file is truncated only when it lacks its size: on XFS each
+// truncate wrote the file out at once (200,000 small files took 48 s
+// instead of 29 s). A hole at the end and a longer file from an earlier
+// run still get their size.
+func TestTruncateOnlyWhenNeeded(t *testing.T) {
+	srcDir, dstDir, src, dst := setup(t)
+	tail := append([]byte("data"), make([]byte, 1<<20)...)
+	os.WriteFile(filepath.Join(srcDir, "tree/tail.bin"), tail, 0o644)
+	os.WriteFile(filepath.Join(srcDir, "tree/empty"), nil, 0o644)
+	var truncated []string
+	orig := truncateStaged
+	truncateStaged = func(f *os.File, size int64) error {
+		truncated = append(truncated, filepath.Base(f.Name()))
+		return orig(f, size)
+	}
+	t.Cleanup(func() { truncateStaged = orig })
+
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, _ := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	apply(t, r, s, 0)
+	if strings.Join(truncated, ",") != "tail.bin" {
+		t.Fatalf("truncated %v, want only tail.bin", truncated)
+	}
+	// An earlier run left a.txt longer than it is.
+	var staged string
+	filepath.WalkDir(dstDir, func(p string, d fs.DirEntry, err error) error {
+		if d != nil && d.Name() == "a.txt" {
+			staged = p
+		}
+		return nil
+	})
+	if err := os.WriteFile(staged, []byte("alpha and more from before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	truncated = nil
+	r2, _ := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	apply(t, r2, s, 0)
+	if _, err := r2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dstDir, "tree/a.txt")); string(got) != "alpha" {
+		t.Errorf("a.txt = %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dstDir, "tree/tail.bin")); !bytes.Equal(got, tail) {
+		t.Errorf("tail.bin: %d bytes, want %d", len(got), len(tail))
+	}
+	if fi, err := os.Stat(filepath.Join(dstDir, "tree/empty")); err != nil || fi.Size() != 0 {
+		t.Errorf("empty: %v %v", fi, err)
+	}
+}
+
 // A directory that does not exist at the destination moves in with one
 // rename; the result still counts what it holds.
 func TestNewDirMovesWhole(t *testing.T) {
