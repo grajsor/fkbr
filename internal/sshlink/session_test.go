@@ -159,3 +159,17 @@ func TestAddBeforeRun(t *testing.T) {
 		t.Fatal("add before run never returned")
 	}
 }
+
+// A session's end is told by ssh or the link, not by the remote node's
+// last log line ("chunk applied" as the reason a link dropped).
+func TestSessionEndNotALogLine(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "fkbr")
+	os.WriteFile(bin, []byte("#!/bin/sh\necho 'time=2026-10-23T10:00:00Z level=INFO msg=\"chunk applied\"' >&2\nexit 1\n"), 0o755)
+	h := NewHome(t.TempDir(), "home", store.Options{}, nil)
+	o := SessionOptions{SSH: []string{fakeSSH(t)}, Bin: bin}
+	o.defaults()
+	err := h.session(context.Background(), Host{Dest: "h"}, &o)
+	if err == nil || strings.Contains(err.Error(), "chunk applied") {
+		t.Errorf("session end: %v", err)
+	}
+}

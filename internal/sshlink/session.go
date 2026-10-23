@@ -320,7 +320,11 @@ func (h *Home) session(ctx context.Context, host Host, o *SessionOptions) error 
 		sc.Buffer(make([]byte, 64<<10), 1<<20)
 		for sc.Scan() {
 			line := sc.Text()
-			last.set(line)
+			// The remote node's own log says how it ran, not why the
+			// session ended: that is ssh's last word, or the link's.
+			if !strings.HasPrefix(line, "time=") {
+				last.set(line)
+			}
 			h.log.Info("ssh "+name, "says", line)
 		}
 	}()
