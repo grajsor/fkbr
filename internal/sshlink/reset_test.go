@@ -8,6 +8,7 @@ import (
 	"net"
 	"syscall"
 	"testing"
+	"time"
 
 	"fkbr/internal/sshlink/frame"
 )
@@ -76,5 +77,37 @@ func TestFailureAfterAnswerKeepsItsCode(t *testing.T) {
 				t.Errorf("not a reset: %v", err)
 			}
 		})
+	}
+}
+
+// serve returns only once the calls in progress have: a home node's
+// handler still wrote a record after its session ended, into a test's
+// share being removed ("directory not empty", 1 full ssh run in 25).
+func TestServeWaitsForCalls(t *testing.T) {
+	cli, srv := sessionPair(t)
+	started, release := make(chan struct{}), make(chan struct{})
+	served := make(chan struct{})
+	go func() {
+		serve(context.Background(), srv, map[string]handler{"status.put": func(context.Context, json.RawMessage, io.Reader, *answerWriter) (any, error) {
+			close(started)
+			<-release // a write that goes on after the caller is gone
+			return nil, nil
+		}}, nil)
+		close(served)
+	}()
+	go do(context.Background(), cli, "status.put", nil, nil)
+	<-started
+	cli.Close()
+	<-srv.Done()
+	select {
+	case <-served:
+		t.Fatal("serve returned while a call was still running")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-served:
+	case <-time.After(5 * time.Second):
+		t.Fatal("serve did not return after its last call")
 	}
 }

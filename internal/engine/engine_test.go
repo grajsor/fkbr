@@ -123,13 +123,26 @@ func linked(t *testing.T, cfg *config.Config, nfs nfsmailbox.Options) (transport
 	}
 	a, b := net.Pipe()
 	fo := frame.Options{Ping: 100 * time.Millisecond}
-	go sw.home.ServeConn(context.Background(), a, cfg.NodeID+"-host", fo)
+	served := make(chan struct{})
+	go func() {
+		sw.home.ServeConn(context.Background(), a, cfg.NodeID+"-host", fo)
+		close(served)
+	}()
 	r, err := sshlink.Dial(context.Background(), b, cfg.NodeID, "test", filepath.Join(cfg.StateDir, "chunks"), fo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	sw.links[cfg.NodeID] = r
-	t.Cleanup(func() { r.Close() })
+	t.Cleanup(func() {
+		r.Close()
+		// The home node's calls for this node end before the share is
+		// removed: one still writing left it "not empty".
+		select {
+		case <-served:
+		case <-time.After(10 * time.Second):
+			t.Errorf("home node still serving %s", cfg.NodeID)
+		}
+	})
 	return r, r
 }
 
@@ -155,6 +168,18 @@ func node(t *testing.T, share, id string) (*Engine, string) {
 	t.Helper()
 	cfg := nodeCfg(t, share, id)
 	return build(t, cfg), cfg.Roots[0].Path
+}
+
+// waitPruned waits until each engine's worker has done its first prune.
+func waitPruned(t *testing.T, es ...*Engine) {
+	t.Helper()
+	for _, e := range es {
+		select {
+		case <-e.pruned:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: no prune at start", e.Self())
+		}
+	}
 }
 
 func runWorker(t *testing.T, e *Engine) (stop func()) {

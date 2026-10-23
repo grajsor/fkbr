@@ -68,6 +68,10 @@ type Engine struct {
 	// ready is closed once Run has passed its start checks (see Ready).
 	ready     chan struct{}
 	readyOnce sync.Once
+	// pruned is closed once Run's first prune is done (tests: that prune
+	// gives the share's own entries their modes, store.openUp).
+	pruned     chan struct{}
+	prunedOnce sync.Once
 
 	hub hub
 }
@@ -88,6 +92,7 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 		log:     log,
 		running: map[string]bool{},
 		ready:   make(chan struct{}),
+		pruned:  make(chan struct{}),
 		sendSem: make(chan struct{}, cfg.Transfer.MaxJobs),
 		recvSem: make(chan struct{}, cfg.Transfer.MaxJobs),
 		info: api.NodeInfo{
@@ -379,6 +384,7 @@ func (e *Engine) Run(ctx context.Context) error {
 	// Prune at start (a node may have been off for days) and then every
 	// half keep_done, so nothing outlives keep_done by much.
 	e.prune(ctx)
+	e.prunedOnce.Do(func() { close(e.pruned) })
 	prune := time.NewTicker(max(time.Minute, min(time.Hour, e.cfg.KeepDone/2)))
 	defer prune.Stop()
 	poll := time.NewTimer(0)

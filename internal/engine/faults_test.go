@@ -376,6 +376,10 @@ func TestShareHiccupRecovers(t *testing.T) {
 			time.Sleep(20 * time.Millisecond)
 		}
 	}
+	// Each worker's first prune gives the share's entries their modes
+	// (store.openUp): one that ran after the chmod below undid it, and s1
+	// stayed online (1 run in 60).
+	waitPruned(t, master, s1)
 	// s1 can no longer write its heartbeat: it must drop offline...
 	dir := filepath.Join(share, "nodes", "s1")
 	os.Chmod(dir, 0o500)

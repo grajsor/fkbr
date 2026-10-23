@@ -15,6 +15,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"strings"
+	"sync"
 	"syscall"
 
 	"fkbr/internal/api"
@@ -286,13 +287,19 @@ func (w *answerWriter) fail(err error) {
 }
 
 // serve answers the calls the other side opens until the session ends.
+// serve answers the calls the other side makes until the session ends,
+// and returns once the calls in progress have: a record call the caller
+// gave up on still writes, and a home node's session counts as ended
+// only after it.
 func serve(ctx context.Context, s *frame.Session, handlers map[string]handler, log *slog.Logger) {
+	var calls sync.WaitGroup
+	defer calls.Wait()
 	for {
 		st, err := s.Accept(ctx)
 		if err != nil {
 			return
 		}
-		go serveOne(ctx, st, handlers, log)
+		calls.Go(func() { serveOne(ctx, st, handlers, log) })
 	}
 }
 
