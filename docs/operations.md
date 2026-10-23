@@ -257,7 +257,10 @@ shares the directory you started in with it, as on a share.
   host and the hosts it links over ssh are involved). On an NFS share it
   is a source only: anyone who can write the share could forge what
   would be written. Syncs do not use it yet; copy instead. It is there
-  on a share too, as a source.
+  on a share too, as a source. A daemon has no root `local`, nor a node
+  whose `socket_mode` lets other users in: whoever reaches the socket
+  would reach all of it as you. A copy on it that a reboot cuts off
+  fails (its record was in `/tmp`); start it again.
 - **Which file:** the config file fkbr reads (`-config`, else
   `$FKBR_CONFIG`, else `fkbr.yaml` beside the binary if it is there),
   else `~/.fkbr.conf`, created with mode 0600. fkbr changes only its

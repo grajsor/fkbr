@@ -242,6 +242,19 @@ ssh hosts linked from the TUI (`operations.md`, "Without a share").
 | TUI: panes open in this directory and another node or the local root; a host not up yet shows with why; F7 links, F8 unlinks; on a share F7/F8 in the node list do nothing new | As stated | auto (`TestStartPanesAndLinkRows`, `TestLinkAndUnlinkFromTheNodeList`, `TestNoLinkKeysOnAShare`) |
 | The TUI on a real terminal: start without a share, F7 a real host, quit and start again | As above | **todo** (lab) |
 
+Found by a code review of this part (2026-10-23):
+
+| Found | Fixed | Test |
+|---|---|---|
+| Root `local` (`/`, writable) was on every node, daemons too: whoever reached the socket (`socket_mode` 0660, a daemon run as root) could read and delete anywhere as that user | Only a TUI or CLI gets it, and only with an owner-only socket; a configured local root with a looser socket is refused | `TestLocalRootOnlyForThisUser` |
+| The extra root broke the single-root shorthand: `cp /reports @all:/incoming`, `cp hostb:/logs/app.log /` failed | Root `local` does not count for the shorthand | `TestResolveRoot` |
+| A host with no node yet could be marked into `@dest`, failing the whole copy | Marking skips it | `TestLinkRowsNotMarked` |
+| F7 on a host linked already (from `ssh:` on the command line) did not save it | It is saved | `TestSSHHostsLinkedAtRuntime` |
+| A config file that did not parse stopped fkbr without naming it (`~/.fkbr.conf` is read unasked) | The error names the file | `TestBadFileNamed` |
+| The TUI asked the node whether it links hosts on every F7, F8 and F1 (and could act on a nil answer) | Asked once | `TestLinkerAskedOnce` |
+| A move between overlapping roots submitted by another node was not checked | The source refuses it | `TestMoveAcrossOverlappingRootsFromElsewhere` |
+| A copy on root `local` cut off by a reboot cannot resume (its record is in `/tmp`) | Known; it fails, start it again | (documented) |
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): rounds of random copies and syncs
