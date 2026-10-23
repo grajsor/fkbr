@@ -130,9 +130,12 @@ func TestOfflineTargetDetachedMidTransfer(t *testing.T) {
 	if j.State != api.JobPartial {
 		t.Errorf("job state after s2 returned: %s", j.State)
 	}
-	if _, err := os.Stat(filepath.Join(c2.Roots[0].Path, receive.StagingDir)); !os.IsNotExist(err) {
-		t.Errorf("s2 staging not cleaned: %v", err)
-	}
+	// It records its end first and removes its staging after (finishThen):
+	// over ssh the status is on the home node before s2 hears it is there.
+	waitUntil(t, func() bool {
+		_, err := os.Stat(filepath.Join(c2.Roots[0].Path, receive.StagingDir))
+		return os.IsNotExist(err)
+	}, "s2 staging cleaned")
 	if _, err := os.Stat(filepath.Join(c2.Roots[0].Path, "in")); !os.IsNotExist(err) {
 		t.Errorf("detached s2 must not install a partial copy")
 	}
