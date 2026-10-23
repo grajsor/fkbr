@@ -57,6 +57,7 @@ type Home struct {
 	runOpts *SessionOptions
 	keepers map[string]context.CancelFunc
 	keeping sync.WaitGroup
+	started chan struct{} // closed once Run has set the above
 }
 
 type peer struct {
@@ -152,7 +153,7 @@ func NewHome(dir, self string, opts store.Options, log *slog.Logger) *Home {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &Home{dir: dir, self: self, opts: opts, log: log, peers: map[string]*peer{}, hosts: map[string]*hostState{}}
+	return &Home{dir: dir, self: self, opts: opts, log: log, peers: map[string]*peer{}, hosts: map[string]*hostState{}, started: make(chan struct{})}
 }
 
 // Open returns the home node's own transport and store: the mailbox on

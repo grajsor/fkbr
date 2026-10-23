@@ -144,7 +144,7 @@ func (c *Client) Links(context.Context) ([]api.Link, error) {
 
 // AddLink links one host (as on the command line: web01:/srv/www) while
 // the node runs, and with save keeps it in the config file's ssh list.
-func (c *Client) AddLink(_ context.Context, spec string, save bool) error {
+func (c *Client) AddLink(ctx context.Context, spec string, save bool) error {
 	if c.home == nil {
 		return errNotHome
 	}
@@ -155,7 +155,7 @@ func (c *Client) AddLink(_ context.Context, spec string, save bool) error {
 	if len(hs) != 1 {
 		return fmt.Errorf("%w: one host at a time", api.ErrBadPath)
 	}
-	err = c.home.Add(hs[0])
+	err = c.home.Add(ctx, hs[0])
 	if err != nil && !(save && errors.Is(err, sshlink.ErrLinked)) {
 		return err // linked already but not saved (ssh: on the command line): save it
 	}

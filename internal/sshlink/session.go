@@ -124,8 +124,9 @@ func (h *Home) Run(ctx context.Context, hosts []Host, o SessionOptions) {
 	h.mu.Lock()
 	h.runCtx, h.runOpts, h.keepers = ctx, &o, map[string]context.CancelFunc{}
 	h.mu.Unlock()
+	close(h.started)
 	for _, host := range hosts {
-		if err := h.Add(host); err != nil {
+		if err := h.Add(ctx, host); err != nil {
 			h.log.Warn("ssh host not linked", "host", host.String(), "err", err)
 		}
 	}
@@ -141,8 +142,16 @@ var (
 	ErrLinked     = errors.New("linked already")
 )
 
-// Add links host while Run runs.
-func (h *Home) Add(host Host) error {
+// Add links host while Run runs. Run starts once the node is ready; an
+// Add that comes first (F7 at once) waits for it, a while.
+func (h *Home) Add(ctx context.Context, host Host) error {
+	select {
+	case <-h.started:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(time.Minute):
+		return ErrNotRunning
+	}
 	key := host.String()
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -134,3 +134,24 @@ func TestLingeringSSHDoesNotHang(t *testing.T) {
 		t.Fatal("hangs on ssh's output held open after it exited")
 	}
 }
+
+// A host added before the home node's Run has started (F7 right after
+// start) is linked once it does, not refused.
+func TestAddBeforeRun(t *testing.T) {
+	h := NewHome(t.TempDir(), "home", store.Options{}, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	added := make(chan error, 1)
+	go func() { added <- h.Add(ctx, Host{"web01", ""}) }()
+	time.Sleep(50 * time.Millisecond)
+	ssh := lingeringSSH(t)
+	go h.Run(ctx, nil, SessionOptions{SSH: []string{ssh}, Bin: "fkbr-not-installed"})
+	select {
+	case err := <-added:
+		if err != nil {
+			t.Fatalf("add before run: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("add before run never returned")
+	}
+}
