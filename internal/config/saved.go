@@ -96,10 +96,12 @@ func editSaved(p string, edit func([]string) []string) error {
 		return err
 	}
 	if doc == nil {
-		doc = &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{
-			Kind:        yaml.MappingNode,
-			HeadComment: product.Expand("{name} config; ssh lists the hosts linked from the TUI (F7 in a node list adds one, F8 removes it)"),
-		}}}
+		head := product.Expand("{name} config; ssh lists the hosts linked from the TUI (F7 in a node list adds one, F8 removes it)")
+		// A file of comments only reads as empty: keep them.
+		if b, err := os.ReadFile(p); err == nil && len(bytes.TrimSpace(b)) > 0 {
+			head = string(bytes.TrimSpace(b))
+		}
+		doc = &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, HeadComment: head}}}
 	}
 	top := doc.Content[0]
 	var seq *yaml.Node

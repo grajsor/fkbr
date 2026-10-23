@@ -55,6 +55,22 @@ func TestSavedHosts(t *testing.T) {
 	}
 }
 
+// A config file of comments only keeps them when a host is saved.
+func TestSaveHostKeepsComments(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "fkbr.yaml")
+	os.WriteFile(p, []byte("# mine\n# and this\n"), 0o600)
+	if err := SaveHost(p, "web01"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(p)
+	if !strings.Contains(string(b), "# mine\n# and this") {
+		t.Errorf("comments lost:\n%s", b)
+	}
+	if hs, _ := SavedHosts(p); !slices.Equal(hs, []string{"web01"}) {
+		t.Errorf("saved: %v", hs)
+	}
+}
+
 // A host linked by `fkbr ssh:web01` is not saved into a config file that
 // names a share: the file could not be read any more.
 func TestSaveHostBesideShare(t *testing.T) {

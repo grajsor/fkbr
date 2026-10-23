@@ -195,8 +195,12 @@ faults into a share directory's files are skipped there).
 | A host without fkbr | Link state says why; the home node keeps trying | auto (`TestSSHHostWithoutFkbr`) |
 | A private share (home node's records, staged chunks) | 0700/0600 whatever the umask | auto (`TestPrivateShareModes`) |
 | Real ssh, a `ProxyJump` path, 20 to 50 ms round trips | Works; throughput against `scp` and `rsync -e ssh` | **todo** (lab) |
-| A link cut mid-transfer (network, not a kill), both directions; the home node killed | Rides it out or detaches; resumes after | **todo** (lab) |
-| x86-64 and ARM64 hosts in one ssh swarm; a host with /tmp in memory | Same results; staging bounded by `job_quota` | **todo** (lab) |
+| A link cut mid-transfer: a blackhole route for 60 s, `kill -9` of the home node's ssh | Session started again (45 s, then 2 s); the copy is done, checksums equal | lab 2026-10-23 |
+| The home node SIGSTOPped for 60 s, or killed with -9 and started again, mid-copy | The linked nodes stop; with the home node back the job resumes and is done | lab 2026-10-23 (found the lost-end bug in section 11) |
+| A copy between two linked hosts | Nothing over 1 MB ever on the home node's disk | lab 2026-10-23 |
+| CentOS 7 as the home node; two directories of one host as named nodes (`a=host:/x,b=host:/y`); `-ssh-bin '~/fkbr/fkbr'` | Copies between all of them, checksums equal | lab 2026-10-23 |
+| The TUI on an ARM64 host with no hosts; F7 links an x86-64 host | Linked and saved in the config file; copies both ways; F10 stops the remote node | lab 2026-10-23 |
+| A host with /tmp in memory | Staging bounded by `job_quota` | **todo** (lab) |
 
 ## 11. Review of the ssh feature (2026-10-22)
 
@@ -221,6 +225,8 @@ role in a status file name, a quoted `~/` in `ssh_bin`).
 | Lab ssh test, the source's side cut for 75 s while the home node relayed its chunk: the target failed at once with "stream reset", though the link came back 30 s later | A call that fails after its answer started resets with the cause's code, so the target sees a link down and waits; the reset no longer depends on a logger being set (without one, a cut-short body read as complete) | `TestFailureAfterAnswerKeepsItsCode` |
 | Lab ssh test (2026-10-23), the home node SIGSTOPped for 60 s mid-copy: both linked nodes stopped; the source had failed the job and deleted its chunks, but the "failed" status went over the dead link and was lost, so after the restart the job resumed with its last chunk gone and source and target waited for each other for good. A target that lost its status the same way would resume on empty staging and install only the later chunks | Staged chunks and staging are removed only once the job's end is recorded (tried again for up to 3 min while the worker runs); else the next run resumes from them | `TestSourceEndLostKeepsChunks`, `TestTargetEndLostKeepsStaging` |
 | Lab ssh test: "ssh session ended" gave the remote node's last log line ("chunk applied") as the reason | The reason is ssh's last word or the link's error | `TestSessionEndNotALogLine` |
+| Lab test: `cd /usr && fkbr ls /local` with no node running listed `/`: in-process, this node is not registered, so neither the shorthand nor the root `local` check applied | This node's own roots are used | `TestResolveRoot` |
+| Lab test: F7 with a config file of comments only replaced them | Kept | `TestSaveHostKeepsComments` |
 | A job a broken link made fail could only be copied again by hand | `catchup` (F9 `u`) re-sends to failed targets too | `TestCatchUpFailedTarget` |
 | The home node forgot a request once it handed it out: a fetch answer lost while the link stayed up (unreadable, or over the 64 MiB line) left it unsent until the next link | Requests stay on the home node until the next fetch acks the answer, else go out again, alone; one that never arrives is parked in failed/ after 20 tries. An answer carries at most 16 MiB; a linked build without acks is refused | `TestLostFetchAnswerSentAgain`, `TestRemoteFetchAcks`, `TestFetchAnswerBounded`, `TestRequestThatNeverArrivesParked`, `TestOlderLinkRefused` |
 
