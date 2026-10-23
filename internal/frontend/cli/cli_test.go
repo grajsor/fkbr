@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"testing"
 
 	"fkbr/internal/api"
@@ -47,10 +49,17 @@ func TestModeStringSpecial(t *testing.T) {
 type rootsClient struct {
 	api.Client
 	nodes []api.Node
+	dirs  []string // folders in the shared roots, as "root/path"
 }
 
 func (c rootsClient) Self() string                              { return "a" }
 func (c rootsClient) Nodes(context.Context) ([]api.Node, error) { return c.nodes, nil }
+func (c rootsClient) List(_ context.Context, req api.ListRequest) (*api.ListResult, error) {
+	if slices.Contains(c.dirs, req.Root+"/"+req.Path) {
+		return &api.ListResult{}, nil
+	}
+	return nil, api.ErrNotFound
+}
 
 func TestResolveRoot(t *testing.T) {
 	one := func(id string) api.Node {
@@ -80,5 +89,16 @@ func TestResolveRoot(t *testing.T) {
 	c.nodes = c.nodes[:3]
 	if r, p, _ := resolveRoot(context.Background(), c, "@all", "release", ""); r != "files" || p != "release" {
 		t.Errorf("@all over single-root nodes: %q %q", r, p)
+	}
+	// cd /usr && fkbr: local/bin is not quietly /bin when files/local is there.
+	c.dirs = []string{"files/local"}
+	if r, p, err := resolveRoot(context.Background(), c, "", "local", "bin"); !errors.Is(err, api.ErrBadPath) {
+		t.Errorf("local/bin with a folder local in the shared root: %q %q %v", r, p, err)
+	}
+	if r, p, err := resolveRoot(context.Background(), c, "", "files", "local/bin"); err != nil || r != "files" || p != "local/bin" {
+		t.Errorf("files/local/bin: %q %q %v", r, p, err)
+	}
+	if r, p, err := resolveRoot(context.Background(), c, "b", "local", "bin"); err != nil || r != "files" || p != "local/bin" {
+		t.Errorf("b:/local/bin (b has no root local): %q %q %v", r, p, err)
 	}
 }

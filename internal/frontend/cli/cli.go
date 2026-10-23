@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -277,13 +278,6 @@ func chownLabel(n api.NodeInfo) string {
 	return "no"
 }
 
-// resolveRoot applies the single-root shorthand. Nodes started the default
-// way share one directory, so "node:/sub/dir" means a path in that root
-// rather than a root named "sub". When the first segment is not a root of
-// every addressed node, and those nodes all have exactly one root with the
-// same ID, the segment is treated as part of the path. A node's root
-// "local" (only it sees it) does not count. nodes is "" (this
-// node), "n1,n2", "@all" or "@role".
 // sharedRoots leaves out the roots only their node sees.
 func sharedRoots(rs []api.Root) []api.Root {
 	var out []api.Root
@@ -295,6 +289,14 @@ func sharedRoots(rs []api.Root) []api.Root {
 	return out
 }
 
+// resolveRoot applies the single-root shorthand. Nodes started the default
+// way share one directory, so "node:/sub/dir" means a path in that root
+// rather than a root named "sub". When the first segment is not a root of
+// every addressed node, and those nodes all have exactly one root with the
+// same ID, the segment is treated as part of the path. A node's root
+// "local" (only it sees it) does not count; a path that could mean it or a
+// folder of that name in the shared root is refused. nodes is "" (this
+// node), "n1,n2", "@all" or "@role".
 func resolveRoot(ctx context.Context, c api.Client, nodes, root, rel string) (string, string, error) {
 	all, err := c.Nodes(ctx)
 	if err != nil {
@@ -315,12 +317,13 @@ func resolveRoot(ctx context.Context, c api.Client, nodes, root, rel string) (st
 	if len(targets) == 0 {
 		return root, rel, nil // let the engine report the unknown node
 	}
-	hasRoot := root != ""
+	hasRoot, ownRoot := root != "", root != ""
 	single := ""
 	for i, n := range targets {
 		found := false
 		for _, r := range n.Roots {
 			found = found || r.ID == root
+			ownRoot = ownRoot && (r.ID != root || r.Local)
 		}
 		hasRoot = hasRoot && found
 		shared := sharedRoots(n.Roots)
@@ -329,6 +332,14 @@ func resolveRoot(ctx context.Context, c api.Client, nodes, root, rel string) (st
 			break
 		}
 		single = shared[0].ID
+	}
+	if hasRoot && ownRoot && single != "" {
+		// cd /usr && fkbr: is /local/bin root local's /bin or /usr/local/bin?
+		if _, err := c.List(ctx, api.ListRequest{Node: nodes, Root: single, Path: root, Limit: 1}); err == nil {
+			p := path.Join(root, rel)
+			return "", "", fmt.Errorf("%w: %s could be in root %s or in the folder %s of root %s; write %s/%s for the folder",
+				api.ErrBadPath, p, root, root, single, single, p)
+		}
 	}
 	if hasRoot || single == "" {
 		return root, rel, nil
