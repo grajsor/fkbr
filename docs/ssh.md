@@ -91,7 +91,10 @@ and acks).
 
 - A source keeps the chunks it makes (FKB2, zstd, SHA-256, as everywhere)
   in a private directory on its own disk until every active target has
-  acked them; `job_quota` bounds them per job.
+  acked them; `job_quota` bounds them per job and `staging_quota` in all.
+  The home node's `chunk_size` and quotas apply on every host: it passes
+  those it changed to `fkbr link`. A chunk that would not fit the disk is
+  waited for (targets consuming) before it is started.
 - A target reads each chunk from its source over the links and checks it
   with the strict chunk reader, as it would any chunk. Between the home
   node and a remote node the path is their session; between two remote

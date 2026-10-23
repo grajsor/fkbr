@@ -243,9 +243,11 @@ directory without one), and opens the TUI with all of them.
 - **Runtime files:** the home node keeps the swarm's records in
   `/tmp/fkbr-<uid>-<node>-ssh/ssh`; another host keeps the data it sends in
   `/tmp/fkbr-<uid>-<node>-link` until the targets have it (up to
-  `transfer.job_quota`, 1 GiB, per job). Both are private to the user.
-  Where `/tmp` is in memory, that is RAM; when it fills, the sender
-  waits for the targets.
+  `transfer.job_quota`, 1 GiB, per job; `staging_quota`, 4 GiB, in all).
+  Both are private to the user. Where `/tmp` is in memory, that is RAM:
+  set the quotas on the home node (config file or `-job-quota 256M`,
+  `-staging-quota 512M`), they apply on every host it links. When the
+  disk fills, the sender waits for the targets.
 
 ## Without a share
 

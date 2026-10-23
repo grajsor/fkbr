@@ -73,6 +73,7 @@ roots:
 #   chunk_size: 128MiB     # largest staged chunk (the first ones are smaller: 4, 8, 16 MiB ...)
 #   job_quota: 1GiB        # max bytes this node stages for one job
 #   staging_quota: 4GiB    # max bytes this node stages for all jobs
+#                          # (on an ssh home node: also on every host it links)
 #   max_jobs: 2            # concurrent sending jobs, and receiving jobs
 #   allow_setid: false     # keep setuid/setgid bits on received files
 #   detach_after: 10m      # fan-out: drop a target stalled this long
