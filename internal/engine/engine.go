@@ -40,12 +40,13 @@ type Options struct {
 }
 
 type Engine struct {
-	cfg  *config.Config
-	fs   localfs.FS
-	tr   transport.Transport
-	st   transport.Store
-	info api.NodeInfo
-	log  *slog.Logger
+	space spaceBook // disk space held for chunks being written
+	cfg   *config.Config
+	fs    localfs.FS
+	tr    transport.Transport
+	st    transport.Store
+	info  api.NodeInfo
+	log   *slog.Logger
 
 	// applyMu makes ApplySync's check and mark of plan.Applied one step
 	// for every client of this node (TUI, CLI, socket).

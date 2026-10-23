@@ -248,9 +248,7 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 	sink.w = w
 	defer func() {
 		w.Abort()
-		if sink.cw != nil {
-			sink.cw.Abort() // drop the half-written temp file
-		}
+		sink.drop()
 	}()
 	// The walk runs ahead in its own goroutine and starts reading small
 	// files (prefetch.go); this loop bundles the entries in walk order.
@@ -698,32 +696,38 @@ func (s *sender) waitAfterNoSpace(ctx context.Context, cause error) error {
 }
 
 // waitForSpace blocks until staging chunk seq stays within quota and fits
-// where chunks are staged. A full disk found by the write instead costs a
-// new pass over the source (waitAfterNoSpace), so it is waited for here
-// while some of this node's chunks are staged; with none, nothing would
-// free it, and the write finds out.
-func (s *sender) waitForSpace(ctx context.Context, seq int) error {
+// where chunks are staged, and holds that space for it (spaceBook). A full
+// disk found by the write instead costs a new pass over the source
+// (waitAfterNoSpace), so it is waited for here while some of this node's
+// chunks are staged or being written; with none, nothing would free it,
+// and the write finds out. The hold is nil if the disk cannot tell.
+func (s *sender) waitForSpace(ctx context.Context, seq int) (*spaceHold, error) {
 	t := s.e.cfg.Transfer
-	need := bundle.ChunkLimit(seq, int64(t.ChunkSize)) + 1<<20 // entry headers
+	limit := bundle.ChunkLimit(seq, int64(t.ChunkSize))
+	need := limit + limit/64 + 64<<10 // and entry headers
 	waiting := false
 	wait := newWaitLog(s.log, "waiting for staging space", waitLogAfter, waitLogEvery)
 	for {
 		if _, err := s.gc(ctx, -1); err != nil {
-			return err
+			return nil, err
 		}
 		jobBytes, total, err := s.e.st.StagedBytes(ctx, s.job.ID)
 		if err != nil {
-			return err
+			return nil, err
 		}
+		var hold *spaceHold
 		free, ferr := s.e.st.FreeBytes()
-		fits := ferr != nil || free >= need || total == 0
-		if fits && jobBytes+int64(t.ChunkSize) <= int64(t.JobQuota) && total+int64(t.ChunkSize) <= int64(t.StagingQuota) {
+		quota := jobBytes+int64(t.ChunkSize) <= int64(t.JobQuota) && total+int64(t.ChunkSize) <= int64(t.StagingQuota)
+		if quota && ferr == nil {
+			hold = s.e.space.take(free, need, total)
+		}
+		if quota && (ferr != nil || hold != nil) {
 			if waiting {
 				s.status.st.Phase = "sending"
 				s.status.put(ctx, true)
 			}
 			wait.done()
-			return nil
+			return hold, nil
 		}
 		if !waiting {
 			waiting = true
@@ -732,13 +736,13 @@ func (s *sender) waitForSpace(ctx context.Context, seq int) error {
 		}
 		wait.tick("staged_job", size(jobBytes), "staged_share", size(total), "free", size(free), "acked", s.ackSummary(-1))
 		if err := s.check(ctx, true); err != nil {
-			return err
+			return nil, err
 		}
 		if err := s.detachLaggards(ctx, -1); err != nil {
-			return err
+			return nil, err
 		}
 		if err := s.e.sleep(ctx); err != nil {
-			return err
+			return nil, err
 		}
 	}
 }
@@ -749,6 +753,18 @@ type shareSink struct {
 	ctx context.Context
 	w   *bundle.Writer // for progress counters
 	cw  transport.ChunkWriter
+	// hold is the disk space held for cw (nil: none).
+	hold *spaceHold
+}
+
+// drop aborts the chunk being written, if any, and gives back its space.
+func (k *shareSink) drop() {
+	if k.cw != nil {
+		k.cw.Abort() // drop the half-written temp file
+		k.cw = nil
+	}
+	k.hold.release()
+	k.hold = nil
 }
 
 func (k *shareSink) Create(seq int) (io.WriteCloser, error) {
@@ -756,15 +772,20 @@ func (k *shareSink) Create(seq int) (io.WriteCloser, error) {
 		k.cw = nil
 		return nopWriteCloser{io.Discard}, nil
 	}
-	if err := k.s.waitForSpace(k.ctx, seq); err != nil {
+	hold, err := k.s.waitForSpace(k.ctx, seq)
+	if err != nil {
 		return nil, err
 	}
 	cw, err := k.s.e.st.CreateChunk(k.ctx, k.s.job.ID, seq)
 	if err != nil {
+		hold.release()
 		return nil, err
 	}
-	k.cw = cw
-	return nopWriteCloser{cw}, nil
+	k.cw, k.hold = cw, hold
+	if hold == nil {
+		return nopWriteCloser{cw}, nil
+	}
+	return nopWriteCloser{heldWriter{cw, hold}}, nil
 }
 
 func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
@@ -784,7 +805,10 @@ func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
 	if err != nil {
 		return err
 	}
-	if err := k.cw.Commit(b); err != nil {
+	err = k.cw.Commit(b)
+	k.hold.release()
+	k.hold = nil
+	if err != nil {
 		return err
 	}
 	k.cw = nil

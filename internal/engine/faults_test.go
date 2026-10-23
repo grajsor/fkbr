@@ -48,6 +48,7 @@ type faultStore struct {
 	// capacity > 0: a small disk. Free space is what this node's staged
 	// chunks leave of it; a write past it fails with ENOSPC (counted).
 	capacity int64
+	writing  int64 // in chunks not yet published
 	full     int
 }
 
@@ -56,10 +57,13 @@ func (f *faultStore) FreeBytes() (int64, error) {
 		return f.Dir.FreeBytes()
 	}
 	_, staged, err := f.Dir.StagedBytes(context.Background(), "")
-	return f.capacity - staged, err
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.capacity - staged - f.writing, err
 }
 
-// capWriter fails a chunk write that would overfill the small disk.
+// capWriter fails a chunk write that would overfill the small disk, with
+// every chunk being written counted.
 type capWriter struct {
 	transport.ChunkWriter
 	f *faultStore
@@ -68,15 +72,36 @@ type capWriter struct {
 
 func (w *capWriter) Write(p []byte) (int, error) {
 	_, staged, _ := w.f.Dir.StagedBytes(context.Background(), "")
-	if staged+w.n+int64(len(p)) > w.f.capacity {
-		w.f.mu.Lock()
+	w.f.mu.Lock()
+	if staged+w.f.writing+int64(len(p)) > w.f.capacity {
 		w.f.full++
 		w.f.mu.Unlock()
 		return 0, &os.PathError{Op: "write", Path: "chunk", Err: syscall.ENOSPC}
 	}
+	w.f.writing += int64(len(p))
+	w.f.mu.Unlock()
 	n, err := w.ChunkWriter.Write(p)
-	w.n += int64(n)
+	w.n += int64(len(p))
 	return n, err
+}
+
+// done: the chunk is published (now in staged) or dropped.
+func (w *capWriter) done() {
+	w.f.mu.Lock()
+	w.f.writing -= w.n
+	w.f.mu.Unlock()
+	w.n = 0
+}
+
+func (w *capWriter) Commit(meta []byte) error {
+	err := w.ChunkWriter.Commit(meta)
+	w.done()
+	return err
+}
+
+func (w *capWriter) Abort() {
+	w.ChunkWriter.Abort()
+	w.done()
 }
 
 func (f *faultStore) PutStatus(ctx context.Context, id string, st *api.JobStatus) error {
@@ -293,25 +318,32 @@ func TestTargetEndLostKeepsStaging(t *testing.T) {
 
 // Staging on a small disk (/tmp in memory on a linked host): the source
 // waits for room before each chunk instead of running into ENOSPC, which
-// costs a new pass over the source each time.
+// costs a new pass over the source each time. Two copies at once must not
+// both count the same free space.
 func TestSmallDiskWaitedFor(t *testing.T) {
 	share := t.TempDir()
 	mcfg := nodeCfg(t, share, "master")
 	mcfg.Transfer.JobQuota, mcfg.Transfer.StagingQuota = 64<<20, 64<<20 // the disk is the limit
 	master, fs := buildFaulty(t, mcfg)
-	fs.capacity = 2 << 20 // room for some 64 KiB chunks above the 1 MiB margin
+	fs.capacity = 1 << 20 // room for some 64 KiB chunks
 	scfg := nodeCfg(t, share, "s1")
 	makeTree(t, mcfg.Roots[0].Path, 4, 3<<20)
 	runWorker(t, master)
 	runWorker(t, build(t, scfg))() // registered, then down: staging builds up
-	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
-	if err != nil {
-		t.Fatal(err)
+	var ids []string
+	for _, dir := range []string{"a", "b"} {
+		id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data", DstDir: dir})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
 	}
 	time.Sleep(2 * time.Second)
 	runWorker(t, build(t, scfg))
-	if j := waitJob(t, master, id, 60*time.Second); j.State != api.JobDone {
-		t.Fatalf("state %s: %+v", j.State, j.Participants)
+	for _, id := range ids {
+		if j := waitJob(t, master, id, 60*time.Second); j.State != api.JobDone {
+			t.Fatalf("state %s: %+v", j.State, j.Participants)
+		}
 	}
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -647,5 +679,27 @@ func TestNoSpaceNamesStagingDir(t *testing.T) {
 	s.waitAfterNoSpace(ctx, syscall.ENOSPC)
 	if p := s.status.st.Phase; strings.Contains(p, "share") || !strings.Contains(p, cfg.NFSRoot) {
 		t.Errorf("phase %q", p)
+	}
+}
+
+// The space book: what one chunk holds is not counted again for another,
+// and comes back as the chunk writes it and when it is done.
+func TestSpaceBook(t *testing.T) {
+	var b spaceBook
+	a := b.take(100, 60, 1)
+	if a == nil || b.take(100, 60, 1) != nil {
+		t.Fatal("two chunks of 60 in 100 free")
+	}
+	a.wrote(50) // on disk now: free is 50
+	if b.take(50, 60, 1) != nil {
+		t.Fatal("the rest of the first chunk is still held")
+	}
+	a.release()
+	if b.take(50, 40, 1) == nil {
+		t.Error("released space not given back")
+	}
+	var empty spaceBook
+	if empty.take(10, 60, 0) == nil {
+		t.Error("nothing staged or held: the write should find out, not wait")
 	}
 }
