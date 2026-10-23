@@ -99,8 +99,8 @@ and acks).
   MiB and 1 GiB), and they are not synced: a chunk is usually read and
   deleted before the kernel writes it out, so the source's disk only
   reads what it sends. Synced 128 MiB chunks made the source write each
-  one to disk while reading the next: a 1 GiB copy took 15.6 s instead
-  of 9.5 s (rsync over the same ssh: 8.0 s).
+  one to disk while reading the next: a 1 GiB copy took 15.6 s, now
+  about 10 s (`benchmarks.md`, against rsync).
 - A target reads each chunk from its source over the links and checks it
   with the strict chunk reader, as it would any chunk. Between the home
   node and a remote node the path is their session; between two remote

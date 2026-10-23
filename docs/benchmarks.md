@@ -85,6 +85,36 @@ files would take about 2 h 20 min to one target.
   directory they keep open, and move a directory that is new at the
   destination into place with one rename.
 
+## fkbr and rsync over ssh (2026-10-23)
+
+The same four VMs and data, no share: the Rocky 9 VM runs fkbr's home
+node and links the targets over ssh (`fkbr ssh:HOST:/dir,...`). rsync
+runs `rsync -a` over plain ssh, one per target at once. "Relayed" copies
+between two linked hosts through a third (Rocky 8): fkbr's home node
+passes the data on in memory; rsync uses `ssh -J`. Page caches dropped
+before each run, every copy checked with sha256, one run each.
+
+| | fkbr | rsync |
+|---|---|---|
+| 1 GiB file → 1 target | 10.6 s | **7.1 s** |
+| 1 GiB file → 3 targets | 23 s | **21 s** |
+| 1 GiB file, relayed | 12 s | **9.0 s** |
+| 20,000 files → 1 target | 4.6 s | **3.9 s** |
+| 20,000 files → 3 targets | **7.6 s** | 9.4 s |
+| 20,000 files, relayed | 4.6 s | 4.5 s |
+| 200,000 files → 1 target | **24 s** | 27 s |
+| 200,000 files → 3 targets | **48 s** | 1 min 7 s |
+| 200,000 files, relayed | **23 s** | 28 s |
+
+- **One big file:** rsync streams it; fkbr cuts it into chunks that the
+  source stages before sending, which costs it a few seconds per GiB.
+- **Many files, or several targets:** fkbr is ahead. It packs files into
+  chunks and makes each chunk once for every target, where rsync sends
+  each file on its own, once per target.
+- Over NFS rsync is no match (above): it creates every file on the share
+  one by one. Over ssh it is at its best, straight onto the target's
+  disk.
+
 ## Sync (2026-10-19, four targets)
 
 The 20,000-file mail store, `sync -z` to four targets:
