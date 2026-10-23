@@ -38,6 +38,9 @@ type Poll struct {
 	// Idle is the poll interval after IdleAfter without traffic.
 	Idle      time.Duration `yaml:"idle"`
 	IdleAfter time.Duration `yaml:"idle_after"`
+	// Fetch, if set, paces asking for requests instead of Active and Idle
+	// (a linked node: asking waits on the home node already).
+	Fetch time.Duration `yaml:"-"`
 }
 
 type Config struct {
@@ -333,9 +336,8 @@ func (c *Config) applyDefaults() {
 			c.NFSRoot = filepath.Join(c.StateDir, "chunks")
 		}
 		// Asking for requests waits on the home node (sshlink), so ask
-		// again at once.
-		setDur(&c.Poll.Active, 10*time.Millisecond)
-		setDur(&c.Poll.Idle, 10*time.Millisecond)
+		// again at once. Not other waits: each look is a round trip.
+		setDur(&c.Poll.Fetch, 10*time.Millisecond)
 	case c.Home || len(c.SSH) > 0:
 		c.Home = true
 		if c.NFSRoot == "" && c.StateDir != "" {

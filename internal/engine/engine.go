@@ -420,7 +420,10 @@ func (e *Engine) Run(ctx context.Context) error {
 				lastActivity = time.Now()
 			}
 			interval := e.cfg.Poll.Active
-			if time.Since(lastActivity) > e.cfg.Poll.IdleAfter {
+			switch {
+			case e.cfg.Poll.Fetch > 0:
+				interval = e.cfg.Poll.Fetch
+			case time.Since(lastActivity) > e.cfg.Poll.IdleAfter:
 				interval = e.cfg.Poll.Idle
 			}
 			poll.Reset(interval)

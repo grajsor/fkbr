@@ -107,6 +107,18 @@ func TestDefaultsWithoutFile(t *testing.T) {
 	}
 }
 
+// A linked node asks the home node for requests again at once, but its
+// jobs' waits keep the usual pace: each look there is a round trip.
+func TestLinkPolls(t *testing.T) {
+	c := &Config{NodeID: "web01", Link: true, StateDir: t.TempDir(), Roots: []Root{{ID: "files", Path: t.TempDir()}}}
+	if err := c.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Poll.Fetch != 10*time.Millisecond || c.Poll.Active != 200*time.Millisecond {
+		t.Errorf("fetch %s, active %s", c.Poll.Fetch, c.Poll.Active)
+	}
+}
+
 func TestDefaultNodeAndRoot(t *testing.T) {
 	id, err := DefaultNodeID()
 	if err != nil || !ValidID(id) {
