@@ -200,9 +200,12 @@ func TestCancelWhileTargetDown(t *testing.T) {
 	if j := waitJob(t, master, id, 5*time.Second); j.State != api.JobCancelled {
 		t.Fatalf("state %s: %+v", j.State, j.Participants)
 	}
-	if _, err := os.Stat(filepath.Join(share, "data", "master", id)); !os.IsNotExist(err) {
-		t.Errorf("staged data not removed after cancel")
-	}
+	// The source records its end first and removes its data after
+	// (finishThen).
+	waitUntil(t, func() bool {
+		_, err := os.Stat(filepath.Join(share, "data", "master", id))
+		return os.IsNotExist(err)
+	}, "staged data removed after cancel")
 }
 
 func TestReceiverRestartResumes(t *testing.T) {
