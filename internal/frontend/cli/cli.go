@@ -304,14 +304,20 @@ func resolveRoot(ctx context.Context, c api.Client, nodes, root, rel string) (st
 	}
 	var targets []api.Node
 	for _, spec := range strings.Split(nodes, ",") {
+		found := false
 		for _, n := range all {
 			switch {
 			case spec == "" && n.ID == c.Self(),
 				spec == n.ID,
 				spec == "@"+api.GroupAll && n.ID != c.Self(),
 				strings.HasPrefix(spec, "@") && n.HasRole(spec[1:]):
-				targets = append(targets, n)
+				targets, found = append(targets, n), true
 			}
+		}
+		// This node in-process, never registered (no share, no node
+		// running): its own roots.
+		if l, ok := c.(interface{ LocalRoots() []api.Root }); ok && !found && (spec == "" || spec == c.Self()) {
+			targets = append(targets, api.Node{NodeInfo: api.NodeInfo{ID: c.Self(), Roots: l.LocalRoots()}})
 		}
 	}
 	if len(targets) == 0 {

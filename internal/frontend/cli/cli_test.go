@@ -101,4 +101,21 @@ func TestResolveRoot(t *testing.T) {
 	if r, p, err := resolveRoot(context.Background(), c, "b", "local", "bin"); err != nil || r != "files" || p != "local/bin" {
 		t.Errorf("b:/local/bin (b has no root local): %q %q %v", r, p, err)
 	}
+	// The same in-process, with this node never registered (no share,
+	// no node running): its own roots count.
+	in := unregistered{rootsClient{nodes: c.nodes[1:], dirs: c.dirs}, self.Roots}
+	if r, p, err := resolveRoot(context.Background(), in, "", "local", "bin"); !errors.Is(err, api.ErrBadPath) {
+		t.Errorf("unregistered: local/bin with a folder local: %q %q %v", r, p, err)
+	}
+	if r, p, err := resolveRoot(context.Background(), in, "", "sub", "dir"); err != nil || r != "files" || p != "sub/dir" {
+		t.Errorf("unregistered: /sub/dir: %q %q %v", r, p, err)
+	}
 }
+
+// unregistered is a client in-process whose node is not in Nodes.
+type unregistered struct {
+	rootsClient
+	roots []api.Root
+}
+
+func (c unregistered) LocalRoots() []api.Root { return c.roots }
