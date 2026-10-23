@@ -20,17 +20,23 @@ copyright "The Author".
 - **Nothing installed, ever.** No package, install script, systemd unit,
   system user, or files in `/etc`, `/var` or `$HOME`. Ship one binary;
   config is optional (flags, `$FKBR_CONFIG`, or `fkbr.yaml` beside the
-  binary). "Very incognito".
+  binary). "Very incognito". The ssh hosts linked from the TUI (F7) go
+  in the config file's `ssh:` list (`config.WritePath`): `-config`,
+  `$FKBR_CONFIG`, `fkbr.yaml` beside the binary if it exists, and only if
+  none of those exists, `~/.fkbr.conf` (the owner's call; the one file
+  fkbr may put in `$HOME`, written only when a host is linked).
 - **Swarm, no master/slave.** `cd /dir && fkbr /mnt/nfs/somedir` registers
   the host (named after its short hostname) and shares the current
-  directory. Targets are a node, `n1,n2`, `@all`, or in the TUI `@dest`.
+  directory. Without a share, `fkbr` runs this host on its own (an ssh
+  swarm's home node, hosts linked from `ssh:` or the TUI). Targets are a node, `n1,n2`, `@all`, or in the TUI `@dest`.
   Roles are optional tags only.
 - **Runs on any Linux**, x86-64 and ARM64: `CGO_ENABLED=0`, no glibc
   dependency, kernel 3.10 compatible (CentOS 7 is the oldest target).
 - **No background service or cron.** A running TUI or `daemon` does all
   the work, including cleanup. Runtime files live in
-  `/tmp/fkbr-<uid>-<node>` (not `/run/user`, which logout deletes); the
-  dir must be ours and not writable by others. A TUI that runs the node
+  `/tmp/fkbr-<uid>-<node>` (not `/run/user`, which logout deletes;
+  `-ssh` for a node without a share or with `ssh:`, `-link` for one
+  linked over ssh); the dir must be ours and not writable by others. A TUI that runs the node
   logs there (`node.log`, kept after exit, rotated at 1 MiB; F1 shows the
   path); the daemon logs to stderr.
 - **Every build produces both** `dist/fkbr-linux-amd64` and
@@ -104,7 +110,8 @@ internal/store              the share: registry, inboxes, jobs, chunks, blobs in
                             layout() self-heal; Options.Private for a share only this user reaches
 internal/api/remote         HTTP+JSON over the unix socket, SSE events, ServeSocket self-heal
 internal/engine             jobs, send/recv, fan-out/detach, sync, files ops, events,
-                            worker lock, instance.go (one worker per node ID)
+                            worker lock, instance.go (one worker per node ID),
+                            localroot.go (root "local": never published, own jobs only)
 internal/transport          Transport (messaging) + Store (jobs/data/blobs) interfaces
 internal/transport/nfsmailbox  the store on NFS: the refresh trick
 internal/sshlink            nodes over ssh (docs/ssh.md): home.go (records, relay), remote.go,
@@ -119,8 +126,10 @@ internal/mountinfo          /proc/self/mountinfo parsing, NFS caching detection
 internal/exclude            rsync-like excludes
 internal/safetext           cleaning text from elsewhere before it is drawn
 internal/check              `fkbr check`
-internal/config             YAML/flags, defaults (node=hostname, root=cwd "files")
-internal/frontend/{cli,tui} CLI commands (parseFlags: flags anywhere); bubbletea TUI
+internal/config             YAML/flags, defaults (node=hostname, root=cwd "files", local=/);
+                            saved.go: the TUI's ssh hosts in the config file
+internal/frontend/{cli,tui} CLI commands (parseFlags: flags anywhere); bubbletea TUI;
+                            tui/links.go: ssh hosts in the node list (F7/F8), start panes
 internal/product            Name, EnvPrefix, Release, Version(commit), Expand("{name}")
 ```
 

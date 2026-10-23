@@ -11,8 +11,11 @@ a dual-pane TUI and a scriptable CLI.
   on any Linux with kernel 3.10 or newer and does not depend on glibc. No
   package, service, system user or files in `/etc`.
 - **Over ssh too.** Hosts without a common share, reached with ssh, are
-  linked from one of them: `fkbr ssh:web01:/srv/www,db01`. Data goes
-  straight from source to target (`docs/ssh.md`).
+  linked from one of them: `fkbr ssh:web01:/srv/www,db01`, or with F7 in
+  the TUI (kept in the config file). Data goes straight from source to
+  target (`docs/ssh.md`).
+- **On its own.** `fkbr` with no share opens the TUI in the directory you
+  are in and in `/`, which only you see.
 - **No master.** Each host that runs `fkbr /mnt/nfs/xfer` joins as a node
   named after its hostname. Copy to one node, a list of nodes, or all of
   them (`@all`).

@@ -1,6 +1,7 @@
 # Optional fkbr node configuration: everything here can also be given as
 # flags (-node, -share, -root, -roles, -state). fkbr reads it from -config,
-# $FKBR_CONFIG, or fkbr.yaml next to the binary; flags override it.
+# else $FKBR_CONFIG, else fkbr.yaml next to the binary, else ~/.fkbr.conf
+# (only these, in this order); flags override it.
 
 # Local API socket for CLI/TUI (default <state_dir>/fkbr.sock, max 100
 # bytes) and its permissions (0660 lets the node user's group use it).
@@ -12,11 +13,16 @@ node_id: hosta
 # The shared NFS directory. Must be the same export on every node.
 nfs_root: /mnt/transfer/fkbr
 
-# Or, instead of nfs_root (not both): hosts reached with ssh, linked from
-# this node (docs/ssh.md). host or host:/dir, as ssh takes the host.
+# Or no share: the hosts to link over ssh (docs/ssh.md), host or
+# host:/dir to share there, as ssh takes the host. Not with nfs_root.
+# F7 and F8 in the TUI's node list add and remove entries here.
 # ssh: [web01:/srv/www, db01]
 # fkbr on those hosts (default: fkbr on their PATH); ~/ is their home.
 # ssh_bin: ~/fkbr/fkbr
+
+# Root "local": a directory only this host's TUI and CLI see (default /;
+# none: no such root). Other nodes cannot reach it.
+# local_root: /
 
 # Local runtime dir (never NFS) for the worker lock and socket; removed on
 # clean exit. Default: /tmp/fkbr-<uid>-<node> (kept fresh while running, so
