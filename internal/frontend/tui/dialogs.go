@@ -437,6 +437,7 @@ SSH HOSTS
   In the node list (F2), hosts this node reaches with ssh:
   F7             link one: web01, or web01:/srv/www to share that
   F8             unlink the one under the cursor
+  www=web01:/srv/www names its node www (else it is named after the host; two directories on one host need a name each).
   A linked host is kept in the config file ($FKBR_CONFIG, {name}.yaml beside {name}, else ~/.{name}.conf) and linked again whenever {name} starts without a share. The host needs {name} too, and ssh must log in without a password (a key or the agent).`)
 }
 

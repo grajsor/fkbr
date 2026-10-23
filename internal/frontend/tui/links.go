@@ -5,6 +5,7 @@ package tui
 // (Options.StartInDirs).
 
 import (
+	"context"
 	"slices"
 	"time"
 
@@ -37,12 +38,12 @@ func (m *model) linker() api.Linker {
 	return m.lk
 }
 
-func (m *model) fetchLinks() []api.Link {
-	l, ok := m.c.(api.Linker)
-	if !ok {
+// fetchLinks asks l (the model's linker, nil on a share) for the links.
+func fetchLinks(ctx context.Context, l api.Linker) []api.Link {
+	if l == nil {
 		return nil
 	}
-	ls, err := l.Links(m.ctx)
+	ls, err := l.Links(ctx)
 	if err != nil {
 		return nil
 	}

@@ -200,12 +200,13 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) loadNodes() tea.Cmd {
+	l := m.linker() // here, not in the command: it may set the model's fields
 	return func() tea.Msg {
 		ns, err := m.c.Nodes(m.ctx)
 		if err != nil {
 			return statusMsg{text: "nodes: " + err.Error(), err: true}
 		}
-		return nodesMsg{ns, m.fetchLinks()}
+		return nodesMsg{ns, fetchLinks(m.ctx, l)}
 	}
 }
 

@@ -20,12 +20,16 @@ type fakeHome struct {
 	asked   int // Links calls
 	added   []string
 	removed []string
+	notHome bool // a node on a share, behind a socket
 }
 
 func (f *fakeHome) Links(context.Context) ([]api.Link, error) {
 	f.lmu.Lock()
 	defer f.lmu.Unlock()
 	f.asked++
+	if f.notHome {
+		return nil, api.ErrNotAllowed
+	}
 	return slices.Clone(f.links), nil
 }
 
@@ -188,5 +192,21 @@ func TestLinkerAskedOnce(t *testing.T) {
 	defer f.lmu.Unlock()
 	if f.asked != before {
 		t.Errorf("Links asked %d times for 10 keys", f.asked-before)
+	}
+}
+
+// A node on a share, reached by its socket, answers that it links no
+// hosts once; refreshing the node list does not ask it again.
+func TestNotHomeAskedOnce(t *testing.T) {
+	f := &fakeHome{fakeClient: newFake(), notHome: true}
+	h := &harness{t: t, m: newModel(context.Background(), f), f: f.fakeClient}
+	h.send(tea.WindowSizeMsg{Width: 120, Height: 40})
+	for range 5 {
+		h.run(h.m.loadNodes())
+	}
+	f.lmu.Lock()
+	defer f.lmu.Unlock()
+	if f.asked != 1 {
+		t.Errorf("Links asked %d times for 5 node list loads", f.asked)
 	}
 }
