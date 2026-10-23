@@ -200,7 +200,7 @@ faults into a share directory's files are skipped there).
 | A copy between two linked hosts | Nothing over 1 MB ever on the home node's disk | lab 2026-10-23 |
 | CentOS 7 as the home node; two directories of one host as named nodes (`a=host:/x,b=host:/y`); `-ssh-bin '~/fkbr/fkbr'` | Copies between all of them, checksums equal | lab 2026-10-23 |
 | The TUI on an ARM64 host with no hosts; F7 links an x86-64 host | Linked and saved in the config file; copies both ways; F10 stops the remote node | lab 2026-10-23 |
-| A host with /tmp in memory | Staging bounded by `job_quota` | **todo** (lab) |
+| A source whose /tmp is a tmpfs (1.7 GB RAM, no swap), the target stopped for 40 s mid-copy: tmpfs 300 MB; 1100 MB; 870 MB (half the RAM) with two copies at once | 300 MB and 870 MB: "share full; retrying", waits, done. 1100 MB: staging stops at 897 MB (`job_quota` 1 GiB). Checksums equal, no OOM; at most 900 MB of RAM taken | lab 2026-10-23 |
 
 ## 11. Review of the ssh feature (2026-10-22)
 
