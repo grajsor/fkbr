@@ -88,12 +88,16 @@ type model struct {
 	c   api.Client
 	// links are an ssh swarm's hosts, if this node is its home node;
 	// startPanes and placed: see Options.StartInDirs (links.go).
-	links      []api.Link
-	startPanes bool
-	placed     bool
-	st         *styles
-	panes      [2]*pane
-	active     int
+	links []api.Link
+	// lk: the client as an api.Linker if this node links hosts, asked
+	// once (linkerAsked).
+	lk          api.Linker
+	linkerAsked bool
+	startPanes  bool
+	placed      bool
+	st          *styles
+	panes       [2]*pane
+	active      int
 	// lastExclude prefills the next copy or sync dialog's exclude field.
 	lastExclude string
 	// lastClick, dlgBox and drag serve the mouse (mouse.go, scrollbar.go);
@@ -560,14 +564,14 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 	case "backspace", "ctrl+h": // many terminals send ^H for Backspace
 		return m.up(m.active)
 	case "insert", " ":
-		if r := p.current(); r != nil && !r.up && p.level != levelRoots {
+		if r := p.current(); r != nil && p.markable(r) {
 			toggle(m.marks(p), r.name)
 		}
 		p.move(1, h)
 		m.destStatus(p)
 	case "+":
 		for _, r := range p.rows {
-			if !r.up && p.level != levelRoots {
+			if p.markable(&r) {
 				m.marks(p)[r.name] = true
 			}
 		}
@@ -577,7 +581,7 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 		m.destStatus(p)
 	case "*":
 		for _, r := range p.rows {
-			if !r.up && p.level != levelRoots {
+			if p.markable(&r) {
 				toggle(m.marks(p), r.name)
 			}
 		}
@@ -784,6 +788,12 @@ func (m *model) marks(p *pane) map[string]bool {
 		return m.dest
 	}
 	return p.selected
+}
+
+// markable: a row marks can hold. Not "../", not a root, and not an ssh
+// host with no node yet (it cannot be a destination).
+func (p *pane) markable(r *row) bool {
+	return !r.up && !r.link && p.level != levelRoots
 }
 
 func toggle(set map[string]bool, name string) {

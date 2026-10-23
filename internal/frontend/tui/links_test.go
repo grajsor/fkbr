@@ -17,6 +17,7 @@ type fakeHome struct {
 	*fakeClient
 	lmu     sync.Mutex
 	links   []api.Link
+	asked   int // Links calls
 	added   []string
 	removed []string
 }
@@ -24,6 +25,7 @@ type fakeHome struct {
 func (f *fakeHome) Links(context.Context) ([]api.Link, error) {
 	f.lmu.Lock()
 	defer f.lmu.Unlock()
+	f.asked++
 	return slices.Clone(f.links), nil
 }
 
@@ -150,5 +152,41 @@ func TestNoLinkKeysOnAShare(t *testing.T) {
 	}
 	if strings.Contains(h.m.helpText(), "SSH HOSTS") {
 		t.Error("help talks about ssh hosts on a share")
+	}
+}
+
+// A host with no node yet cannot be a destination: marking in the node
+// list skips it, so @dest holds nodes only.
+func TestLinkRowsNotMarked(t *testing.T) {
+	h, _ := newHomeHarness(t, false)
+	p := h.m.panes[0]
+	for p.current() != nil && p.current().name != "db01:/var/backups" {
+		h.key("down")
+	}
+	h.key("insert")
+	h.key("+")
+	h.key("*", "*")
+	if h.m.dest["db01:/var/backups"] {
+		t.Errorf("a host with no node in @dest: %v", h.m.destList())
+	}
+	if !h.m.dest["s1"] {
+		t.Errorf("node s1 not marked by +: %v", h.m.destList())
+	}
+}
+
+// Whether the node links hosts is asked once, not on every key.
+func TestLinkerAskedOnce(t *testing.T) {
+	h, f := newHomeHarness(t, false)
+	h.m.linker()
+	f.lmu.Lock()
+	before := f.asked
+	f.lmu.Unlock()
+	for range 5 {
+		h.key("f7", "esc", "f1", "esc")
+	}
+	f.lmu.Lock()
+	defer f.lmu.Unlock()
+	if f.asked != before {
+		t.Errorf("Links asked %d times for 10 keys", f.asked-before)
 	}
 }

@@ -22,16 +22,19 @@ func linksTick() tea.Cmd {
 	return tea.Tick(linksEvery, func(time.Time) tea.Msg { return linksTickMsg{} })
 }
 
-// linker is the client's api.Linker, if this node links ssh hosts.
+// linker is the client's api.Linker, if this node links ssh hosts. It
+// asks the node once (the first call, from Init), not on every key.
 func (m *model) linker() api.Linker {
-	l, ok := m.c.(api.Linker)
-	if !ok {
-		return nil
+	if m.linkerAsked {
+		return m.lk
 	}
-	if _, err := l.Links(m.ctx); err != nil {
-		return nil // a node on a share
+	m.linkerAsked = true
+	if l, ok := m.c.(api.Linker); ok {
+		if _, err := l.Links(m.ctx); err == nil { // else a node on a share
+			m.lk = l
+		}
 	}
-	return l
+	return m.lk
 }
 
 func (m *model) fetchLinks() []api.Link {

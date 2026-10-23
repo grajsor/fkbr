@@ -111,7 +111,7 @@ func (m *model) rowClick(i, line int, b tea.MouseButton) tea.Cmd {
 	p.cursor = row
 	if b == tea.MouseButtonRight {
 		m.lastClick = click{}
-		if r := p.current(); r != nil && !r.up && p.level != levelRoots {
+		if r := p.current(); r != nil && p.markable(r) {
 			set := m.marks(p)
 			toggle(set, r.name)
 			m.drag, m.markOn, m.markRow = dragMark0+drag(i), set[r.name], row
@@ -147,7 +147,7 @@ func (m *model) markTo(i, y int) tea.Cmd {
 	}
 	for k := last + step; k != row+step; k += step {
 		switch r := p.rows[k]; {
-		case r.up:
+		case !p.markable(&r):
 		case m.markOn:
 			set[r.name] = true
 		default:
