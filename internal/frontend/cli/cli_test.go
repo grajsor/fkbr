@@ -57,7 +57,9 @@ func TestResolveRoot(t *testing.T) {
 		return api.Node{NodeInfo: api.NodeInfo{ID: id, Roots: []api.Root{{ID: "files"}}}}
 	}
 	multi := api.Node{NodeInfo: api.NodeInfo{ID: "m", Roots: []api.Root{{ID: "data"}, {ID: "logs"}}}}
-	c := rootsClient{nodes: []api.Node{one("a"), one("b"), one("c"), multi}}
+	self := one("a") // also root "local", which only it sees
+	self.Roots = append(self.Roots, api.Root{ID: "local", Local: true})
+	c := rootsClient{nodes: []api.Node{self, one("b"), one("c"), multi}}
 	cases := []struct{ nodes, root, rel, wantRoot, wantRel string }{
 		{"", "sub", "dir", "files", "sub/dir"}, // a:/sub/dir
 		{"b", "", "", "files", ""},             // b:/
@@ -66,6 +68,8 @@ func TestResolveRoot(t *testing.T) {
 		{"b", "files", "x", "files", "x"},      // explicit root kept
 		{"m", "logs", "app", "logs", "app"},    // multi-root node, explicit
 		{"m", "nope", "", "nope", ""},          // unknown root reported later
+		{"", "", "", "files", ""},              // cp b:/x / : this node's shared root
+		{"", "local", "etc", "local", "etc"},   // local root, explicit
 	}
 	for _, tc := range cases {
 		r, p, err := resolveRoot(context.Background(), c, tc.nodes, tc.root, tc.rel)

@@ -281,8 +281,20 @@ func chownLabel(n api.NodeInfo) string {
 // way share one directory, so "node:/sub/dir" means a path in that root
 // rather than a root named "sub". When the first segment is not a root of
 // every addressed node, and those nodes all have exactly one root with the
-// same ID, the segment is treated as part of the path. nodes is "" (this
+// same ID, the segment is treated as part of the path. A node's root
+// "local" (only it sees it) does not count. nodes is "" (this
 // node), "n1,n2", "@all" or "@role".
+// sharedRoots leaves out the roots only their node sees.
+func sharedRoots(rs []api.Root) []api.Root {
+	var out []api.Root
+	for _, r := range rs {
+		if !r.Local {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
 func resolveRoot(ctx context.Context, c api.Client, nodes, root, rel string) (string, string, error) {
 	all, err := c.Nodes(ctx)
 	if err != nil {
@@ -311,11 +323,12 @@ func resolveRoot(ctx context.Context, c api.Client, nodes, root, rel string) (st
 			found = found || r.ID == root
 		}
 		hasRoot = hasRoot && found
-		if len(n.Roots) != 1 || (i > 0 && n.Roots[0].ID != single) {
+		shared := sharedRoots(n.Roots)
+		if len(shared) != 1 || (i > 0 && shared[0].ID != single) {
 			single = ""
 			break
 		}
-		single = n.Roots[0].ID
+		single = shared[0].ID
 	}
 	if hasRoot || single == "" {
 		return root, rel, nil

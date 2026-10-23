@@ -222,7 +222,12 @@ func Read(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	return decode(data)
+	c, err := decode(data)
+	if err != nil {
+		// Named: ~/.fkbr.conf is read without being asked for.
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return c, nil
 }
 
 // Parse decodes YAML, rejecting unknown keys, then applies defaults and
@@ -253,6 +258,13 @@ func (c *Config) Finish() error {
 	c.applyDefaults()
 	if err := c.Validate(); err != nil {
 		return err
+	}
+	if c.SocketMode&0o077 != 0 {
+		for _, r := range c.Roots {
+			if r.Local {
+				return fmt.Errorf("root %q is this user's own, but socket_mode %o lets others use the node: drop one", r.ID, c.SocketMode)
+			}
+		}
 	}
 	return c.placeShare()
 }

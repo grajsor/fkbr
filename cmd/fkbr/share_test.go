@@ -36,3 +36,31 @@ func TestPickShare(t *testing.T) {
 		}
 	}
 }
+
+// Root "local" is the user's whole disk as that user: only for a TUI or
+// CLI of this user, never a daemon or a node others reach by its socket.
+func TestLocalRootOnlyForThisUser(t *testing.T) {
+	for _, c := range []struct {
+		cmd  string
+		mode config.FileMode
+		want bool
+	}{
+		{"tui", 0, true},
+		{"ls", 0o600, true},
+		{"daemon", 0, false},
+		{"tui", 0o660, false},
+		{"tui", 0o606, false},
+	} {
+		cfg := &config.Config{SocketMode: c.mode}
+		addLocalRoot(cfg, c.cmd)
+		got := slices.ContainsFunc(cfg.Roots, func(r config.Root) bool { return r.Local })
+		if got != c.want {
+			t.Errorf("%s, socket %o: local root %v, want %v", c.cmd, c.mode, got, c.want)
+		}
+	}
+	cfg := &config.Config{NFSRoot: t.TempDir(), NodeID: "a", SocketMode: 0o660,
+		Roots: []config.Root{{ID: "files", Path: t.TempDir()}, {ID: "mine", Path: t.TempDir(), Local: true}}}
+	if err := cfg.Finish(); err == nil {
+		t.Error("a local root with a group socket was accepted")
+	}
+}

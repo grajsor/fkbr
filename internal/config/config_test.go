@@ -156,3 +156,13 @@ func TestNFSAndSSHBothRefused(t *testing.T) {
 		t.Error("a config with nfs_root and ssh was accepted")
 	}
 }
+
+// A config file that does not parse is named in the error: the one in
+// the home directory is read without being asked for.
+func TestBadFileNamed(t *testing.T) {
+	p := filepath.Join(t.TempDir(), ".fkbr.conf")
+	os.WriteFile(p, []byte("ssh: [web01\n"), 0o600)
+	if _, err := Read(p); err == nil || !strings.Contains(err.Error(), p) {
+		t.Errorf("err %v", err)
+	}
+}

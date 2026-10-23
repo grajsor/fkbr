@@ -254,7 +254,7 @@ func run() error {
 	if *roles != "" {
 		cfg.Roles = strings.Split(*roles, ",")
 	}
-	addLocalRoot(cfg)
+	addLocalRoot(cfg, cmd)
 	if *nfsRefresh != "" {
 		cfg.NFSRefresh = *nfsRefresh
 	}
@@ -297,13 +297,15 @@ func run() error {
 }
 
 // addLocalRoot adds the root only this host's TUI and CLI see (config
-// LocalRoot, default /), if it can be listed and no root has its ID.
-func addLocalRoot(cfg *config.Config) {
+// LocalRoot, default /), if it can be listed and no root has its ID. Not
+// for a daemon, nor when the socket lets other users in: whoever reaches
+// the socket reaches this root as this user.
+func addLocalRoot(cfg *config.Config, cmd string) {
 	p := cfg.LocalRoot
-	switch p {
-	case "none":
+	switch {
+	case p == "none" || cmd == "daemon" || cfg.SocketMode&0o077 != 0:
 		return
-	case "":
+	case p == "":
 		p = "/"
 	}
 	for _, r := range cfg.Roots {
