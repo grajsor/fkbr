@@ -234,6 +234,9 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 	if req.Mode != api.SyncIncremental && req.Mode != api.SyncMirror {
 		return nil, fmt.Errorf("invalid sync mode %q", req.Mode)
 	}
+	if (req.SrcNode == e.Self() && e.isLocalRoot(req.SrcRoot)) || (slices.Contains(req.DstNodes, e.Self()) && e.isLocalRoot(req.DstRoot)) {
+		return nil, fmt.Errorf("%w: syncs do not use %s's local root yet; copy instead", api.ErrNotAllowed, e.Self())
+	}
 	var err error
 	if req.SrcPath, err = localfs.CleanRel(req.SrcPath); err != nil {
 		return nil, err

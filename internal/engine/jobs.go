@@ -59,7 +59,7 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 		return "", err
 	}
 
-	nodes, err := e.tr.Nodes(ctx)
+	nodes, err := e.Nodes(ctx) // with this node's local roots
 	if err != nil {
 		return "", err
 	}
@@ -110,6 +110,9 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	}
 	req.DstNodes = append(targets, offline...)
 	slices.Sort(req.DstNodes)
+	if err := e.checkLocalSubmit(&req); err != nil {
+		return "", err
+	}
 	if req.SrcNode == e.Self() {
 		// Here, a missing source path is refused before a job exists; on
 		// another node the source fails the job (missingPaths in send.go).
@@ -122,6 +125,9 @@ func (e *Engine) submit(ctx context.Context, req api.TransferRequest, catchUpOf 
 	job := &api.Job{ID: id.At(now), Initiator: e.Self(), Created: now, Request: req, CatchUpOf: catchUpOf}
 	for _, d := range offline {
 		job.Detached = append(job.Detached, api.Detached{Node: d, Reason: "offline at submit", At: now})
+	}
+	if err := e.keepOwn(job); err != nil {
+		return "", err
 	}
 	if err := e.st.CreateJob(ctx, job); err != nil {
 		return "", err

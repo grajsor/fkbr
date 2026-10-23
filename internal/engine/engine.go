@@ -96,7 +96,7 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 			Version:          opts.Version,
 			Protocol:         api.ProtocolVersion,
 			Roles:            cfg.Roles,
-			Roots:            fsys.Roots(),
+			Roots:            publishedRoots(fsys.Roots()),
 			ChownCapable:     localfs.ProbeChown(cfg.StateDir),
 			DACOverride:      localfs.ProbeDACOverride(cfg.StateDir),
 			AcceptWritesFrom: cfg.AcceptWritesFrom,
@@ -129,7 +129,8 @@ func (e *Engine) Ready() <-chan struct{} { return e.ready }
 func (e *Engine) Close() error { return e.fs.Close() }
 
 func (e *Engine) Nodes(ctx context.Context) ([]api.Node, error) {
-	return e.tr.Nodes(ctx)
+	ns, err := e.tr.Nodes(ctx)
+	return e.withLocalRoots(ns), err
 }
 
 func (e *Engine) Forget(ctx context.Context, node string) error {
@@ -467,6 +468,7 @@ func (e *Engine) prune(ctx context.Context) {
 		e.log.Warn("prune failed", "err", err)
 	}
 	e.sweepStaging(ctx)
+	e.pruneOwn()
 }
 
 func (e *Engine) Prune(ctx context.Context, keep time.Duration) error {
@@ -575,6 +577,9 @@ func (e *Engine) dispatch(ctx context.Context, m *transport.Message) error {
 	}
 	if m.To != e.Self() {
 		return fmt.Errorf("request addressed to %q delivered to %q", m.To, e.Self())
+	}
+	if err := e.refuseLocalRoot(m.Body); err != nil {
+		return err
 	}
 	switch m.Type {
 	case transport.TypeList:
