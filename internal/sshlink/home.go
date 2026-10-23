@@ -266,7 +266,7 @@ func (h *Home) ServeConn(ctx context.Context, conn io.ReadWriteCloser, host stri
 	}
 	defer sess.Close()
 	if len(sess.Banner) > 0 {
-		h.log.Info("ssh link: the remote shell printed before fkbr started", "host", host, "text", firstLine(sess.Banner))
+		h.log.Info("ssh link: the remote shell printed before fkbr started", "host", host, "text", frame.FirstLine(sess.Banner))
 	}
 	caller := ctx // ctx below also ends with the session
 	ctx, cancel := context.WithCancel(ctx)
@@ -321,7 +321,7 @@ func (h *Home) greet(ctx context.Context, st *frame.Stream, sess *frame.Session,
 				a.Node, host, a.Protocol, a.Link, api.ProtocolVersion, linkVersion)
 		}
 		if a.Node == h.self {
-			return nil, fmt.Errorf("%w: %s on %s has the home node's name; pass -node with another name there", api.ErrNotAllowed, a.Node, host)
+			return nil, fmt.Errorf("%w: %s on %s has the home node's name; name it in the ssh list: NAME=host[:path]", api.ErrNotAllowed, a.Node, host)
 		}
 		mb, err := store.Open(h.dir, a.Node, h.opts)
 		if err != nil {
@@ -332,7 +332,8 @@ func (h *Home) greet(ctx context.Context, st *frame.Stream, sess *frame.Session,
 		h.mu.Lock()
 		if other := h.peers[a.Node]; other != nil {
 			h.mu.Unlock()
-			return nil, fmt.Errorf("%w: a node named %s is linked already (from %s)", api.ErrNotAllowed, a.Node, other.host)
+			return nil, fmt.Errorf("%w: a node named %s is linked already (from %s); name this one in the ssh list: NAME=host[:path]",
+				api.ErrNotAllowed, a.Node, other.host)
 		}
 		p = &peer{node: a.Node, host: host, sess: sess, mb: mb}
 		h.peers[a.Node] = p
@@ -771,16 +772,4 @@ func (h *Home) Links() []LinkState {
 		out = append(out, LinkState{host, hs.node, hs.state, hs.err})
 	}
 	return out
-}
-
-func firstLine(b []byte) string {
-	for i, c := range b {
-		if c == '\n' {
-			return string(b[:i])
-		}
-	}
-	if len(b) > 200 {
-		b = b[:200]
-	}
-	return string(b)
 }

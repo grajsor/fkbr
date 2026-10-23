@@ -210,6 +210,27 @@ func rawPeer(t *testing.T, opts Options) (*Session, net.Conn) {
 	return c, b
 }
 
+// A peer that is up but never starts the link (a login shell waiting on
+// something) is given up after Dead, so the home node tries again.
+func TestSilentStartGivenUp(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	go io.Copy(io.Discard, b) // takes our Magic, says nothing
+	done := make(chan error, 1)
+	go func() {
+		_, err := Client(a, Options{Ping: 20 * time.Millisecond, Dead: 100 * time.Millisecond})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "no answer") {
+			t.Errorf("err %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("waits for the other side's start for good")
+	}
+}
+
 func TestSilentPeerEndsSession(t *testing.T) {
 	c, _ := rawPeer(t, Options{Ping: 20 * time.Millisecond, Dead: 80 * time.Millisecond})
 	select {

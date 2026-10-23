@@ -29,7 +29,8 @@ func TestMain(m *testing.M) {
 
 // fakeSSH writes a stand-in for ssh: it skips ssh's options, prints a
 // login banner, and runs the command here, naming the node after the host
-// and keeping its state under $FKBR_TEST_STATE.
+// (unless the home node named it) and keeping its state under
+// $FKBR_TEST_STATE.
 func fakeSSH(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "ssh")
@@ -42,7 +43,10 @@ while [ $# -gt 0 ]; do
 	esac
 done
 dest=$1
-cmd=$(printf '%s' "$2" | sed "s|'link'\$|'-node' '$dest' '-state' '$FKBR_TEST_STATE/$dest' 'link'|")
+node=$(printf '%s' "$2" | sed -n "s|.*'-node' '\\([^']*\\)'.*|\\1|p")
+add=
+if [ -z "$node" ]; then node=$dest; add="'-node' '$dest' "; fi
+cmd=$(printf '%s' "$2" | sed "s|'link'\$|$add'-state' '$FKBR_TEST_STATE/$node' 'link'|")
 echo "Welcome to $dest"
 exec sh -c "$cmd"
 `
@@ -422,5 +426,15 @@ func TestSSHHostsLinkedAtRuntime(t *testing.T) {
 	if saved, _ := config.SavedHosts(conf); len(saved) != 0 {
 		t.Errorf("still saved: %v", saved)
 	}
+
+	// Two directories on one host, each node named in its entry.
+	for _, d := range []string{"www", "bak"} {
+		dir := filepath.Join(base, "hosta", d)
+		os.Mkdir(dir, 0o755)
+		if err := c.AddLink(ctx, d+"=hosta:"+dir, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	waitFor(t, "www and bak online", 30*time.Second, func() bool { return online(c, "www") && online(c, "bak") })
 	n.stop()
 }

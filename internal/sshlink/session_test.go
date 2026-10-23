@@ -13,11 +13,12 @@ import (
 )
 
 func TestParseHosts(t *testing.T) {
-	hs, err := ParseHosts("web01:/srv/www, admin@db01 ,backup:/data/it's,")
+	hs, err := ParseHosts("web01:/srv/www, admin@db01 ,backup:/data/it's,bak=web01:/var/a=b,")
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []Host{{"web01", "/srv/www"}, {"admin@db01", ""}, {"backup", "/data/it's"}}
+	want := []Host{{Dest: "web01", Path: "/srv/www"}, {Dest: "admin@db01"}, {Dest: "backup", Path: "/data/it's"},
+		{Dest: "web01", Path: "/var/a=b", Node: "bak"}}
 	if len(hs) != len(want) {
 		t.Fatalf("%+v", hs)
 	}
@@ -25,8 +26,11 @@ func TestParseHosts(t *testing.T) {
 		if hs[i] != want[i] {
 			t.Errorf("host %d: %+v, want %+v", i, hs[i], want[i])
 		}
+		if again, err := ParseHosts(hs[i].String()); err != nil || again[0] != hs[i] {
+			t.Errorf("host %d does not read back: %q: %+v %v", i, hs[i].String(), again, err)
+		}
 	}
-	for _, bad := range []string{"", ",", "web01:relative", "-oProxyCommand=x", "a b:/x", ":/x"} {
+	for _, bad := range []string{"", ",", "web01:relative", "-oProxyCommand=x", "a b:/x", ":/x", "Web=web01", "../x=web01", "a=", "a=-oX=y"} {
 		if _, err := ParseHosts(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
@@ -42,7 +46,7 @@ func TestRemoteCommandQuoting(t *testing.T) {
 	run := func(bin string, words ...string) string {
 		o := &SessionOptions{Bin: bin}
 		o.defaults()
-		out, err := exec.Command("sh", "-c", remoteCommand(o, Host{"h", dir}, words...)).Output()
+		out, err := exec.Command("sh", "-c", remoteCommand(o, Host{Dest: "h", Path: dir}, words...)).Output()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -83,11 +87,11 @@ exec sh -c "$2"
 
 func TestProbe(t *testing.T) {
 	ssh := fakeSSH(t)
-	v, err := Probe(context.Background(), Host{"h", t.TempDir()}, SessionOptions{SSH: []string{ssh}, Bin: "echo"})
+	v, err := Probe(context.Background(), Host{Dest: "h", Path: t.TempDir()}, SessionOptions{SSH: []string{ssh}, Bin: "echo"})
 	if err != nil || v != "version" {
 		t.Errorf("probe: %q, %v", v, err)
 	}
-	_, err = Probe(context.Background(), Host{"h", ""}, SessionOptions{SSH: []string{ssh}, Bin: "fkbr-not-installed"})
+	_, err = Probe(context.Background(), Host{Dest: "h", Path: ""}, SessionOptions{SSH: []string{ssh}, Bin: "fkbr-not-installed"})
 	if err == nil || !strings.Contains(err.Error(), "not found") {
 		t.Errorf("missing binary: %v", err)
 	}
@@ -118,13 +122,13 @@ func TestLingeringSSHDoesNotHang(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		if v, err := Probe(context.Background(), Host{"h", ""}, SessionOptions{SSH: []string{ssh}, Bin: "echo"}); err != nil || v != "version" {
+		if v, err := Probe(context.Background(), Host{Dest: "h", Path: ""}, SessionOptions{SSH: []string{ssh}, Bin: "echo"}); err != nil || v != "version" {
 			t.Errorf("probe: %q, %v", v, err)
 		}
 		h := NewHome(t.TempDir(), "home", store.Options{}, nil)
 		o := SessionOptions{SSH: []string{ssh}, Bin: "fkbr-not-installed"}
 		o.defaults()
-		if err := h.session(context.Background(), Host{"h", ""}, &o); err == nil {
+		if err := h.session(context.Background(), Host{Dest: "h", Path: ""}, &o); err == nil {
 			t.Error("session to a host without fkbr: no error")
 		}
 	}()
@@ -142,7 +146,7 @@ func TestAddBeforeRun(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	added := make(chan error, 1)
-	go func() { added <- h.Add(ctx, Host{"web01", ""}) }()
+	go func() { added <- h.Add(ctx, Host{Dest: "web01", Path: ""}) }()
 	time.Sleep(50 * time.Millisecond)
 	ssh := lingeringSSH(t)
 	go h.Run(ctx, nil, SessionOptions{SSH: []string{ssh}, Bin: "fkbr-not-installed"})

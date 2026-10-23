@@ -8,11 +8,13 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"fkbr/internal/config"
 	"fkbr/internal/sshlink/frame"
 )
 
@@ -20,17 +22,25 @@ import (
 type Host struct {
 	Dest string // as ssh takes it: host, user@host, an alias from ~/.ssh/config
 	Path string // the directory to share there; "" is the login directory
+	// Node is the node's name ("" is the host's short name). Two
+	// directories on one host, or two hosts of the same short name, need
+	// one each.
+	Node string
 }
 
 func (h Host) String() string {
-	if h.Path == "" {
-		return h.Dest
+	s := h.Dest
+	if h.Node != "" {
+		s = h.Node + "=" + s
 	}
-	return h.Dest + ":" + h.Path
+	if h.Path == "" {
+		return s
+	}
+	return s + ":" + h.Path
 }
 
 // ParseHosts parses the hosts of an ssh: share, e.g.
-// "web01:/srv/www,admin@db01,backup:/data".
+// "web01:/srv/www,admin@db01,bak=web01:/var/backups".
 func ParseHosts(s string) ([]Host, error) {
 	var hs []Host
 	for _, item := range strings.Split(s, ",") {
@@ -38,14 +48,21 @@ func ParseHosts(s string) ([]Host, error) {
 		if item == "" {
 			continue
 		}
-		dest, path, _ := strings.Cut(item, ":")
-		if dest == "" || strings.HasPrefix(dest, "-") || strings.ContainsAny(dest, " \t'\"") {
+		rest, node := item, ""
+		if i := strings.IndexByte(item, '='); i >= 0 && !strings.Contains(item[:i], ":") {
+			node, rest = item[:i], item[i+1:]
+			if !config.ValidID(node) {
+				return nil, fmt.Errorf("ssh host %q: %q is not a node name (a-z, 0-9, _ . -)", item, node)
+			}
+		}
+		dest, path, _ := strings.Cut(rest, ":")
+		if dest == "" || strings.HasPrefix(dest, "-") || strings.ContainsAny(dest, " \t'\"=") {
 			return nil, fmt.Errorf("ssh host %q: not a host name", item)
 		}
 		if path != "" && !strings.HasPrefix(path, "/") {
 			return nil, fmt.Errorf("ssh host %q: the path must be absolute", item)
 		}
-		hs = append(hs, Host{dest, path})
+		hs = append(hs, Host{Dest: dest, Path: path, Node: node})
 	}
 	if len(hs) == 0 {
 		return nil, errors.New("ssh: names no hosts, e.g. ssh:web01:/srv/www,db01")
@@ -245,7 +262,11 @@ func (h *Home) keep(ctx context.Context, host Host, o *SessionOptions) {
 func (h *Home) session(ctx context.Context, host Host, o *SessionOptions) error {
 	name := host.String()
 	h.setState(name, "", "connecting", "")
-	cmd := exec.Command(o.SSH[0], sshArgs(o, host, remoteCommand(o, host, append(o.Args, "link")...))...)
+	words := append(slices.Clone(o.Args), "link")
+	if host.Node != "" {
+		words = append([]string{"-node", host.Node}, words...)
+	}
+	cmd := exec.Command(o.SSH[0], sshArgs(o, host, remoteCommand(o, host, words...))...)
 	// Its own process group: Ctrl+C in the TUI's terminal must not kill ssh
 	// before the remote node could leave.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

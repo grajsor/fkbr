@@ -116,15 +116,23 @@ func start(conn io.ReadWriteCloser, opts Options, first uint32) (*Session, error
 		streams: map[uint32]*Stream{}, next: first, parity: first % 2,
 		pending: make(chan *Stream, maxPending), done: make(chan struct{}),
 	}
+	// A peer that stays up but never answers is given up after Dead, so
+	// the caller can start again.
+	late := time.AfterFunc(opts.Dead, func() { conn.Close() })
 	werr := make(chan error, 1)
 	go func() { _, err := io.WriteString(conn, Magic); werr <- err }()
-	if err := s.readMagic(); err != nil {
+	err := s.readMagic()
+	if err == nil {
+		if err = <-werr; err != nil {
+			err = fmt.Errorf("link: %w", err)
+		}
+	}
+	if !late.Stop() {
+		err = fmt.Errorf("link: no answer from the other side in %s", opts.Dead)
+	}
+	if err != nil {
 		conn.Close()
 		return nil, err
-	}
-	if err := <-werr; err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("link: %w", err)
 	}
 	s.lastRecv.Store(time.Now().UnixNano())
 	go s.readLoop()
@@ -139,7 +147,7 @@ func (s *Session) readMagic() error {
 		b, err := s.r.ReadByte()
 		if err != nil {
 			if len(seen) > 0 {
-				return fmt.Errorf("link: no %q from the other side, it said: %q", Magic[:len(Magic)-1], firstLine(seen))
+				return fmt.Errorf("link: no %q from the other side, it said: %q", Magic[:len(Magic)-1], FirstLine(seen))
 			}
 			return fmt.Errorf("link: %w", err)
 		}
@@ -149,12 +157,13 @@ func (s *Session) readMagic() error {
 			return nil
 		}
 		if len(seen) > maxBanner+len(Magic) {
-			return fmt.Errorf("link: no %q in the first %d bytes, they start: %q", Magic[:len(Magic)-1], maxBanner, firstLine(seen))
+			return fmt.Errorf("link: no %q in the first %d bytes, they start: %q", Magic[:len(Magic)-1], maxBanner, FirstLine(seen))
 		}
 	}
 }
 
-func firstLine(b []byte) string {
+// FirstLine is b up to its first newline, at most 200 bytes, for messages.
+func FirstLine(b []byte) string {
 	if i := bytes.IndexByte(b, '\n'); i >= 0 {
 		b = b[:i]
 	}
