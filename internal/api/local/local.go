@@ -31,6 +31,18 @@ type Client struct {
 	hosts    []sshlink.Host
 	sessions sshlink.SessionOptions
 	cfgPath  string // where linked hosts are kept (config.WritePath)
+	// sockMode lets others in: they get no say in which hosts this node
+	// sshes to with this user's keys.
+	sockMode config.FileMode
+}
+
+// linksShut refuses linking at runtime on a node others reach.
+func (c *Client) linksShut() error {
+	if c.sockMode&0o077 != 0 {
+		return fmt.Errorf("%w: socket_mode %o lets other users reach this node, so it links only the hosts in its config file's ssh list",
+			api.ErrNotAllowed, c.sockMode)
+	}
+	return nil
 }
 
 func Open(cfg *config.Config, version string, log *slog.Logger) (*Client, error) {
@@ -85,6 +97,7 @@ func openHome(cfg *config.Config, fsys localfs.FS, version string, log *slog.Log
 	return &Client{
 		Engine: engine.New(cfg, fsys, n, n, engine.Options{Version: version, Logger: log}),
 		home:   home, hosts: hosts, sessions: sshlink.SessionOptions{Bin: cfg.SSHBin}, cfgPath: cfg.ConfigPath,
+		sockMode: cfg.SocketMode,
 	}, nil
 }
 
@@ -148,6 +161,9 @@ func (c *Client) AddLink(ctx context.Context, spec string, save bool) error {
 	if c.home == nil {
 		return errNotHome
 	}
+	if err := c.linksShut(); err != nil {
+		return err
+	}
 	hs, err := sshlink.ParseHosts(spec)
 	if err != nil {
 		return fmt.Errorf("%w: %w", api.ErrBadPath, err)
@@ -172,6 +188,9 @@ func (c *Client) AddLink(ctx context.Context, spec string, save bool) error {
 func (c *Client) RemoveLink(_ context.Context, host string) error {
 	if c.home == nil {
 		return errNotHome
+	}
+	if err := c.linksShut(); err != nil {
+		return err
 	}
 	saved, _ := config.SavedHosts(c.cfgPath)
 	err := c.home.Remove(host)
