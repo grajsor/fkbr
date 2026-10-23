@@ -118,20 +118,23 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	case ctx.Err() != nil:
 		return ctx.Err()
 	case errors.Is(err, errCancelled):
-		e.st.RemoveJobData(ctx, id)
-		return s.status.finish(ctx, api.JobCancelled, nil)
+		return s.status.finishThen(ctx, api.JobCancelled, nil, func() { s.removeData(ctx) })
 	case err != nil:
-		e.st.RemoveJobData(ctx, id)
-		return s.status.finish(ctx, api.JobFailed, err)
+		return s.status.finishThen(ctx, api.JobFailed, err, func() { s.removeData(ctx) })
 	}
-	if err := e.st.RemoveJobData(ctx, id); err != nil {
-		e.log.Warn("removing staged data", "job", id, "err", err)
-	}
+	s.removeData(ctx) // every active target has it all
 	took := time.Since(s.start)
 	st := s.status.st
 	s.log.Info("send done", "files", st.Files, "bytes", size(st.Bytes), "chunks", st.Chunks, "stored", size(s.stored),
 		"targets", summary(s.active(), 8), "detached", len(s.detached), "took", took.Round(time.Millisecond), "rate", rate(st.Bytes, took))
 	return s.status.finish(ctx, api.JobDone, nil)
+}
+
+// removeData removes the job's staged chunks.
+func (s *sender) removeData(ctx context.Context) {
+	if err := s.e.st.RemoveJobData(ctx, s.job.ID); err != nil {
+		s.log.Warn("removing staged data", "err", err)
+	}
 }
 
 // active returns the targets still part of the job.

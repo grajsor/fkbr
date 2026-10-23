@@ -525,6 +525,8 @@ type statusWriter struct {
 	last time.Time
 	// before, if set, updates st just before each publication.
 	before func(*api.JobStatus)
+	// lost: the last publication failed.
+	lost error
 }
 
 func (e *Engine) newStatus(job string, role api.Role) *statusWriter {
@@ -555,8 +557,9 @@ func (w *statusWriter) put(ctx context.Context, force bool) {
 	if w.before != nil {
 		w.before(&w.st)
 	}
-	if err := w.e.st.PutStatus(context.WithoutCancel(ctx), w.job, &w.st); err != nil {
-		w.e.log.Warn("status update failed", "job", w.job, "err", err)
+	w.lost = w.e.st.PutStatus(context.WithoutCancel(ctx), w.job, &w.st)
+	if w.lost != nil {
+		w.e.log.Warn("status update failed", "job", w.job, "err", w.lost)
 	}
 }
 
@@ -567,6 +570,29 @@ func (w *statusWriter) finish(ctx context.Context, state api.JobState, err error
 		w.st.Error = err.Error()
 	}
 	w.put(ctx, true)
+	return err
+}
+
+// finishThen is finish, then clean (which removes the job's staged data)
+// once the end is recorded, tried again for up to transientBudget while
+// the worker runs. Not before, and not if it stays lost (over ssh the link
+// may be down as the job fails): the job then still reads as running, and
+// the next run resumes it from that data.
+func (w *statusWriter) finishThen(ctx context.Context, state api.JobState, err error, clean func()) error {
+	err = w.finish(ctx, state, err)
+	for deadline := time.Now().Add(transientBudget); w.lost != nil && time.Now().Before(deadline); {
+		select {
+		case <-ctx.Done():
+			deadline = time.Time{} // the worker stops: the next run resumes
+		case <-time.After(2 * time.Second):
+			w.put(ctx, true)
+		}
+	}
+	if w.lost == nil {
+		clean()
+	} else {
+		w.e.log.Warn("job's end not recorded; its staged data is kept for the next run", "job", w.job, "state", state)
+	}
 	return err
 }
 

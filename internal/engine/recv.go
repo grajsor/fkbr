@@ -63,6 +63,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 		return status.finish(ctx, api.JobFailed, err)
 	}
 
+	abort := func() { rcv.Abort() }
 	log := e.log.With("job", id)
 	log.Info("receiving", "from", req.SrcNode, "into", req.DstRoot+"/"+req.DstDir, "resume_at_chunk", status.st.Chunks)
 	if job.IsDetached(e.Self()) {
@@ -82,15 +83,12 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	case errors.Is(err, errDetached):
 		// An orderly outcome, not a failure of this request.
 		log.Warn("detached by the source; nothing installed", "after_chunks", status.st.Chunks)
-		rcv.Abort()
-		status.finish(ctx, api.JobDetached, fmt.Errorf("%w; run '%s catchup %s'", err, product.Name, id))
+		status.finishThen(ctx, api.JobDetached, fmt.Errorf("%w; run '%s catchup %s'", err, product.Name, id), abort)
 		return nil
 	case errors.Is(err, errCancelled):
-		rcv.Abort()
-		return status.finish(ctx, api.JobCancelled, nil)
+		return status.finishThen(ctx, api.JobCancelled, nil, abort)
 	case err != nil:
-		rcv.Abort()
-		return status.finish(ctx, api.JobFailed, err)
+		return status.finishThen(ctx, api.JobFailed, err, abort)
 	}
 
 	status.st.Phase = "installing"
@@ -98,8 +96,8 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	start := time.Now()
 	res, err := rcv.Commit()
 	if err != nil {
-		rcv.Abort() // a failed job never resumes: don't leave its staging behind
-		return status.finish(ctx, api.JobFailed, fmt.Errorf("install: %w", err))
+		// A failed job never resumes: don't leave its staging behind.
+		return status.finishThen(ctx, api.JobFailed, fmt.Errorf("install: %w", err), abort)
 	}
 	log.Info("installed", "files", res.Files, "dirs", res.Dirs, "symlinks", res.Symlinks, "bytes", size(res.Bytes),
 		"skipped", res.Skipped, "errors", res.Errors, "took", time.Since(start).Round(time.Millisecond))

@@ -15,6 +15,7 @@ import (
 	"fkbr/internal/api"
 	"fkbr/internal/config"
 	"fkbr/internal/localfs"
+	"fkbr/internal/receive"
 	"fkbr/internal/store"
 	"fkbr/internal/transport"
 	"fkbr/internal/transport/nfsmailbox"
@@ -38,6 +39,35 @@ type faultStore struct {
 	openDelay time.Duration
 	// hideAcks: this target's acks read as 0 (a stale listing).
 	hideAcks string
+	// failWriteAt: creating that chunk fails for good (not transient).
+	failWriteAt int
+	// endsLost: a job's end status is not stored (over ssh, the link
+	// down); endsRefused counts the attempts.
+	endsLost    bool
+	endsRefused int
+}
+
+func (f *faultStore) PutStatus(ctx context.Context, id string, st *api.JobStatus) error {
+	f.mu.Lock()
+	if f.endsLost && st.State.Terminal() {
+		f.endsRefused++
+		f.mu.Unlock()
+		return &os.PathError{Op: "write", Path: "status", Err: syscall.EIO}
+	}
+	f.mu.Unlock()
+	return f.Dir.PutStatus(ctx, id, st)
+}
+
+func (f *faultStore) refused() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.endsRefused
+}
+
+func (f *faultStore) recordEnds() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.endsLost = false
 }
 
 type eioWriter struct{ transport.ChunkWriter }
@@ -59,6 +89,10 @@ func (f *faultStore) CreateChunk(ctx context.Context, id string, seq int) (trans
 	if err == nil && seq == f.noSpaceAt && !f.noSpaceHit {
 		f.noSpaceHit = true
 		return noSpaceWriter{w}, nil
+	}
+	if err == nil && seq == f.failWriteAt {
+		w.Abort()
+		return nil, &os.PathError{Op: "create", Path: "chunk", Err: syscall.EACCES}
 	}
 	if err == nil && seq == f.eioWriteAt && !f.eioWriteHit {
 		f.eioWriteHit = true
@@ -111,7 +145,7 @@ func buildFaulty(t *testing.T, cfg *config.Config) (*Engine, *faultStore) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	fs := &faultStore{Dir: mb, noSpaceAt: -1, corruptSeq: -1, eioWriteAt: -1, eioReadSeq: -1}
+	fs := &faultStore{Dir: mb, noSpaceAt: -1, corruptSeq: -1, eioWriteAt: -1, eioReadSeq: -1, failWriteAt: -1}
 	e := New(cfg, fsys, mb, fs, Options{Version: "test"})
 	t.Cleanup(func() { e.Close() })
 	return e, fs
@@ -162,6 +196,64 @@ func TestCorruptChunkFailsLoudly(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(scfg.Roots[0].Path, "tree")); !os.IsNotExist(err) {
 		t.Error("data from a corrupt transfer was installed")
 	}
+}
+
+// A source whose job fails while its end cannot be recorded (over ssh, the
+// link down as it fails) keeps the staged chunks: the job still reads as
+// running, and the next run resumes from them. Once the end is recorded,
+// they go. Found in the lab: a home node SIGSTOPped mid-copy left the
+// target waiting for a chunk the source had deleted.
+func TestSourceEndLostKeepsChunks(t *testing.T) {
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	master, fs := buildFaulty(t, mcfg)
+	fs.failWriteAt, fs.endsLost = 2, true
+	s1, sfs := buildFaulty(t, nodeCfg(t, share, "s1"))
+	sfs.openDelay = 3 * time.Second // consumes nothing meanwhile
+	makeTree(t, mcfg.Roots[0].Path, 10, 600<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return fs.refused() > 0 }, "the source's end refused")
+	if _, err := fs.Dir.ChunkMeta(context.Background(), "master", id, 0); err != nil {
+		t.Fatalf("chunk 0 removed though the job's end was not recorded: %v", err)
+	}
+	fs.recordEnds()
+	if j := waitJob(t, master, id, 30*time.Second); ownStatus(j, "master", api.RoleSource).State != api.JobFailed {
+		t.Fatalf("source: %+v", j.Participants)
+	}
+	waitUntil(t, func() bool {
+		_, err := fs.Dir.ChunkMeta(context.Background(), "master", id, 0)
+		return err != nil
+	}, "chunks removed once the end is recorded")
+}
+
+// The same for a target: its staging stays until its end is recorded, so
+// a run that resumes the job (still running, as far as anyone can tell)
+// does not install only the chunks after its last ack.
+func TestTargetEndLostKeepsStaging(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	scfg := nodeCfg(t, share, "s1")
+	s1, fs := buildFaulty(t, scfg)
+	fs.corruptSeq, fs.endsLost = 1, true
+	makeTree(t, mroot, 5, 300<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, _ := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	waitUntil(t, func() bool { return fs.refused() > 0 }, "the target's end refused")
+	staging := filepath.Join(scfg.Roots[0].Path, receive.StagingDir, id)
+	if _, err := os.Stat(staging); err != nil {
+		t.Fatalf("staging removed though the job's end was not recorded: %v", err)
+	}
+	fs.recordEnds()
+	waitUntil(t, func() bool {
+		_, err := os.Stat(staging)
+		return os.IsNotExist(err)
+	}, "staging removed once the end is recorded")
 }
 
 func TestShareHiccupRecovers(t *testing.T) {
