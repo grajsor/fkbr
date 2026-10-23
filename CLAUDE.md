@@ -219,7 +219,11 @@ package tests; docs/testplan.md lists them.
 - Names not valid UTF-8 travel as NUL+base64 (`api.EncodeName`, custom
   JSON methods on every API type with paths). Chunk names up to 64 KiB
   (`bundle.MaxNameLen`). Bulk share writes `Sync()` every ~2 s of data
-  (`store/writeback.go`) so heartbeats don't queue behind a chunk.
+  (`store/writeback.go`) so heartbeats don't queue behind a chunk; the
+  ssh stores on local disk don't sync (`Options.NoSync`), and over ssh
+  chunks are 32 MiB, job_quota 128 MiB (`SSHChunkSize`): staged chunks
+  then never reach the disk. The receiver truncates a file only when its
+  size is wrong (on XFS a truncate writes the file out).
   Share reads are capped at 64 MiB.
 - Target scans probe the mtime range (`localfs.MtimeRange`, inside the
   root, never writing on `sync -n`) and name rules (`localfs.Names`: vfat,

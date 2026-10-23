@@ -328,20 +328,35 @@ const (
 	DefaultChunkSize    = 128 << 20
 	DefaultJobQuota     = 1 << 30
 	DefaultStagingQuota = 4 << 30
+	// Over ssh chunks are staged on the source's own disk: smaller and
+	// fewer, so each is read and deleted before the kernel writes it out
+	// and the disk only reads what is sent (a 1 GiB copy: 15.6 s with
+	// the defaults above, 9.5 s with these).
+	SSHChunkSize = 32 << 20
+	SSHJobQuota  = 128 << 20
 )
+
+// transferDefaults are the chunk size and job quota for this kind of node.
+func (c *Config) transferDefaults() (chunk, job ByteSize) {
+	if c.Home || c.Link {
+		return SSHChunkSize, SSHJobQuota
+	}
+	return DefaultChunkSize, DefaultJobQuota
+}
 
 // LinkArgs are the flags a home node gives `fkbr link` on its hosts: its
 // chunk size and quotas, which bound what they stage (in their /tmp, maybe
 // memory). Only those not at their default, so an older build there still
 // links while nobody changed them.
 func (c *Config) LinkArgs() []string {
+	chunk, job := c.transferDefaults()
 	var args []string
 	for _, s := range []struct {
 		flag   string
 		v, def ByteSize
 	}{
-		{"-chunk-size", c.Transfer.ChunkSize, DefaultChunkSize},
-		{"-job-quota", c.Transfer.JobQuota, DefaultJobQuota},
+		{"-chunk-size", c.Transfer.ChunkSize, chunk},
+		{"-job-quota", c.Transfer.JobQuota, job},
 		{"-staging-quota", c.Transfer.StagingQuota, DefaultStagingQuota},
 	} {
 		if s.v != 0 && s.v != s.def {
@@ -408,14 +423,15 @@ func (c *Config) applyDefaults() {
 	setDur(&c.KeepDone, time.Hour)
 	setDur(&c.ForgetAfter, 7*24*time.Hour)
 	t := &c.Transfer
+	chunk, job := c.transferDefaults()
 	if t.ChunkSize == 0 {
-		t.ChunkSize = DefaultChunkSize
+		t.ChunkSize = chunk
 	}
 	if t.StagingQuota == 0 {
 		t.StagingQuota = DefaultStagingQuota
 	}
 	if t.JobQuota == 0 {
-		t.JobQuota = DefaultJobQuota
+		t.JobQuota = max(job, t.ChunkSize) // a bigger chunk_size alone is fine
 	}
 	if t.MaxJobs == 0 {
 		t.MaxJobs = 2

@@ -133,6 +133,33 @@ func TestLinkArgs(t *testing.T) {
 	}
 }
 
+// Over ssh chunks are staged on local disk: smaller and fewer, on the
+// home node and its linked hosts alike, so they need no flags for it.
+func TestSSHTransferDefaults(t *testing.T) {
+	for _, c := range []struct {
+		cfg         Config
+		chunk, job  ByteSize
+		description string
+	}{
+		{Config{NFSRoot: t.TempDir()}, DefaultChunkSize, DefaultJobQuota, "share"},
+		{Config{Home: true}, SSHChunkSize, SSHJobQuota, "home"},
+		{Config{Link: true}, SSHChunkSize, SSHJobQuota, "link"},
+		{Config{Home: true, Transfer: Transfer{ChunkSize: 256 << 20}}, 256 << 20, 256 << 20, "home, bigger chunks"},
+	} {
+		cfg := c.cfg
+		cfg.NodeID, cfg.StateDir, cfg.Roots = "n", t.TempDir(), []Root{{ID: "files", Path: t.TempDir()}}
+		if err := cfg.Finish(); err != nil {
+			t.Fatalf("%s: %v", c.description, err)
+		}
+		if cfg.Transfer.ChunkSize != c.chunk || cfg.Transfer.JobQuota != c.job {
+			t.Errorf("%s: chunk %d job %d, want %d %d", c.description, cfg.Transfer.ChunkSize, cfg.Transfer.JobQuota, c.chunk, c.job)
+		}
+		if cfg.Home && c.chunk == SSHChunkSize && len(cfg.LinkArgs()) != 0 {
+			t.Errorf("%s: link args %q", c.description, cfg.LinkArgs())
+		}
+	}
+}
+
 // A linked node asks the home node for requests again at once, but its
 // jobs' waits keep the usual pace: each look there is a round trip.
 func TestLinkPolls(t *testing.T) {

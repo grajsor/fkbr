@@ -147,9 +147,10 @@ func (o *outbox) fetch(ctx context.Context, mb *store.Dir, ack uint64, log *slog
 }
 
 // NewHome uses dir (private, on local disk) as the swarm's share, with
-// self as the home node's ID. The share is kept private (opts.Private).
+// self as the home node's ID. The share is kept private (opts.Private)
+// and, being on local disk, not synced (opts.NoSync).
 func NewHome(dir, self string, opts store.Options, log *slog.Logger) *Home {
-	opts.Private = true
+	opts.Private, opts.NoSync = true, true
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}

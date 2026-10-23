@@ -45,6 +45,50 @@ func TestBulkWritesSyncOnTheWay(t *testing.T) {
 	writeRate.Store(0)
 }
 
+// A share on local disk (NoSync: over ssh) syncs neither chunks nor
+// blobs: the syncs made the source write every chunk to its disk while it
+// read the files it sent, a 1 GiB copy took 15.6 s instead of 9.5 s.
+func TestNoSyncLeavesItToTheCache(t *testing.T) {
+	var syncs int
+	orig := fsync
+	fsync = func(f *os.File) error { syncs++; return orig(f) }
+	t.Cleanup(func() { fsync = orig })
+	ctx := context.Background()
+	write := func(noSync bool) int {
+		syncs = 0
+		m, err := Open(t.TempDir(), "a", Options{NoSync: noSync})
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := m.CreateChunk(ctx, "0123456789abcdef01234567", 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := m.CreateBlob(ctx, "plans/0123456789abcdef01234567/x")
+		if err != nil {
+			t.Fatal(err)
+		}
+		buf := make([]byte, 1<<20)
+		for _, w := range []transport.ChunkWriter{c, b} {
+			for range 9 {
+				if _, err := w.Write(buf); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := w.Commit([]byte("{}")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return syncs
+	}
+	if n := write(false); n < 2 {
+		t.Errorf("on the share: %d syncs, want at least one per commit", n)
+	}
+	if n := write(true); n != 0 {
+		t.Errorf("NoSync: %d syncs", n)
+	}
+}
+
 // Now follows the share's clock (file mtimes the server sets), not this
 // host's. On a local filesystem both are the same clock.
 func TestNowIsTheSharesClock(t *testing.T) {

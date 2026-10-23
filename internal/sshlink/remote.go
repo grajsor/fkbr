@@ -56,7 +56,7 @@ func Dial(ctx context.Context, conn io.ReadWriteCloser, self, version, chunkDir 
 	if err := os.MkdirAll(chunkDir, 0o700); err != nil {
 		return nil, err
 	}
-	chunks, err := store.Open(chunkDir, self, store.Options{Private: true})
+	chunks, err := store.Open(chunkDir, self, store.Options{Private: true, NoSync: true})
 	if err != nil {
 		return nil, err
 	}

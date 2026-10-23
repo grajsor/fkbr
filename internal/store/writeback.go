@@ -32,15 +32,29 @@ type syncedFile struct {
 	*os.File
 	unsynced int64
 	since    time.Time
+	off      bool // Options.NoSync
 }
 
-func newSyncedFile(f *os.File) *syncedFile { return &syncedFile{File: f, since: time.Now()} }
+func (m *Dir) newSyncedFile(f *os.File) *syncedFile {
+	return &syncedFile{File: f, since: time.Now(), off: m.opts.NoSync}
+}
+
+// fsync syncs a file; tests replace it to count.
+var fsync = (*os.File).Sync
+
+// sync syncs f unless syncs are off.
+func (f *syncedFile) sync() error {
+	if f.off {
+		return nil
+	}
+	return fsync(f.File)
+}
 
 func (f *syncedFile) Write(p []byte) (int, error) {
 	n, err := f.File.Write(p)
 	f.unsynced += int64(n)
-	if err == nil && f.unsynced >= syncEvery() {
-		if err = f.File.Sync(); err == nil {
+	if err == nil && !f.off && f.unsynced >= syncEvery() {
+		if err = f.sync(); err == nil {
 			// Writing plus syncing that much took this long: the rate the
 			// share takes data at (page cache writes are near free).
 			if d := time.Since(f.since); d > 0 {

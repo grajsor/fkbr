@@ -59,6 +59,12 @@ type Options struct {
 	// 0600): a share only one process reaches. Otherwise it is open to the
 	// users of other hosts (see modes.go).
 	Private bool
+	// NoSync leaves chunks and blobs to the page cache instead of syncing
+	// them (writeback.go): for a share on local disk, where nothing queues
+	// behind them and a chunk is usually read and deleted before the
+	// kernel writes it out. Over ssh the syncs made the source write every
+	// chunk to its disk while reading the files it sends.
+	NoSync bool
 }
 
 type Dir struct {

@@ -233,7 +233,7 @@ func (m *Dir) CreateChunk(_ context.Context, id string, seq int) (transport.Chun
 	if err != nil {
 		return nil, err
 	}
-	return &chunkWriter{m: m, f: newSyncedFile(f), dir: dir, seq: seq}, nil
+	return &chunkWriter{m: m, f: m.newSyncedFile(f), dir: dir, seq: seq}, nil
 }
 
 func (w *chunkWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
@@ -243,7 +243,7 @@ func (w *chunkWriter) Commit(meta []byte) error {
 	if err := w.f.Chmod(w.m.fileMode()); err != nil { // CreateTemp made it 0600
 		return err
 	}
-	if err := w.f.Sync(); err != nil {
+	if err := w.f.sync(); err != nil {
 		return err
 	}
 	if err := w.f.Close(); err != nil {

@@ -75,7 +75,8 @@ Node and root IDs must match `^[a-z0-9][a-z0-9_.-]{0,62}$`.
    heartbeat runs on its own, so a slow request does not delay it. Bulk
    writes (chunks, snapshots, path lists) are synced after about 2 s worth
    of data at the measured rate (4 to 64 MiB), so on a slow link the
-   heartbeat never queues behind a whole chunk in the NFS client. Pruning
+   heartbeat never queues behind a whole chunk in the NFS client. (Over
+   ssh the store is on local disk and nothing is synced.) Pruning
    judges ages the same way, by mtimes against the server clock, and job
    IDs and times use the server clock too: each node keeps the offset of
    its own clock from the mtime of its heartbeat.

@@ -71,7 +71,8 @@ roots:
 # share's free space may be smaller than what you copy.
 # transfer:
 #   chunk_size: 128MiB     # largest staged chunk (the first ones are smaller: 4, 8, 16 MiB ...)
-#   job_quota: 1GiB        # max bytes this node stages for one job
+#                          # (over ssh: 32MiB)
+#   job_quota: 1GiB        # max bytes this node stages for one job (over ssh: 128MiB)
 #   staging_quota: 4GiB    # max bytes this node stages for all jobs
 #                          # (on an ssh home node: also on every host it links)
 #   max_jobs: 2            # concurrent sending jobs, and receiving jobs

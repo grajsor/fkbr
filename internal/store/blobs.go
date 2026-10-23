@@ -52,14 +52,14 @@ func (m *Dir) CreateBlob(_ context.Context, name string) (transport.ChunkWriter,
 	if err != nil {
 		return nil, err
 	}
-	return &blobWriter{m: m, f: newSyncedFile(f), dest: dest}, nil
+	return &blobWriter{m: m, f: m.newSyncedFile(f), dest: dest}, nil
 }
 
 func (w *blobWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
 
 func (w *blobWriter) Commit([]byte) error {
 	defer w.Abort()
-	if err := w.f.Sync(); err != nil {
+	if err := w.f.sync(); err != nil {
 		return err
 	}
 	if err := w.f.Close(); err != nil {
