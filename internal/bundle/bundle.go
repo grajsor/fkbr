@@ -88,11 +88,14 @@ func NewWriter(sink Sink, chunkSize int64, compress bool) *Writer {
 const rampStart = 4 << 20
 
 // limit is the size of the chunk being written.
-func (w *Writer) limit() int64 {
-	if w.seq >= 30 {
-		return w.chunkSize
+func (w *Writer) limit() int64 { return ChunkLimit(w.seq, w.chunkSize) }
+
+// ChunkLimit is the most data chunk seq holds (entry headers come on top).
+func ChunkLimit(seq int, chunkSize int64) int64 {
+	if seq >= 30 {
+		return chunkSize
 	}
-	return min(w.chunkSize, int64(rampStart)<<w.seq)
+	return min(chunkSize, int64(rampStart)<<seq)
 }
 
 type chunk struct {

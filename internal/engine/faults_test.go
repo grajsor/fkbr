@@ -45,6 +45,38 @@ type faultStore struct {
 	// down); endsRefused counts the attempts.
 	endsLost    bool
 	endsRefused int
+	// capacity > 0: a small disk. Free space is what this node's staged
+	// chunks leave of it; a write past it fails with ENOSPC (counted).
+	capacity int64
+	full     int
+}
+
+func (f *faultStore) FreeBytes() (int64, error) {
+	if f.capacity == 0 {
+		return f.Dir.FreeBytes()
+	}
+	_, staged, err := f.Dir.StagedBytes(context.Background(), "")
+	return f.capacity - staged, err
+}
+
+// capWriter fails a chunk write that would overfill the small disk.
+type capWriter struct {
+	transport.ChunkWriter
+	f *faultStore
+	n int64
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	_, staged, _ := w.f.Dir.StagedBytes(context.Background(), "")
+	if staged+w.n+int64(len(p)) > w.f.capacity {
+		w.f.mu.Lock()
+		w.f.full++
+		w.f.mu.Unlock()
+		return 0, &os.PathError{Op: "write", Path: "chunk", Err: syscall.ENOSPC}
+	}
+	n, err := w.ChunkWriter.Write(p)
+	w.n += int64(n)
+	return n, err
 }
 
 func (f *faultStore) PutStatus(ctx context.Context, id string, st *api.JobStatus) error {
@@ -89,6 +121,9 @@ func (f *faultStore) CreateChunk(ctx context.Context, id string, seq int) (trans
 	if err == nil && seq == f.noSpaceAt && !f.noSpaceHit {
 		f.noSpaceHit = true
 		return noSpaceWriter{w}, nil
+	}
+	if err == nil && f.capacity > 0 {
+		return &capWriter{ChunkWriter: w, f: f}, nil
 	}
 	if err == nil && seq == f.failWriteAt {
 		w.Abort()
@@ -254,6 +289,35 @@ func TestTargetEndLostKeepsStaging(t *testing.T) {
 		_, err := os.Stat(staging)
 		return os.IsNotExist(err)
 	}, "staging removed once the end is recorded")
+}
+
+// Staging on a small disk (/tmp in memory on a linked host): the source
+// waits for room before each chunk instead of running into ENOSPC, which
+// costs a new pass over the source each time.
+func TestSmallDiskWaitedFor(t *testing.T) {
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	mcfg.Transfer.JobQuota, mcfg.Transfer.StagingQuota = 64<<20, 64<<20 // the disk is the limit
+	master, fs := buildFaulty(t, mcfg)
+	fs.capacity = 2 << 20 // room for some 64 KiB chunks above the 1 MiB margin
+	scfg := nodeCfg(t, share, "s1")
+	makeTree(t, mcfg.Roots[0].Path, 4, 3<<20)
+	runWorker(t, master)
+	runWorker(t, build(t, scfg))() // registered, then down: staging builds up
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Second)
+	runWorker(t, build(t, scfg))
+	if j := waitJob(t, master, id, 60*time.Second); j.State != api.JobDone {
+		t.Fatalf("state %s: %+v", j.State, j.Participants)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if fs.full > 0 {
+		t.Errorf("ran into a full disk %d times", fs.full)
+	}
 }
 
 func TestShareHiccupRecovers(t *testing.T) {
@@ -567,5 +631,21 @@ func TestHeartbeatWhileInboxBusy(t *testing.T) {
 		if n.ID == "a" && !n.Online {
 			t.Fatalf("a looks offline while its inbox loop is busy (last seen %s ago)", n.LastSeen)
 		}
+	}
+}
+
+// Over ssh a full staging dir is not "the share": the message names it.
+func TestNoSpaceNamesStagingDir(t *testing.T) {
+	cfg := nodeCfg(t, t.TempDir(), "a")
+	e := build(t, cfg)
+	cfg.Link = true // as `fkbr link` runs: chunks in a private dir
+	s := &sender{e: e, job: &api.Job{ID: "j1"}, status: e.newStatus("j1", api.RoleSource), log: e.log,
+		detached: map[string]bool{}, acks: map[string]int{}, progress: map[string]time.Time{}, gone: map[string]time.Time{},
+		tstate: map[string]api.JobState{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	s.waitAfterNoSpace(ctx, syscall.ENOSPC)
+	if p := s.status.st.Phase; strings.Contains(p, "share") || !strings.Contains(p, cfg.NFSRoot) {
+		t.Errorf("phase %q", p)
 	}
 }

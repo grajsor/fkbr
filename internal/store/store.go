@@ -327,6 +327,16 @@ func (m *Dir) Acked(_ context.Context, src, id, node string) (int, error) {
 	return strconv.Atoi(strings.TrimSpace(string(b)))
 }
 
+// FreeBytes is the space left on the filesystem of the share, for this
+// user.
+func (m *Dir) FreeBytes() (int64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(m.root, &st); err != nil {
+		return 0, err
+	}
+	return int64(st.Bavail) * int64(st.Bsize), nil
+}
+
 func (m *Dir) StagedBytes(_ context.Context, id string) (job, total int64, err error) {
 	base := m.path("data", m.self)
 	jobs, err := os.ReadDir(base)

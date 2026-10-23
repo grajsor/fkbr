@@ -383,6 +383,9 @@ func (r *Remote) StagedBytes(ctx context.Context, id string) (int64, int64, erro
 	return r.chunks.StagedBytes(ctx, id)
 }
 
+// FreeBytes is the space left here, where the chunks are staged.
+func (r *Remote) FreeBytes() (int64, error) { return r.chunks.FreeBytes() }
+
 // RemoveJobData removes the chunks here and the acks on the home node.
 func (r *Remote) RemoveJobData(ctx context.Context, id string) error {
 	err := r.chunks.RemoveJobData(ctx, id)

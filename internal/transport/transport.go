@@ -130,6 +130,8 @@ type Store interface {
 	Acked(ctx context.Context, src, id, node string) (int, error)
 	// StagedBytes reports bytes staged by this node for one job and in total.
 	StagedBytes(ctx context.Context, id string) (job, total int64, err error)
+	// FreeBytes is the space left where this node stages chunks.
+	FreeBytes() (int64, error)
 	// RemoveJobData deletes all staged data of a job sourced by this node.
 	RemoveJobData(ctx context.Context, id string) error
 	// PruneJobs removes finished job records older than maxAge.

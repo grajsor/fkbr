@@ -671,9 +671,14 @@ func isNoSpace(err error) bool {
 var noSpaceWait = 10 * time.Second
 
 func (s *sender) waitAfterNoSpace(ctx context.Context, cause error) error {
-	s.status.st.Phase = "share full, waiting for targets to free space"
+	full := "share full"
+	if c := s.e.cfg; c.Link || c.Home {
+		// Over ssh chunks are staged here, in a private dir (in /tmp).
+		full = "no space left in " + c.NFSRoot
+	}
+	s.status.st.Phase = full + ", waiting for targets to free space"
 	s.status.put(ctx, true)
-	s.e.log.Warn("share full; retrying", "job", s.job.ID, "err", cause)
+	s.e.log.Warn(full+"; retrying", "job", s.job.ID, "err", cause)
 	deadline := time.Now().Add(noSpaceWait)
 	for time.Now().Before(deadline) {
 		if _, err := s.gc(ctx, -1); err != nil {
@@ -692,9 +697,14 @@ func (s *sender) waitAfterNoSpace(ctx context.Context, cause error) error {
 	return nil
 }
 
-// waitForSpace blocks until staging one more chunk stays within quota.
-func (s *sender) waitForSpace(ctx context.Context) error {
+// waitForSpace blocks until staging chunk seq stays within quota and fits
+// where chunks are staged. A full disk found by the write instead costs a
+// new pass over the source (waitAfterNoSpace), so it is waited for here
+// while some of this node's chunks are staged; with none, nothing would
+// free it, and the write finds out.
+func (s *sender) waitForSpace(ctx context.Context, seq int) error {
 	t := s.e.cfg.Transfer
+	need := bundle.ChunkLimit(seq, int64(t.ChunkSize)) + 1<<20 // entry headers
 	waiting := false
 	wait := newWaitLog(s.log, "waiting for staging space", waitLogAfter, waitLogEvery)
 	for {
@@ -705,7 +715,9 @@ func (s *sender) waitForSpace(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		if jobBytes+int64(t.ChunkSize) <= int64(t.JobQuota) && total+int64(t.ChunkSize) <= int64(t.StagingQuota) {
+		free, ferr := s.e.st.FreeBytes()
+		fits := ferr != nil || free >= need || total == 0
+		if fits && jobBytes+int64(t.ChunkSize) <= int64(t.JobQuota) && total+int64(t.ChunkSize) <= int64(t.StagingQuota) {
 			if waiting {
 				s.status.st.Phase = "sending"
 				s.status.put(ctx, true)
@@ -718,7 +730,7 @@ func (s *sender) waitForSpace(ctx context.Context) error {
 			s.status.st.Phase = "waiting for staging space (targets consuming)"
 			s.status.put(ctx, true)
 		}
-		wait.tick("staged_job", size(jobBytes), "staged_share", size(total), "acked", s.ackSummary(-1))
+		wait.tick("staged_job", size(jobBytes), "staged_share", size(total), "free", size(free), "acked", s.ackSummary(-1))
 		if err := s.check(ctx, true); err != nil {
 			return err
 		}
@@ -744,7 +756,7 @@ func (k *shareSink) Create(seq int) (io.WriteCloser, error) {
 		k.cw = nil
 		return nopWriteCloser{io.Discard}, nil
 	}
-	if err := k.s.waitForSpace(k.ctx); err != nil {
+	if err := k.s.waitForSpace(k.ctx, seq); err != nil {
 		return nil, err
 	}
 	cw, err := k.s.e.st.CreateChunk(k.ctx, k.s.job.ID, seq)
