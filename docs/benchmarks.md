@@ -92,22 +92,24 @@ node and links the targets over ssh (`fkbr ssh:HOST:/dir,...`). rsync
 runs `rsync -a` over plain ssh, one per target at once. "Relayed" copies
 between two linked hosts through a third (Rocky 8): fkbr's home node
 passes the data on in memory; rsync uses `ssh -J`. Page caches dropped
-before each run, every copy checked with sha256, one run each.
+before each run, every copy checked with sha256, one run each. fkbr
+holds the chunks it sends in memory, never on disk.
 
 | | fkbr | rsync |
 |---|---|---|
-| 1 GiB file → 1 target | 10.6 s | **7.1 s** |
-| 1 GiB file → 3 targets | 23 s | **21 s** |
-| 1 GiB file, relayed | 12 s | **9.0 s** |
-| 20,000 files → 1 target | 4.6 s | **3.9 s** |
-| 20,000 files → 3 targets | **7.6 s** | 9.4 s |
-| 20,000 files, relayed | 4.6 s | 4.5 s |
-| 200,000 files → 1 target | **24 s** | 27 s |
-| 200,000 files → 3 targets | **48 s** | 1 min 7 s |
-| 200,000 files, relayed | **23 s** | 28 s |
+| 1 GiB file → 1 target | 9.1 s | **6.6 s** |
+| 1 GiB file → 3 targets | 21 s | **19 s** |
+| 1 GiB file, relayed | 10.1 s | **9.0 s** |
+| 20,000 files → 1 target | 4.1 s | 4.0 s |
+| 20,000 files → 3 targets | **7.1 s** | 9.2 s |
+| 20,000 files, relayed | **3.6 s** | 4.4 s |
+| 200,000 files → 1 target | **21 s** | 26 s |
+| 200,000 files → 3 targets | **45 s** | 1 min 6 s |
+| 200,000 files, relayed | **20 s** | 27 s |
 
-- **One big file:** rsync streams it; fkbr cuts it into chunks that the
-  source stages before sending, which costs it a few seconds per GiB.
+- **One big file:** rsync streams it; fkbr packs it into chunks, each
+  with a SHA-256 checked on both ends, and stays a couple of seconds per
+  GiB behind.
 - **Many files, or several targets:** fkbr is ahead. It packs files into
   chunks and makes each chunk once for every target, where rsync sends
   each file on its own, once per target.
