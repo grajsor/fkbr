@@ -55,6 +55,19 @@ func TestSavedHosts(t *testing.T) {
 	}
 }
 
+// A host linked by `fkbr ssh:web01` is not saved into a config file that
+// names a share: the file could not be read any more.
+func TestSaveHostBesideShare(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "fkbr.yaml")
+	os.WriteFile(p, []byte("nfs_root: /mnt/nfs\n"), 0o600)
+	if err := SaveHost(p, "web01"); err == nil {
+		t.Error("saved beside nfs_root")
+	}
+	if _, err := Read(p); err != nil {
+		t.Errorf("the file no longer reads: %v", err)
+	}
+}
+
 // The config file, also where linked hosts are kept: -config, else
 // $FKBR_CONFIG, else fkbr.yaml beside the binary if it is there, else
 // ~/.fkbr.conf.

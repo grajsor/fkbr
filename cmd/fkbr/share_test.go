@@ -4,11 +4,13 @@ import (
 	"slices"
 	"testing"
 
+	"fkbr/internal/api"
 	"fkbr/internal/config"
 )
 
 // The share given on the command line wins over the config file's,
-// whichever kind each is; $FKBR_SHARE only fills a gap.
+// whichever kind each is; $FKBR_SHARE over the file's ssh list only (F7
+// may have written that to ~/.fkbr.conf unasked).
 func TestPickShare(t *testing.T) {
 	for _, c := range []struct {
 		name           string
@@ -21,7 +23,8 @@ func TestPickShare(t *testing.T) {
 		{"nfs arg over file ssh", "", []string{"web01"}, "/mnt/nfs/xfer", "", "", "/mnt/nfs/xfer", nil},
 		{"nfs flag over file ssh", "", []string{"web01"}, "", "/mnt/nfs/xfer", "", "/mnt/nfs/xfer", nil},
 		{"ssh arg over file nfs", "/mnt/nfs/xfer", nil, "ssh:db01", "", "", "", []string{"db01"}},
-		{"file ssh over env", "", []string{"web01"}, "", "", "/mnt/env", "", []string{"web01"}},
+		{"env over file ssh", "", []string{"web01"}, "", "", "/mnt/env", "/mnt/env", nil},
+		{"file ssh without env", "", []string{"web01"}, "", "", "", "", []string{"web01"}},
 		{"file nfs over env", "/mnt/file", nil, "", "", "/mnt/env", "/mnt/file", nil},
 		{"env when the file has none", "", nil, "", "", "/mnt/env", "/mnt/env", nil},
 		{"env ssh", "", nil, "", "", "ssh:web01", "", []string{"web01"}},
@@ -62,5 +65,19 @@ func TestLocalRootOnlyForThisUser(t *testing.T) {
 		Roots: []config.Root{{ID: "files", Path: t.TempDir()}, {ID: "mine", Path: t.TempDir(), Local: true}}}
 	if err := cfg.Finish(); err == nil {
 		t.Error("a local root with a group socket was accepted")
+	}
+}
+
+// A CLI attached to a daemon has root local and the daemon has not: no
+// "using the running node X, which shares ..." note for that alone.
+func TestSameRootsLeavesOutLocal(t *testing.T) {
+	dir := t.TempDir()
+	daemon := []api.Root{{ID: "files", Path: dir, Writable: true}}
+	cli := []config.Root{{ID: "files", Path: dir, AllowWrite: true}, {ID: config.LocalRootID, Path: "/", AllowWrite: true, Local: true}}
+	if !sameRoots(daemon, cli) {
+		t.Error("root local made them differ")
+	}
+	if sameRoots(daemon, []config.Root{{ID: "files", Path: t.TempDir(), AllowWrite: true}}) {
+		t.Error("another directory is the same")
 	}
 }

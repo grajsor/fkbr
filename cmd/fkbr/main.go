@@ -424,7 +424,11 @@ func dialNode(ctx context.Context, cfg *config.Config) (*remote.Client, string, 
 	return c, "", nil
 }
 
+// sameRoots compares the shared roots; root local is a TUI's or CLI's own
+// (a daemon has none), so it does not count.
 func sameRoots(a []api.Root, b []config.Root) bool {
+	a = slices.DeleteFunc(slices.Clone(a), func(r api.Root) bool { return r.Local })
+	b = slices.DeleteFunc(slices.Clone(b), func(r config.Root) bool { return r.Local })
 	if len(a) != len(b) {
 		return false
 	}
@@ -458,9 +462,10 @@ func startNode(ctx context.Context, cfg *config.Config, log *slog.Logger, leave 
 }
 
 // pickShare sets cfg's share from the SHARE argument or -share, else
-// keeps the config file's, else takes $FKBR_SHARE. A share given here
-// replaces the file's, an ssh: list included: an NFS share taken for an
-// ssh swarm's records would be made private (0700).
+// keeps the config file's nfs_root, else takes $FKBR_SHARE, else keeps
+// the file's ssh list (which F7 may have written to ~/.fkbr.conf unasked).
+// A share given here replaces the file's, an ssh: list included: an NFS
+// share taken for an ssh swarm's records would be made private (0700).
 func pickShare(cfg *config.Config, arg, flag, env string) error {
 	given := true
 	switch {
@@ -468,11 +473,10 @@ func pickShare(cfg *config.Config, arg, flag, env string) error {
 		cfg.NFSRoot = arg
 	case flag != "":
 		cfg.NFSRoot = flag
+	case cfg.NFSRoot == "" && env != "":
+		cfg.NFSRoot = env
 	default:
 		given = false
-		if cfg.NFSRoot == "" && len(cfg.SSH) == 0 {
-			cfg.NFSRoot = env
-		}
 	}
 	if s, ok := strings.CutPrefix(cfg.NFSRoot, "ssh:"); ok {
 		if _, err := sshlink.ParseHosts(s); err != nil {

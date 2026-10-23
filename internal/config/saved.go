@@ -35,8 +35,19 @@ func SavedHosts(p string) ([]string, error) {
 	return v.SSH, nil
 }
 
-// SaveHost adds host to the ssh list of the config file at p.
+// SaveHost adds host to the ssh list of the config file at p. Not to a
+// file that names a share: it could not be read with both.
 func SaveHost(p, host string) error {
+	doc, err := readSaved(p)
+	if err != nil {
+		return err
+	}
+	var v struct {
+		NFSRoot string `yaml:"nfs_root"`
+	}
+	if doc != nil && doc.Decode(&v) == nil && v.NFSRoot != "" {
+		return fmt.Errorf("%s sets nfs_root, and a config file has a share or an ssh list, not both", p)
+	}
 	return editSaved(p, func(hosts []string) []string {
 		if slices.Contains(hosts, host) {
 			return hosts
