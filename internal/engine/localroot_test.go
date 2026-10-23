@@ -201,3 +201,26 @@ func TestMoveAcrossOverlappingRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// The same move submitted by another node: the source refuses it too.
+func TestMoveAcrossOverlappingRootsFromElsewhere(t *testing.T) {
+	share := t.TempDir()
+	cfg := nodeCfg(t, share, "a")
+	outer := filepath.Dir(cfg.Roots[0].Path)
+	cfg.Roots = append(cfg.Roots, config.Root{ID: "outer", Path: outer, AllowWrite: true})
+	a := build(t, cfg)
+	runWorker(t, a)
+	b := build(t, nodeCfg(t, share, "b"))
+	runWorker(t, b)
+	makeTree(t, cfg.Roots[0].Path, 3, 1<<10)
+	id, err := b.Submit(context.Background(), api.TransferRequest{SrcNode: "a", SrcRoot: "outer", Paths: []string{"data/tree"}, DstNodes: []string{"a"}, DstRoot: "data", DstDir: "tree/inside", Move: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, b, id, 30*time.Second); j.State != api.JobFailed {
+		t.Errorf("job %s, want failed", j.State)
+	}
+	if _, err := os.Stat(filepath.Join(cfg.Roots[0].Path, "tree")); err != nil {
+		t.Fatal(err)
+	}
+}

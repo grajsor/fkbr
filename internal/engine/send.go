@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -90,6 +91,12 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	req := job.Request
 	if req.Move && sameRootTarget(req, req.DstNodes) {
 		if err := e.checkMoveHere(req); err != nil {
+			return s.status.finish(ctx, api.JobFailed, err)
+		}
+	}
+	if req.Move && slices.Contains(req.DstNodes, e.Self()) && req.DstRoot != req.SrcRoot {
+		// Submitted elsewhere, Submit here did not see it.
+		if err := e.moveAcrossRoots(&req); err != nil {
 			return s.status.finish(ctx, api.JobFailed, err)
 		}
 	}
