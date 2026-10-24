@@ -85,7 +85,7 @@ files would take about 2 h 20 min to one target.
   directory they keep open, and move a directory that is new at the
   destination into place with one rename.
 
-## fkbr and rsync over ssh (2026-10-23)
+## fkbr and rsync over ssh (2026-10-24)
 
 The same four VMs and data, no share: the Rocky 9 VM runs fkbr's home
 node and links the targets over ssh (`fkbr ssh:HOST:/dir,...`). rsync
@@ -97,19 +97,18 @@ holds the chunks it sends in memory, never on disk.
 
 | | fkbr | rsync |
 |---|---|---|
-| 1 GiB file → 1 target | 9.1 s | **6.6 s** |
-| 1 GiB file → 3 targets | 21 s | **19 s** |
-| 1 GiB file, relayed | 10.1 s | **9.0 s** |
-| 20,000 files → 1 target | 4.1 s | 4.0 s |
-| 20,000 files → 3 targets | **7.1 s** | 9.2 s |
+| 1 GiB file → 1 target | 7.6 s | 7.4 s |
+| 1 GiB file → 3 targets | **18 s** | 20 s |
+| 1 GiB file, relayed | 10.1 s | 9.8 s |
+| 20,000 files → 1 target | **3.6 s** | 4.0 s |
+| 20,000 files → 3 targets | **6.6 s** | 9.7 s |
 | 20,000 files, relayed | **3.6 s** | 4.4 s |
-| 200,000 files → 1 target | **21 s** | 26 s |
-| 200,000 files → 3 targets | **45 s** | 1 min 6 s |
+| 200,000 files → 1 target | **20 s** | 27 s |
+| 200,000 files → 3 targets | **45 s** | 1 min 3 s |
 | 200,000 files, relayed | **20 s** | 27 s |
 
-- **One big file:** rsync streams it; fkbr packs it into chunks, each
-  with a SHA-256 checked on both ends, and stays a couple of seconds per
-  GiB behind.
+- **One big file:** about even. rsync streams it; fkbr packs it into
+  chunks, each with a checksum (xxh3-128) checked on both ends.
 - **Many files, or several targets:** fkbr is ahead. It packs files into
   chunks and makes each chunk once for every target, where rsync sends
   each file on its own, once per target.
