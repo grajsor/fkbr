@@ -56,7 +56,9 @@ type (1 byte), stream ID (4), length (4), payload (at most 64 KiB).
   flow control: a side may send 4 MiB on a stream before the reader gives
   window back. A big transfer never holds up a directory listing.
 - **Keepalive.** An idle session pings every 15 s; one that hears nothing
-  for 45 s ends.
+  for 45 s ends. If this process itself did not run for a while (a
+  stalled or paused VM), it waits one more ping first: the other side's
+  frames may be there, unread.
 - **Calls.** Each call is one stream: a JSON line naming the method and
   its arguments, an optional raw body, then a JSON line with the error
   (message and code, so the engine can still tell "not found" from "not

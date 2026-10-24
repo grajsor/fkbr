@@ -265,18 +265,44 @@ func (s *Session) write(typ byte, id uint32, payload []byte) error {
 func (s *Session) keepalive() {
 	t := time.NewTicker(s.opts.Ping)
 	defer t.Stop()
+	w := watch{ping: s.opts.Ping, dead: s.opts.Dead, tick: time.Now()}
 	for {
 		select {
 		case <-s.done:
 			return
 		case <-t.C:
-			if time.Since(time.Unix(0, s.lastRecv.Load())) > s.opts.Dead {
+			if w.silent(time.Now(), time.Unix(0, s.lastRecv.Load())) {
 				s.fail(fmt.Errorf("%w: nothing from the other side for %s", ErrClosed, s.opts.Dead))
 				return
 			}
 			s.control(&s.pinging, typePing)
 		}
 	}
+}
+
+// watch is the keepalive's verdict on the peer.
+type watch struct {
+	ping, dead time.Duration
+	tick       time.Time // the previous tick
+	held       bool      // that tick's verdict was held back
+}
+
+// silent reports whether the peer sent nothing for dead. A tick more than
+// 2 × ping after the one before means this process did not run (a stall,
+// a paused VM): frames may be waiting unread, so the verdict waits for the
+// next tick, once, and the reader gets to run first.
+func (w *watch) silent(now, last time.Time) bool {
+	late := now.Sub(w.tick) > 2*w.ping
+	w.tick = now
+	if now.Sub(last) <= w.dead {
+		w.held = false
+		return false
+	}
+	if late && !w.held {
+		w.held = true
+		return false
+	}
+	return true
 }
 
 // control sends a ping or pong without waiting for it, at most one of each

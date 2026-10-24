@@ -243,6 +243,37 @@ func TestSilentPeerEndsSession(t *testing.T) {
 	}
 }
 
+// A tick that comes late means this process did not run: frames may be
+// waiting unread, so the verdict waits one tick (cloud run 2026-10-24: a
+// -race run stalled for half a second and gave up live links).
+func TestLateTickHoldsVerdict(t *testing.T) {
+	t0 := time.Unix(1000, 0)
+	at := func(ms int) time.Time { return t0.Add(time.Duration(ms) * time.Millisecond) }
+	w := watch{ping: 100 * time.Millisecond, dead: 300 * time.Millisecond, tick: t0}
+	if w.silent(at(100), t0) || w.silent(at(200), t0) {
+		t.Fatal("silent before Dead")
+	}
+	if w.silent(at(800), at(150)) {
+		t.Fatal("a late tick gave up the peer at once")
+	}
+	if w.silent(at(900), at(850)) {
+		t.Fatal("silent although a frame came")
+	}
+	// Late, held once; late again and still nothing: the peer is gone
+	// (a process that only ever runs late still finds a dead link).
+	if w.silent(at(1500), at(850)) {
+		t.Fatal("late tick not held")
+	}
+	if !w.silent(at(2200), at(850)) {
+		t.Fatal("still silent after the held tick, but not given up")
+	}
+	// On time: no holding.
+	w = watch{ping: 100 * time.Millisecond, dead: 300 * time.Millisecond, tick: at(300)}
+	if !w.silent(at(400), t0) {
+		t.Fatal("on-time tick held its verdict")
+	}
+}
+
 // A link that dies mid-transfer: the peer stops reading and sending, so a
 // writer blocks in conn.Write holding the write lock. The session must
 // still end after Dead, not when TCP gives up hours later.

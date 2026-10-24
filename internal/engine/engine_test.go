@@ -122,7 +122,10 @@ func linked(t *testing.T, cfg *config.Config, nfs nfsmailbox.Options) (transport
 		waitUntil(t, func() bool { return !linkedNode(sw.home, cfg.NodeID) }, "old link gone")
 	}
 	a, b := net.Pipe()
-	fo := frame.Options{Ping: 100 * time.Millisecond}
+	// Pings often, but a link is given up only after seconds: a -race run
+	// beside other load can stall the whole process for half a second, and
+	// a pipe link here never comes back (cloud run 2026-10-24).
+	fo := frame.Options{Ping: 100 * time.Millisecond, Dead: 5 * time.Second}
 	served := make(chan struct{})
 	go func() {
 		sw.home.ServeConn(context.Background(), a, cfg.NodeID+"-host", fo)
