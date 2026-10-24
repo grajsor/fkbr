@@ -1,6 +1,6 @@
 # Benchmarks
 
-## fkbr, tar, rsync and borg through the share (2026-10-20, protocol 2)
+## fkbr, tar, rsync and borg through the share (2026-10-24, protocol 3)
 
 **Setup**
 - **Share:** a NAS over NFSv3 on 1 GbE (`actimeo=1800`, hard).
@@ -30,8 +30,9 @@
 - **rsync:** `rsync -rlpt` from the source onto the share (`-a` fails: the
   NAS refuses `chgrp`), then `rsync -a` from the share on every target at
   once.
-- **borg 1.4.5:** `borg create` into a repository on the share (no
-  encryption, default lz4), then `borg extract` on the target. Its static
+- **borg 1.4.5:** `borg create --compression none` into a repository on
+  the share (no encryption; fkbr runs without `-z` too), then `borg
+  extract` on the target. Its static
   binary needs glibc 2.31, so only Rocky 9 and 10 can run it: one
   target only.
 
@@ -39,30 +40,29 @@
 
 | | fkbr | tar | rsync | borg |
 |---|---|---|---|---|
-| 1 GiB file → 1 target | 21 s | 21 s | 20 s | 28 s |
-| 1 GiB file → 3 targets | **33 s** | 38 s | 38 s | – |
-| 20,000 files → 1 target | 6.9 s | **6.0 s** | 2 min 33 s | 18 s |
-| 20,000 files → 3 targets | **10 s** | 12 s | 2 min 58 s | – |
-| 200,000 files → 1 target | 43 s | **32 s** | 27 min 41 s | 2 min 7 s |
-| 200,000 files → 3 targets | 1 min 3 s | **57 s** | not run | – |
-| 1,000,000 entries → 1 target | 3 min 38 s | **3 min 16 s** | not run | 9 min 46 s |
-| 1,000,000 entries → 3 targets | 5 min 38 s | **5 min 20 s** | not run | – |
+| 1 GiB file → 1 target | **19 s** | 20 s | 20 s | 25 s |
+| 1 GiB file → 3 targets | **32 s** | 38 s | 38 s | – |
+| 20,000 files → 1 target | **5.6 s** | 6.5 s | 2 min 16 s | 19 s |
+| 20,000 files → 3 targets | **8.1 s** | 11 s | 2 min 19 s | – |
+| 200,000 files → 1 target | **27 s** | 31 s | 22 min 44 s | 2 min 7 s |
+| 200,000 files → 3 targets | **50 s** | 56 s | not run | – |
+| 1,000,000 entries → 1 target | **2 min 16 s** | 3 min 10 s | not run | 9 min 46 s |
+| 1,000,000 entries → 3 targets | **4 min 57 s** | 5 min 30 s | not run | – |
 
 rsync was not run where it would have taken hours: at its pace, a million
-files would take about 2 h 20 min to one target.
+files would take about 2 h to one target.
 
 **What this shows**
 - **Big files: the NAS sets the pace.** To one target every tool takes
   about 20 s per GiB. To three, fkbr is ahead: its targets read each chunk
   while the source is still writing the next, whereas tar and rsync must
   finish writing to the share before anyone can read.
-- **Small files: fkbr and tar are close.** fkbr is ahead for 20,000 files
-  to three targets and within 10–35% of tar for 200,000 and a million.
-  What is left is the target's work per file: fkbr writes each file into
-  a staging area first and moves it into place when everything has
-  arrived, so nothing half-copied ever shows; tar extracts in place.
+- **Small files: fkbr is ahead of tar,** by 10–30%, although it does
+  more per file: each file goes into a staging area first and is moved
+  into place when everything has arrived, so nothing half-copied ever
+  shows; tar extracts in place.
 - **rsync through NFS is not an option for many files:** it creates every
-  file on the share one by one, 20–40 times slower than packing them.
+  file on the share one by one, 20–45 times slower than packing them.
 - **borg is a backup tool:** it is three to four times slower than tar for
   small files, and its strengths (deduplication, history) do not help a
   one-off copy.
@@ -82,8 +82,9 @@ files would take about 2 h 20 min to one target.
 - The source walks ahead and reads small files with a few workers while it
   packs; targets read each chunk ahead while they write files.
 - Targets set a file's metadata through the open file, create files in the
-  directory they keep open, and move a directory that is new at the
-  destination into place with one rename.
+  directory they keep open, truncate a file only when its size is wrong
+  (on XFS a truncate writes the file out at once), and move a directory
+  that is new at the destination into place with one rename.
 
 ## fkbr and rsync over ssh (2026-10-24)
 

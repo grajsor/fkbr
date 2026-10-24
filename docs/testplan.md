@@ -60,7 +60,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | More jobs than `max_jobs` on one node | Extra jobs show `queued`; a fan-out drops a queued target after `detach_after` with a clear reason | auto, lab |
 | `job_quota` 256 MiB / 1 GiB / 4 GiB | 1 and 4 GiB equal, 256 MiB slower | lab |
 | 1 million small files, one sync | Memory bounded, plan streams | lab (one Pi, 2026-10-19; `benchmarks.md`) |
-| 1,000,000 entries copied to 1 and 3 targets | All verified; 3 min 38 s and 5 min 38 s | lab (compare) |
+| 1,000,000 entries copied to 1 and 3 targets | All verified; 2 min 16 s and 4 min 57 s | lab (compare) |
 | fkbr against tar, rsync and borg through the share | See `benchmarks.md` | lab (compare) |
 | Files bigger than `job_quota` (e.g. 20 GiB) | Segments flow through the window | **todo** on the lab (auto for 3 MiB through 256 KiB) |
 | 200 copies submitted at once; 100,000 files in one folder | All done (27 s); `jobs` 0.03 s; 100k files in 12 s, target RSS 55 MiB | lab (weird `flood`, `bigdir`) |
