@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path"
+	"slices"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -218,6 +219,32 @@ func ParseTarget(s string) (node, root, rel string) {
 	s = strings.TrimPrefix(s, "/")
 	root, rel, _ = strings.Cut(s, "/")
 	return node, root, rel
+}
+
+// checkDst refuses a destination that names nodes without the colon:
+// "cp /x @all" or "cp /x hostb" would copy into a folder of that name
+// here. A folder of that name is still "/@all" or "/hostb".
+func checkDst(ctx context.Context, c api.Client, s string) error {
+	if s == "" || strings.ContainsAny(s, ":/") {
+		return nil
+	}
+	nodes := strings.HasPrefix(s, "@")
+	if !nodes {
+		all, err := c.Nodes(ctx)
+		if err != nil {
+			return nil
+		}
+		nodes = true
+		for _, name := range strings.Split(s, ",") {
+			if !slices.ContainsFunc(all, func(n api.Node) bool { return n.ID == name }) {
+				nodes = false
+			}
+		}
+	}
+	if nodes {
+		return fmt.Errorf("destination %q names nodes: write %s:/dir (or /%s for a folder of that name here)", s, s, s)
+	}
+	return nil
 }
 
 // ModeString renders an entry like ls -l does, e.g. "drwxr-xr-x".

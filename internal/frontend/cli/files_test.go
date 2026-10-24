@@ -103,3 +103,26 @@ func TestMv(t *testing.T) {
 		t.Errorf("mv with an exclude: %v", err)
 	}
 }
+
+// "cp /x @all" (no colon) copied into a folder "@all" here; so would
+// "cp /x b" with b a node. Refused, with the right form; "/b" is a folder.
+func TestDestinationNamesNodes(t *testing.T) {
+	for _, dst := range []string{"@all", "@web", "b", "a,b"} {
+		for _, cmd := range []string{"cp", "mv", "sync"} {
+			c := &filesClient{job: api.Job{ID: "job1", State: api.JobDone}} // ends, if wrongly submitted
+			_, err := run(t, c, cmd, "/f.txt", dst)
+			if err == nil || !strings.Contains(err.Error(), dst+":/dir") || len(c.submits) != 0 {
+				t.Errorf("%s /f.txt %s: %v, submits %d", cmd, dst, err, len(c.submits))
+			}
+		}
+	}
+	c := &filesClient{job: api.Job{ID: "job1", State: api.JobDone}}
+	for _, dst := range []string{"/b", "inbox", "/@all"} {
+		if _, err := run(t, c, "cp", "/f.txt", dst); err != nil {
+			t.Errorf("cp /f.txt %s: %v", dst, err)
+		}
+	}
+	if len(c.submits) != 3 || c.submits[0].DstDir != "b" || c.submits[0].DstNodes[0] != "a" {
+		t.Errorf("folders here: %+v", c.submits)
+	}
+}

@@ -92,6 +92,9 @@ func transferArgs(ctx context.Context, c api.Client, fl *flag.FlagSet, args []st
 		}
 		req.Paths = append(req.Paths, p)
 	}
+	if err := checkDst(ctx, c, fl.Arg(fl.NArg()-1)); err != nil {
+		return api.TransferRequest{}, err
+	}
 	dnodes, droot, ddir := ParseTarget(fl.Arg(fl.NArg() - 1))
 	droot, ddir, err = resolveRoot(ctx, c, dnodes, droot, ddir)
 	if err != nil {

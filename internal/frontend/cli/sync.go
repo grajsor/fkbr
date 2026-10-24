@@ -79,6 +79,9 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 		if *mirror {
 			req.Mode = api.SyncMirror
 		}
+		if err := checkDst(ctx, c, fl.Arg(1)); err != nil {
+			return err
+		}
 		var dnodes string
 		req.SrcNode, req.SrcRoot, req.SrcPath = ParseTarget(fl.Arg(0))
 		dnodes, req.DstRoot, req.DstPath = ParseTarget(fl.Arg(1))

@@ -310,6 +310,7 @@ data bug: every target matched its source.
 | A source killed over a share left the chunk it was writing in `tmp/` for an hour (up to 134 MB each) | Removed when it writes that chunk again, and when the job ends | `TestKilledSourceTempChunksRemoved` |
 | setuid/setgid left off (no `allow_setid`) without a word in the job | Noted in the job | `TestRoundTripMetadata` |
 | Symlinks got the time they were made on the target | They keep the source's mtime, like `rsync -a` | `TestRoundTripMetadata` |
+| `cp /x @all` (no colon), or `cp /x hostb` with `hostb` a node, copied into a folder of that name here (found on the lab) | Refused for cp, mv and sync, naming `@all:/dir`; `/hostb` is still a folder here | `TestDestinationNamesNodes` |
 
 ## How to run the lab tests
 
