@@ -405,7 +405,7 @@ func connect(ctx context.Context, cfg *config.Config, forceLocal bool, log *slog
 // elsewhere, or with other -root/-ro) is used, with a notice saying so.
 func dialNode(ctx context.Context, cfg *config.Config) (*remote.Client, string, error) {
 	// A socket in a directory someone else controls may not be our node.
-	if err := localfs.CheckPrivateDir(filepath.Dir(cfg.Socket)); errors.Is(err, localfs.ErrNotPrivate) {
+	if err := localfs.CheckSocketDir(cfg.Socket); errors.Is(err, localfs.ErrNotPrivate) {
 		return nil, "", err
 	}
 	c, err := remote.Dial(ctx, cfg.Socket)
@@ -502,6 +502,12 @@ func startNodeWith(ctx context.Context, cfg *config.Config, log *slog.Logger, le
 		c.LeaveOnStop()
 	}
 	if err := localfs.PrivateDir(cfg.StateDir); err != nil {
+		c.Close()
+		return nil, err
+	}
+	// The CLI refuses to dial a socket in a folder others control: a node
+	// listening there could be reached by nothing (cloud run 2026-10-24).
+	if err := localfs.CheckSocketDir(cfg.Socket); errors.Is(err, localfs.ErrNotPrivate) {
 		c.Close()
 		return nil, err
 	}

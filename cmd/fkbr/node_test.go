@@ -12,6 +12,7 @@ import (
 
 	"fkbr/internal/config"
 	"fkbr/internal/engine"
+	"fkbr/internal/localfs"
 )
 
 func testCfg(t *testing.T, share string) *config.Config {
@@ -51,6 +52,32 @@ func TestStartNodeRefusesTakenID(t *testing.T) {
 			second.stop()
 		}
 		t.Fatalf("second node: %v", err)
+	}
+}
+
+// A node must not listen where its CLI won't dial: a socket in a folder
+// others may write to (cloud run 2026-10-24: the daemon ran, every command
+// failed and named -state).
+func TestStartNodeRefusesOpenSocketDir(t *testing.T) {
+	cfg := testCfg(t, t.TempDir())
+	open := filepath.Join(t.TempDir(), "open")
+	if err := os.Mkdir(open, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(open, 0o777)
+	cfg.Socket = filepath.Join(open, "s.sock")
+	n, err := startNode(context.Background(), cfg, slog.New(slog.DiscardHandler), false)
+	if n != nil {
+		n.stop()
+	}
+	if !errors.Is(err, localfs.ErrNotPrivate) || !strings.Contains(err.Error(), cfg.Socket) || strings.Contains(err.Error(), "-state") {
+		t.Fatalf("err = %v, want ErrNotPrivate naming the socket", err)
+	}
+	if _, err := os.Lstat(cfg.Socket); err == nil {
+		t.Error("socket created")
+	}
+	if _, _, err := dialNode(context.Background(), cfg); !errors.Is(err, localfs.ErrNotPrivate) {
+		t.Errorf("dialNode: err = %v, want ErrNotPrivate", err)
 	}
 }
 

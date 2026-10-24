@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -46,5 +47,24 @@ func TestPrivateDir(t *testing.T) {
 		if err := PrivateDir(theirs); !errors.Is(err, ErrNotPrivate) {
 			t.Errorf("someone else's dir: err = %v, want ErrNotPrivate", err)
 		}
+	}
+}
+
+// The socket's check names the socket and says to move it.
+func TestCheckSocketDir(t *testing.T) {
+	top := t.TempDir()
+	open := filepath.Join(top, "open")
+	os.Mkdir(open, 0o700)
+	os.Chmod(open, 0o777)
+	sock := filepath.Join(open, "s.sock")
+	err := CheckSocketDir(sock)
+	if !errors.Is(err, ErrNotPrivate) || !strings.Contains(err.Error(), sock) || strings.Contains(err.Error(), "-state") {
+		t.Errorf("open folder: err = %v", err)
+	}
+	if err := CheckSocketDir(filepath.Join(top, "s.sock")); err != nil {
+		t.Errorf("own folder: %v", err)
+	}
+	if err := CheckSocketDir(filepath.Join(top, "gone", "s.sock")); err == nil || errors.Is(err, ErrNotPrivate) {
+		t.Errorf("missing folder: err = %v, want a plain lookup error", err)
 	}
 }

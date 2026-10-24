@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"syscall"
 )
 
@@ -25,24 +26,47 @@ func PrivateDir(dir string) error {
 // CheckPrivateDir reports whether dir is a directory (not a symlink),
 // owned by this user, that nobody else can write to.
 func CheckPrivateDir(dir string) error {
+	why, fix, err := privateDir(dir)
+	if why == "" {
+		return err
+	}
+	if fix != "" {
+		fix += ", or "
+	}
+	return fmt.Errorf("%w: %s; %spass -state DIR", ErrNotPrivate, why, fix)
+}
+
+// CheckSocketDir is CheckPrivateDir for the folder of the API socket: a
+// socket where others may put their own is not surely our node's. The
+// advice is to move the socket, not the state dir.
+func CheckSocketDir(sock string) error {
+	why, _, err := privateDir(filepath.Dir(sock))
+	if why == "" {
+		return err
+	}
+	return fmt.Errorf("%w: socket %s: %s; set socket: to a path in a folder of yours (the default is in the state dir)",
+		ErrNotPrivate, sock, why)
+}
+
+// privateDir says why dir is not private ("" if it is, or if it cannot be
+// looked at: err) and how to fix it.
+func privateDir(dir string) (why, fix string, err error) {
 	fi, err := os.Lstat(dir)
 	if err != nil {
-		return err
+		return "", "", err
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	switch {
 	case fi.Mode()&fs.ModeSymlink != 0:
-		return fmt.Errorf("%w: %s is a symlink; remove it, or pass -state DIR", ErrNotPrivate, dir)
+		return dir + " is a symlink", "remove it", nil
 	case !fi.IsDir():
-		return fmt.Errorf("%w: %s is not a directory; remove it, or pass -state DIR", ErrNotPrivate, dir)
+		return dir + " is not a directory", "remove it", nil
 	case !ok:
-		return fmt.Errorf("%w: cannot tell who owns %s", ErrNotPrivate, dir)
+		return "cannot tell who owns " + dir, "", nil
 	case st.Uid != uint32(os.Geteuid()):
-		return fmt.Errorf("%w: %s belongs to uid %d, not to this user (%d): someone else made it; remove it, or pass -state DIR",
-			ErrNotPrivate, dir, st.Uid, os.Geteuid())
+		return fmt.Sprintf("%s belongs to uid %d, not to this user (%d): someone else made it", dir, st.Uid, os.Geteuid()), "remove it", nil
 	case fi.Mode().Perm()&0o022 != 0:
-		return fmt.Errorf("%w: others may write to %s (mode %04o); chmod go-w it, or pass -state DIR",
-			ErrNotPrivate, dir, fi.Mode().Perm())
+		return fmt.Sprintf("others may write to %s (mode %04o)", dir, fi.Mode().Perm()), "chmod go-w it", nil
 	}
-	return nil
+	return "", "", nil
 }

@@ -24,8 +24,11 @@ BIN=$(cd "$(dirname "$0")/.." && pwd)/bin/fkbr
 [ -x "$BIN" ] || { echo "build first: make build" >&2; exit 1; }
 WORK=${WORK:-$(mktemp -d /tmp/fkbr-bench.XXXXXX)}
 mkdir -p "$WORK/share"
+# Sockets in a folder of our own (mktemp makes it 0700): fkbr refuses one
+# others may write to, and $WORK may be too long for a socket path.
+SOCKS=$(mktemp -d /tmp/fkbr-bench-sock.XXXXXX)
 PIDS=()
-cleanup() { kill "${PIDS[@]}" 2>/dev/null || true; wait 2>/dev/null || true; }
+cleanup() { kill "${PIDS[@]}" 2>/dev/null || true; wait 2>/dev/null || true; rm -rf "$SOCKS"; }
 trap cleanup EXIT
 
 nodes=(master)
@@ -36,7 +39,7 @@ for n in "${nodes[@]}"; do
 node_id: $n
 nfs_root: $WORK/share
 state_dir: $WORK/$n/state
-socket: /tmp/fkbr-bench-$$-$n.sock
+socket: $SOCKS/$n.sock
 roots: [{id: data, path: $WORK/$n/data, allow_write: true}]
 CFG
 	"$BIN" -config "$WORK/$n.yaml" daemon 2>"$WORK/$n.log" &
