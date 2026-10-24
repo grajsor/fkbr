@@ -329,7 +329,8 @@ write into it.
 
 `nodes` shows each node's level in the CHOWN column (`no`, `files`, `full`).
 Job summaries report entries whose ownership or setuid bits could not be
-applied.
+applied, and how many had setuid/setgid left off because `allow_setid` is
+off.
 
 ## TUI
 

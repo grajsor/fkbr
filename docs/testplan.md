@@ -294,6 +294,23 @@ Found by a code review of the whole ssh branch (2026-10-23):
 | The TUI asked a node on a share for its links on every node list refresh | Asked once | `TestNotHomeAskedOnce` |
 | Two `firstLine` helpers that differed on long lines | One | (none) |
 
+## 13. Cloud test run (2026-10-24)
+
+A 4 h run on one machine (no NFS: a plain directory as the share; ssh to
+a local sshd): copies of one 1 GiB file, 200,000 small files and a mixed
+set, syncs, kills, stops and edge cases, each 3 times, over a share and
+over ssh, and 329 rounds of the ssh-mode engine tests under `-race`. No
+data bug: every target matched its source.
+
+| Found | Now | Test |
+|---|---|---|
+| Ssh-mode engine tests under `-race` failed now and then ("nothing from the other side for 300ms"): the whole process got no CPU for half a second, and the keepalive, waking before the readers that held fresh frames, gave up live links | Test links wait 5 s; a keepalive whose own tick came late (over 2 pings) waits one more ping | `TestLateTickHoldsVerdict` |
+| A daemon started with its socket in a folder others may write to (`/tmp`); every CLI command then refused it and named `-state` | The node refuses to start, naming the socket and how to move it | `TestStartNodeRefusesOpenSocketDir`, `TestCheckSocketDir` |
+| `scripts/bench.sh` put its sockets in `/tmp` and stopped before any benchmark | Sockets in a private folder of its own | (the script runs) |
+| A source killed over a share left the chunk it was writing in `tmp/` for an hour (up to 134 MB each) | Removed when it writes that chunk again, and when the job ends | `TestKilledSourceTempChunksRemoved` |
+| setuid/setgid left off (no `allow_setid`) without a word in the job | Noted in the job | `TestRoundTripMetadata` |
+| Symlinks got the time they were made on the target | They keep the source's mtime, like `rsync -a` | `TestRoundTripMetadata` |
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): rounds of random copies and syncs

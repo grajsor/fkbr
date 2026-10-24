@@ -7,8 +7,7 @@ data through a directory on the share. Go, single static binary.
 **This file is committed and public.** Keep it free of IP addresses, host
 names, user names, e-mail addresses and anything about where fkbr is
 used. The owner's private notes (test lab, deploys, history) are in
-`CLAUDE.local.md`, git-ignored, only on their machine. If it is not
-loaded you are probably in a cloud session: see "Cloud sessions".
+`CLAUDE.local.md`, git-ignored, only on their machine.
 
 User-facing docs: `README.md`, `docs/FAQ.md`, `docs/operations.md`,
 `docs/protocol.md` (the design), `docs/benchmarks.md`, `docs/testplan.md`
@@ -53,17 +52,6 @@ copyright "The Author".
   The help flows with the window (`flowText`): write each paragraph as one
   line in `helpText()`; key rows stay rows and wrap under their
   description.
-
-## Cloud sessions
-
-- There is no NFS share or test lab here. Run `go test ./...`,
-  `make vet`, `make` and `make test-race` (fine on x86-64), and say in
-  the summary what still needs a check on real NFS hosts (attribute
-  caching, several hosts, kill/stall/NAS-cut behaviour) so the owner can
-  run it.
-- Work and push on the session's branch; the owner merges and deploys.
-  Never merge into or push to `master`: the owner replays branch commits
-  onto `master` under their own name, so their hashes differ from yours.
 
 ## Build, test, version
 
@@ -247,6 +235,11 @@ package tests; docs/testplan.md lists them.
   errors); owner-read-only dirs are made writable for the moment, like
   rsync; zero blocks past EOF become holes; a failed install removes its
   staging. Jobs waiting for a `max_jobs` slot publish `queued`.
+- A restarted source removes its job's temp chunks in `tmp/` (same chunk
+  rewritten, job end), not after `StaleTmp`. A node refuses a socket in a
+  folder others may write to (`CheckSocketDir`; the CLI won't dial it).
+  The ssh keepalive holds its verdict once after a late tick (`watch`):
+  a stalled process is not a dead peer.
 - A copy/move of a named source path that does not exist fails
   (`api.ErrNotFound` at Submit, `missingPaths` in send.go).
 - A node whose shared dir is deleted/moved/replaced stops and says so
