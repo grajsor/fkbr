@@ -7,6 +7,7 @@ import (
 	"io"
 	"io/fs"
 	"testing"
+	"time"
 )
 
 func TestMemChunks(t *testing.T) {
@@ -80,5 +81,33 @@ func TestMemFreeBytes(t *testing.T) {
 	n, err := newMemChunks("a").FreeBytes()
 	if err != nil || n < 0 {
 		t.Errorf("free %d %v", n, err)
+	}
+}
+
+// A meta call waits for a chunk that may still come, and answers at once
+// for one past the job's last chunk: a target that has them all must not
+// wait metaWait at the end of every job.
+func TestMetaWaitEndsAtLastChunk(t *testing.T) {
+	ctx := context.Background()
+	m := newMemChunks("a")
+	const id = "18e12c793b6678e8eb4d4709"
+	ask := func(seq int) time.Duration {
+		t.Helper()
+		start := time.Now()
+		if _, err := waitMeta(ctx, m, &chunkRef{"a", id, seq}); !errors.Is(err, fs.ErrNotExist) {
+			t.Fatalf("chunk %d: %v", seq, err)
+		}
+		return time.Since(start)
+	}
+	if d := ask(2); d < metaWait {
+		t.Errorf("a chunk that may come: answered after %s, want %s", d, metaWait)
+	}
+	m.complete(id, 2)
+	if d := ask(2); d > metaWait/2 {
+		t.Errorf("past the last chunk: answered after %s", d)
+	}
+	m.RemoveJobData(ctx, id)
+	if m.past(id, 2) {
+		t.Error("job removed, its total kept")
 	}
 }

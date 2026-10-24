@@ -137,6 +137,7 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		asked := time.Now()
 		raw, err := e.st.ChunkMeta(ctx, src, id, next)
 		if err != nil && !errors.Is(err, fs.ErrNotExist) && ride.retry(ctx, err) {
 			continue
@@ -176,8 +177,13 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 			if srcGone.gone(ctx) {
 				return fmt.Errorf("source %s is no longer registered (forgotten)", src)
 			}
-			if err := e.sleep(ctx); err != nil {
-				return err
+			// Over ssh the source waited for the chunk before it said no
+			// (sshlink metaWait): ask again at once, or a chunk published
+			// meanwhile waits for the sleep.
+			if !e.chunksInMemory() || time.Since(asked) < metaWaited {
+				if err := e.sleep(ctx); err != nil {
+					return err
+				}
 			}
 			continue
 		}
@@ -228,6 +234,10 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 		status.put(ctx, false)
 	}
 }
+
+// metaWaited: a chunk-meta call that took this long waited on the source
+// (sshlink metaWait, 1 s) before it said the chunk is not there yet.
+const metaWaited = 500 * time.Millisecond
 
 // errChecksum marks a chunk whose stored bytes do not match its meta.
 var errChecksum = errors.New("checksum mismatch")

@@ -28,13 +28,13 @@ import (
 
 // waitStep is how often a call that waits looks again on local disk.
 // fetch waits up to fetchWait for a request, so a remote node hears of one
-// at once without asking all the time. A chunk's meta is waited for only
-// briefly: the receiver paces its own tries and checks the job between
-// them (it may have ended, so no chunk is coming).
+// at once without asking all the time. A chunk's meta is waited for as
+// long: the receiver asks again at once and checks the job in between (it
+// may have ended, so no chunk is coming).
 var (
 	waitStep  = 10 * time.Millisecond
 	fetchWait = time.Second
-	metaWait  = 200 * time.Millisecond
+	metaWait  = time.Second
 )
 
 // Home is the home node's end of every link.
@@ -196,6 +196,12 @@ type HomeNode struct {
 
 func (n *HomeNode) CreateChunk(ctx context.Context, id string, seq int) (transport.ChunkWriter, error) {
 	return n.chunks.CreateChunk(ctx, id, seq)
+}
+
+// SetComplete also tells the chunks here that no chunk past n comes.
+func (n *HomeNode) SetComplete(ctx context.Context, id string, chunks int) error {
+	n.chunks.complete(id, chunks)
+	return n.Dir.SetComplete(ctx, id, chunks)
 }
 
 func (n *HomeNode) DeleteChunk(ctx context.Context, id string, seq int) error {
@@ -689,12 +695,13 @@ func (h *Home) handlers(p *peer) map[string]handler {
 }
 
 // waitMeta answers a chunk-meta call from the chunks staged here, waiting
-// up to metaWait for the chunk to be published.
+// up to metaWait for the chunk to be published, unless it is past the
+// job's last chunk.
 func waitMeta(ctx context.Context, st chunkSource, a *chunkRef) ([]byte, error) {
 	deadline := time.Now().Add(metaWait)
 	for {
 		meta, err := st.ChunkMeta(ctx, a.Src, a.ID, a.Seq)
-		if !errors.Is(err, fs.ErrNotExist) || time.Now().After(deadline) {
+		if !errors.Is(err, fs.ErrNotExist) || st.past(a.ID, a.Seq) || time.Now().After(deadline) {
 			return meta, err
 		}
 		select {

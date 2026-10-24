@@ -23,6 +23,9 @@ type memChunks struct {
 	self string
 	mu   sync.Mutex
 	jobs map[string]map[int]*memChunk
+	// total is a job's chunk count once all are staged (SetComplete):
+	// a chunk past it is never coming, so nobody waits for it.
+	total map[string]int
 	// staged is what published chunks hold, writing what chunks being
 	// written hold so far; peak the most both ever were (tests).
 	staged, writing, peak int64
@@ -39,6 +42,7 @@ type memChunk struct {
 // chunkSource serves the meta of chunks staged here (waitMeta).
 type chunkSource interface {
 	ChunkMeta(ctx context.Context, src, id string, seq int) ([]byte, error)
+	past(id string, seq int) bool
 }
 
 var _ chunkSource = (*memChunks)(nil)
@@ -49,7 +53,7 @@ func validChunk(src, id string, seq int) error {
 }
 
 func newMemChunks(self string) *memChunks {
-	return &memChunks{self: self, jobs: map[string]map[int]*memChunk{}}
+	return &memChunks{self: self, jobs: map[string]map[int]*memChunk{}, total: map[string]int{}}
 }
 
 // A chunk being written grows by blocks, from firstBlock doubling up to
@@ -112,6 +116,21 @@ func (m *memChunks) StagedBytes(_ context.Context, id string) (job, total int64,
 	return job, m.staged, nil
 }
 
+// complete records that job id has n chunks, all staged.
+func (m *memChunks) complete(id string, n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.total[id] = n
+}
+
+// past reports whether chunk seq of job id is past its last one.
+func (m *memChunks) past(id string, seq int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n, ok := m.total[id]
+	return ok && seq >= n
+}
+
 // RemoveJobData drops every chunk of job id.
 func (m *memChunks) RemoveJobData(_ context.Context, id string) error {
 	m.mu.Lock()
@@ -120,6 +139,7 @@ func (m *memChunks) RemoveJobData(_ context.Context, id string) error {
 		m.staged -= c.size
 	}
 	delete(m.jobs, id)
+	delete(m.total, id)
 	return nil
 }
 
@@ -127,7 +147,7 @@ func (m *memChunks) RemoveJobData(_ context.Context, id string) error {
 func (m *memChunks) RemoveAll() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs, m.staged = map[string]map[int]*memChunk{}, 0
+	m.jobs, m.total, m.staged = map[string]map[int]*memChunk{}, map[string]int{}, 0
 }
 
 // ChunksInMemory: a restart loses what is staged here (send.go).

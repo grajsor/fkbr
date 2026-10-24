@@ -311,6 +311,7 @@ func (r *Remote) RequestCancel(ctx context.Context, id string) error {
 }
 
 func (r *Remote) SetComplete(ctx context.Context, id string, chunks int) error {
+	r.chunks.complete(id, chunks)
 	return r.rec(ctx, "job.complete", &completeArgs{id, chunks}, nil)
 }
 
