@@ -83,6 +83,9 @@ type Receiver struct {
 	// and setidLost those whose setuid/setgid bits did not survive chown
 	// (in this process; a restart may undercount).
 	ownerFails, setidLost int64
+	// setidStripped counts entries whose setuid/setgid bits were left off
+	// because allow_setid is off.
+	setidStripped int64
 	// dirsNotChowned counts directories left owned by us on purpose.
 	dirsNotChowned int64
 	// mtimeLost counts files whose mtime the filesystem did not store
@@ -407,6 +410,7 @@ func (r *Receiver) apply(h *bundle.Header, data io.Reader) error {
 		if err := r.root.Symlink(h.Entry.LinkTarget, p); err != nil {
 			return entryError{err} // FAT has no symlinks
 		}
+		r.linkTime(p, h.Entry.MtimeNs) // before chown: after it only root may
 		r.chown(p, h.Entry, true)
 		return nil
 	}
@@ -513,6 +517,26 @@ func futimes(f *os.File, ns int64) error {
 	return nil
 }
 
+// linkTime sets a symlink's own mtime (utimensat with AT_SYMLINK_NOFOLLOW,
+// Linux 2.6.22+), as rsync -a does. Best effort: nothing reads it, and
+// sync does not compare it.
+func (r *Receiver) linkTime(p string, ns int64) {
+	d, err := r.root.Open(path.Dir(p))
+	if err != nil {
+		return
+	}
+	defer d.Close()
+	name, err := syscall.BytePtrFromString(path.Base(p))
+	if err != nil {
+		return
+	}
+	ts := [2]syscall.Timespec{syscall.NsecToTimespec(ns), syscall.NsecToTimespec(ns)}
+	syscall.Syscall6(syscall.SYS_UTIMENSAT, d.Fd(), uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&ts[0])),
+		atSymlinkNofollow, 0, 0)
+}
+
+const atSymlinkNofollow = 0x100 // AT_SYMLINK_NOFOLLOW, the same on amd64 and arm64
+
 // writeSparse copies data into f at offset (where f is positioned). An
 // all-zero block beyond the current end of f is skipped, leaving a hole
 // that reads as zeros, so sparse files stay sparse (as with cp
@@ -607,6 +631,9 @@ func (r *Receiver) chmod(do func() error) error {
 // setuid/setgid unless allowed.
 func (r *Receiver) mode(u uint32) fs.FileMode {
 	m := fs.FileMode(u & 0o777)
+	if u&0o6000 != 0 && !r.opts.AllowSetID && !r.opts.NoModes {
+		r.setidStripped++
+	}
 	if u&0o4000 != 0 && r.opts.AllowSetID {
 		m |= fs.ModeSetuid
 	}
@@ -664,6 +691,9 @@ func (r *Receiver) Commit() (*Result, error) {
 	}
 	if r.setidLost > 0 {
 		res.problem("setuid/setgid bits not restored on %d files (needs root or CAP_FOWNER)", r.setidLost)
+	}
+	if r.setidStripped > 0 {
+		res.problem("setuid/setgid bits left off on %d entries (allow_setid is off)", r.setidStripped)
 	}
 	if r.mtimeLost > 0 {
 		res.problem("mtime not stored on %d files: outside what this filesystem can hold (e.g. %s)", r.mtimeLost, r.mtimeExample)

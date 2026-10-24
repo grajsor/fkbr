@@ -7,10 +7,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"fkbr/internal/api"
 	"fkbr/internal/bundle"
@@ -81,8 +83,14 @@ func setup(t *testing.T) (srcDir, dstDir string, src *localfs.Local, dst *os.Roo
 	}
 	mk("tree/a.txt", "alpha", 0o640)
 	mk("tree/sub/big.bin", strings.Repeat("x", 300<<10), 0o600)
-	mk("tree/sub/run.sh", "#!/bin/sh\n", 0o4755)
+	mk("tree/sub/run.sh", "#!/bin/sh\n", 0o755)
+	// os.FileMode's setuid is its own bit, not 0o4000 (that made the
+	// stripping check below test nothing).
+	if err := os.Chmod(filepath.Join(srcDir, "tree/sub/run.sh"), 0o755|fs.ModeSetuid); err != nil {
+		t.Fatal(err)
+	}
 	os.Symlink("../a.txt", filepath.Join(srcDir, "tree/sub/link"))
+	lutimes(t, filepath.Join(srcDir, "tree/sub/link"), 1500000000_000000007)
 	os.Chmod(filepath.Join(srcDir, "tree/sub"), 0o750)
 	old := time.Unix(1600000000, 5)
 	os.Chtimes(filepath.Join(srcDir, "tree/a.txt"), old, old)
@@ -97,6 +105,18 @@ func setup(t *testing.T) (srcDir, dstDir string, src *localfs.Local, dst *os.Roo
 	}
 	t.Cleanup(func() { src.Close(); dst.Close() })
 	return
+}
+
+// lutimes sets a symlink's own mtime.
+func lutimes(t *testing.T, p string, ns int64) {
+	t.Helper()
+	name, _ := syscall.BytePtrFromString(p)
+	ts := [2]syscall.Timespec{syscall.NsecToTimespec(ns), syscall.NsecToTimespec(ns)}
+	cwd := -100 // AT_FDCWD
+	if _, _, errno := syscall.Syscall6(syscall.SYS_UTIMENSAT, uintptr(cwd), uintptr(unsafe.Pointer(name)),
+		uintptr(unsafe.Pointer(&ts[0])), atSymlinkNofollow, 0, 0); errno != 0 {
+		t.Fatal(errno)
+	}
 }
 
 func TestRoundTripMetadata(t *testing.T) {
@@ -134,6 +154,14 @@ func TestRoundTripMetadata(t *testing.T) {
 	}
 	if l, _ := os.Readlink(filepath.Join(got, "sub/link")); l != "../a.txt" {
 		t.Errorf("link -> %q", l)
+	}
+	// The link's own mtime, like rsync -a (cloud run 2026-10-24).
+	if fi, _ := os.Lstat(filepath.Join(got, "sub/link")); fi == nil || fi.ModTime().UnixNano() != 1500000000_000000007 {
+		t.Errorf("link mtime not kept: %v", fi)
+	}
+	// Setuid left off, and the job says so.
+	if !slices.ContainsFunc(res.Problems, func(p string) bool { return strings.Contains(p, "left off on 1 entries") }) {
+		t.Errorf("stripped setuid not reported: %q", res.Problems)
 	}
 	if _, err := os.Stat(filepath.Join(dstDir, StagingDir)); !os.IsNotExist(err) {
 		t.Errorf("staging not cleaned up: %v", err)
@@ -441,7 +469,8 @@ func TestUnplaceableNameRefused(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dstDir, "tree/sub/big.bin")); !os.IsNotExist(err) {
 		t.Errorf("big.bin: %v", err)
 	}
-	if res.Errors != 1 || len(res.Problems) != 1 || !strings.Contains(res.Problems[0], "big.bin") {
+	notes := slices.DeleteFunc(slices.Clone(res.Problems), func(p string) bool { return strings.Contains(p, "setuid") })
+	if res.Errors != 1 || len(notes) != 1 || !strings.Contains(notes[0], "big.bin") {
 		t.Errorf("want one error for big.bin: %+v", res)
 	}
 }
