@@ -125,18 +125,22 @@ func (m *memFile) Stat() (fs.FileInfo, error) {
 
 // readAhead reads r in a goroutine, up to readAheadBlocks blocks ahead of
 // the caller, so a target reads the next part of a chunk from the share
-// while it writes the files of the previous part to its disk.
+// while it writes the files of the previous part to its disk, and a
+// source reads the next part of a big file while it packs the last.
 func readAhead(r io.Reader) io.ReadCloser {
 	ra := &aheadReader{blocks: make(chan []byte, readAheadBlocks), stop: make(chan struct{})}
 	go func() {
 		defer close(ra.blocks)
 		for {
-			buf := make([]byte, readAheadBlock)
+			buf := getBlock()
 			n, err := io.ReadFull(r, buf)
-			if n > 0 {
+			if n == 0 {
+				putBlock(buf)
+			} else {
 				select {
 				case ra.blocks <- buf[:n]:
 				case <-ra.stop:
+					putBlock(buf)
 					return
 				}
 			}
@@ -156,8 +160,19 @@ const (
 	readAheadBlocks = 16
 )
 
+// Blocks are reused: a GiB read ahead is not a GiB of garbage.
+var blocks = sync.Pool{New: func() any { b := make([]byte, readAheadBlock); return &b }}
+
+func getBlock() []byte { return *blocks.Get().(*[]byte) }
+
+func putBlock(b []byte) {
+	b = b[:cap(b)]
+	blocks.Put(&b)
+}
+
 type aheadReader struct {
 	blocks chan []byte
+	block  []byte // the block cur is in, given back once read
 	cur    []byte
 	err    error // set before blocks is closed
 	stop   chan struct{}
@@ -166,6 +181,10 @@ type aheadReader struct {
 
 func (a *aheadReader) Read(p []byte) (int, error) {
 	for len(a.cur) == 0 {
+		if a.block != nil {
+			putBlock(a.block)
+			a.block = nil
+		}
 		b, ok := <-a.blocks
 		if !ok {
 			if a.err != nil {
@@ -173,17 +192,39 @@ func (a *aheadReader) Read(p []byte) (int, error) {
 			}
 			return 0, io.EOF
 		}
-		a.cur = b
+		a.block, a.cur = b, b
 	}
 	n := copy(p, a.cur)
 	a.cur = a.cur[n:]
 	return n, nil
 }
 
-// Close stops the reader goroutine; it does not close the source.
+// Close stops the reader goroutine; it does not close the source. Read
+// must not be called after it.
 func (a *aheadReader) Close() error {
 	a.once.Do(func() { close(a.stop) })
-	for range a.blocks { // let the goroutine finish
+	for b := range a.blocks { // let the goroutine finish
+		putBlock(b)
+	}
+	if a.block != nil {
+		putBlock(a.block)
+		a.block, a.cur = nil, nil
 	}
 	return nil
+}
+
+// aheadFile is a big source file read ahead (readAhead). Stat is the
+// file's, so a change while the bundle read it still shows.
+type aheadFile struct {
+	io.ReadCloser
+	f *os.File
+}
+
+func readFileAhead(f *os.File) *aheadFile { return &aheadFile{readAhead(f), f} }
+
+func (a *aheadFile) Stat() (fs.FileInfo, error) { return a.f.Stat() }
+
+func (a *aheadFile) Close() error {
+	a.ReadCloser.Close()
+	return a.f.Close()
 }

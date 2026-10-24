@@ -333,7 +333,16 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 		if err := s.check(ctx, false); err != nil {
 			return err
 		}
-		open := func() (bundle.File, error) { return e.fs.Open(req.SrcRoot, r.rel) }
+		open := func() (bundle.File, error) {
+			f, err := e.fs.Open(req.SrcRoot, r.rel)
+			if err != nil {
+				return nil, err
+			}
+			if r.ent.Size <= prefetchMaxFile {
+				return f, nil
+			}
+			return readFileAhead(f), nil // read while it is packed
+		}
 		if r.pre != nil {
 			open = func() (bundle.File, error) {
 				f, err := r.pre.file()

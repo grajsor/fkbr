@@ -303,3 +303,67 @@ func TestReadAhead(t *testing.T) {
 		t.Fatalf("got %d bytes, err %v", len(got), err)
 	}
 }
+
+// Blocks go back to a pool once read: a reader closed half-way, or one
+// that finished, must never hand a block it gave back to another.
+func TestReadAheadReusesBlocks(t *testing.T) {
+	var wg sync.WaitGroup
+	for g := range 4 {
+		wg.Go(func() {
+			for i := range 20 {
+				data := make([]byte, 3*readAheadBlock+i*1000)
+				for j := range data {
+					data[j] = byte(j*31 + i + g)
+				}
+				ra := readAhead(bytes.NewReader(data))
+				if i%3 == 0 { // closed early, its blocks in flight
+					ra.Read(make([]byte, 1000))
+					ra.Close()
+					continue
+				}
+				got, err := io.ReadAll(iotest.OneByteReader(io.LimitReader(ra, 2000)))
+				rest, err2 := io.ReadAll(ra)
+				ra.Close()
+				if err != nil || err2 != nil || !bytes.Equal(append(got, rest...), data) {
+					t.Errorf("goroutine %d run %d: data differs (%v %v)", g, i, err, err2)
+					return
+				}
+			}
+		})
+	}
+	wg.Wait()
+}
+
+// A big source file is read ahead; its Stat is the file's own after the
+// bundle read it, so a file that changed while it was read still shows.
+func TestFileAhead(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "big")
+	data := bytes.Repeat([]byte("0123456789"), readAheadBlock/2)
+	if err := os.WriteFile(p, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := readFileAhead(f)
+	half := make([]byte, len(data)/2)
+	if _, err := io.ReadFull(a, half); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Hour)
+	os.Chtimes(p, later, later)
+	rest, err := io.ReadAll(a)
+	if err != nil || !bytes.Equal(append(half, rest...), data) {
+		t.Fatalf("read back differs: %v", err)
+	}
+	if fi, err := a.Stat(); err != nil || !fi.ModTime().Equal(later) {
+		t.Errorf("Stat after the read: %v %v, want mtime %v", fi.ModTime(), err, later)
+	}
+	if err := a.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.Stat(); err == nil {
+		t.Error("Close left the file open")
+	}
+}

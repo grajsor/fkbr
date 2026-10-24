@@ -235,8 +235,17 @@ func (s *Session) Accept(ctx context.Context) (*Stream, error) {
 	}
 }
 
+// frames holds buffers for frames being written: a GiB sent is not a GiB
+// of garbage.
+var frames = sync.Pool{New: func() any { b := make([]byte, headerLen+MaxPayload); return &b }}
+
 func (s *Session) write(typ byte, id uint32, payload []byte) error {
-	buf := make([]byte, headerLen+len(payload))
+	if len(payload) > MaxPayload {
+		return fmt.Errorf("frame of %d bytes", len(payload))
+	}
+	bp := frames.Get().(*[]byte)
+	defer frames.Put(bp)
+	buf := (*bp)[:headerLen+len(payload)]
 	buf[0] = typ
 	binary.BigEndian.PutUint32(buf[1:], id)
 	binary.BigEndian.PutUint32(buf[5:], uint32(len(payload)))
@@ -284,6 +293,9 @@ func (s *Session) control(busy *atomic.Bool, typ byte) {
 
 func (s *Session) readLoop() {
 	var hdr [headerLen]byte
+	// One buffer for every payload: dispatch keeps none of it (a stream
+	// copies its data, a reset its reason).
+	buf := make([]byte, MaxPayload)
 	for {
 		if _, err := io.ReadFull(s.r, hdr[:]); err != nil {
 			if errors.Is(err, io.EOF) {
@@ -299,7 +311,7 @@ func (s *Session) readLoop() {
 			s.fail(fmt.Errorf("%w: %w", ErrClosed, err))
 			return
 		}
-		payload := make([]byte, n)
+		payload := buf[:n]
 		if _, err := io.ReadFull(s.r, payload); err != nil {
 			s.fail(fmt.Errorf("%w: %w", ErrClosed, err))
 			return
