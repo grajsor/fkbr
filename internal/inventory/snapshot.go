@@ -76,7 +76,7 @@ type Entry struct {
 	U  uint32 `json:"u,omitempty"`
 	G  uint32 `json:"g,omitempty"`
 	L  string `json:"l,omitempty"`
-	H  string `json:"h,omitempty"` // sha256, with checksum scans
+	H  string `json:"h,omitempty"` // xxh3-128, with checksum scans
 	E  string `json:"e,omitempty"` // error text for TypeError
 
 	// Unreadable is set by the Reader on a directory whose listing failed

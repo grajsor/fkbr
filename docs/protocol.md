@@ -10,7 +10,7 @@ the refresh trick below.
 
 ```
 <nfs_root>/
-├── protocol-version                 "2\n"; a node refuses to start on a mismatch
+├── protocol-version                 "3\n"; a node refuses to start on a mismatch
 ├── tmp/                             every file is written here first
 ├── nodes/<id>/info.json             registry entry (api.NodeInfo)
 ├── nodes/<id>/heartbeat             rewritten every heartbeat_interval; holds the worker's instance token
@@ -148,7 +148,7 @@ write policy.
    (at most 64 MiB ahead); the bundle keeps the walk order. A file bigger
    than the space left in a chunk is split into segments carried in
    consecutive chunks. Each
-   chunk's meta (`size`, `sha256`, `first` entry, `bad` files) is published
+   chunk's meta (`size`, `xxh3`, `first` entry, `bad` files) is published
    after the chunk itself. The source writes `COMPLETE` after the last
    chunk.
 3. **Backpressure.** Before staging a chunk, the source waits until its
@@ -156,7 +156,7 @@ write policy.
    jobs (`data/<self>/`) under `staging_quota`. It deletes chunk N once
    every target's ack count is above N.
 4. **Consume.** A target reads chunks in order. It verifies size and
-   sha256, extracts into `<root>/.fkbr-tmp/<job>/tree` through `os.Root`,
+   checksum, extracts into `<root>/.fkbr-tmp/<job>/tree` through `os.Root`,
    then raises its ack count. It reads each chunk ahead (up to 16 MiB) while
    it writes files, and sets a file's metadata through the open file. Files listed in `bad` (changed or unreadable
    while the source read them) are dropped and reported.
@@ -221,8 +221,11 @@ paths may be longer than PATH_MAX; the sender skips and reports longer
 ones), the shared prefix cannot be longer than the previous name, mode,
 IDs, sizes and offsets are range-checked, a segment must lie inside its
 file, link targets are at most 4096 bytes, and an unknown kind, missing
-data, a missing end byte or data after it is an error. The sha256 in the
-meta covers the whole stored chunk. Extraction then goes through
+data, a missing end byte or data after it is an error. The checksum in
+the meta (`xxh3`: xxh3-128, hex) covers the whole stored chunk. It
+guards against damage, not against forgery: the share is open by design.
+Before protocol 3 it was SHA-256, which costs about 2.8 s per GiB on each
+end of a CPU without SHA instructions; xxh3 takes a few hundredths. Extraction then goes through
 `os.Root`, so nothing can land outside the destination root either way.
 
 ## Fan-out, groups and write policy
@@ -320,7 +323,7 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    - *new* → copy;
    - *changed* (size, mtime in whole seconds, mode without setuid/setgid,
      symlink target, ownership only where that target can apply it,
-     sha256 with `checksum`) → copy;
+     xxh3-128 with `checksum`) → copy;
    - *type changed* → delete, then copy;
    - *extra* (mirror only) → delete, collapsed to the top-most directory.
    A directory whose contents change on a target gets its own entry

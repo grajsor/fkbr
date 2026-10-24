@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -12,6 +11,8 @@ import (
 	"path"
 	"slices"
 	"time"
+
+	"github.com/zeebo/xxh3"
 
 	"fkbr/internal/api"
 	"fkbr/internal/bundle"
@@ -218,7 +219,7 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 			// What this target applied, before its ack: a source that
 			// restarts rebuilds from the lowest ack and checks the chunk
 			// before it against this (send.go, rebuilt).
-			status.st.Chunks, status.st.ChunkSHA = next, meta.SHA256
+			status.st.Chunks, status.st.ChunkSum = next, meta.Sum
 			status.put(ctx, true)
 		}
 		for {
@@ -271,7 +272,7 @@ func (e *Engine) readChunk(ctx context.Context, src, id string, meta *bundle.Chu
 	defer rc.Close()
 	ra := readAhead(rc)
 	defer ra.Close()
-	h := sha256.New()
+	h := xxh3.New128()
 	cr := &countingReader{r: io.TeeReader(ra, h)}
 	applyErr := bundle.Read(cr, meta.Compressed, func(hd *bundle.Header, data io.Reader) error {
 		if err := ctx.Err(); err != nil {
@@ -291,8 +292,8 @@ func (e *Engine) readChunk(ctx context.Context, src, id string, meta *bundle.Chu
 	if _, err := io.Copy(io.Discard, cr); err != nil {
 		return err
 	}
-	if sum := hex.EncodeToString(h.Sum(nil)); sum != meta.SHA256 || cr.n != meta.Size {
-		return fmt.Errorf("%w (got %d bytes sha256 %.12s…, want %d bytes %.12s…)", errChecksum, cr.n, sum, meta.Size, meta.SHA256)
+	if sum := hex.EncodeToString(h.Sum(nil)); sum != meta.Sum || cr.n != meta.Size {
+		return fmt.Errorf("%w (got %d bytes xxh3 %.12s…, want %d bytes %.12s…)", errChecksum, cr.n, sum, meta.Size, meta.Sum)
 	}
 	return applyErr
 }

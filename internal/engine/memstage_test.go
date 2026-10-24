@@ -213,7 +213,7 @@ func TestSSHSourceChangedOnRestart(t *testing.T) {
 	waitUntil(t, func() bool {
 		j, _ := home.Job(ctx, id)
 		s := ownStatus(j, "a", api.RoleTarget)
-		return s != nil && s.Chunks >= 3 && s.ChunkSHA != ""
+		return s != nil && s.Chunks >= 3 && s.ChunkSum != ""
 	}, "target applied 3 chunks")
 	stop()
 	// Same size and mtime, other bytes: only the chunks tell.

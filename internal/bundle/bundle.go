@@ -10,7 +10,6 @@
 package bundle
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -20,6 +19,7 @@ import (
 	"strconv"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/zeebo/xxh3"
 
 	"fkbr/internal/api"
 )
@@ -27,8 +27,8 @@ import (
 // ChunkMeta is published alongside each chunk once it is complete.
 type ChunkMeta struct {
 	Seq        int    `json:"seq"`
-	Size       int64  `json:"size"` // bytes as stored
-	SHA256     string `json:"sha256"`
+	Size       int64  `json:"size"`       // bytes as stored
+	Sum        string `json:"xxh3"`       // xxh3-128 of the stored bytes, hex
 	Compressed bool   `json:"compressed"` // zstd
 	Entries    int    `json:"entries"`
 	// First identifies the first entry ("name@offset"); a resumed sender
@@ -127,7 +127,7 @@ func (w *Writer) open() error {
 	if err != nil {
 		return err
 	}
-	c := &chunk{out: out, hash: sha256.New(), meta: ChunkMeta{Seq: w.seq, Compressed: w.compress}}
+	c := &chunk{out: out, hash: xxh3.New128(), meta: ChunkMeta{Seq: w.seq, Compressed: w.compress}}
 	c.size.w = io.MultiWriter(out, c.hash)
 	var dst io.Writer = &c.size
 	if w.compress {
@@ -169,7 +169,7 @@ func (w *Writer) closeChunk() error {
 	}
 	c.meta.Size = c.size.n
 	c.meta.Raw = c.raw.n
-	c.meta.SHA256 = hex.EncodeToString(c.hash.Sum(nil))
+	c.meta.Sum = hex.EncodeToString(c.hash.Sum(nil))
 	w.seq++
 	return w.sink.Commit(c.meta)
 }

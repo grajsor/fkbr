@@ -422,5 +422,9 @@ Measured performance is in `benchmarks.md`.
 - `catchup ID` re-sends a job to its targets that were detached or
   failed.
 - Restarting a node is safe: its jobs resume from the state on the share.
+- A new build with a new protocol version (it says so at start) needs
+  every node at once: let running jobs finish, stop all nodes, empty the
+  share directory, and start them all on the new build. Over ssh, update
+  the binary on every linked host too.
 - To remove fkbr, stop it and delete the binary and its directory on the
   share.

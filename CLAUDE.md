@@ -160,12 +160,14 @@ Every runtime use of the name comes from `internal/product`.
 - Sync is one-way (incremental or mirror). Plans are dry runs stored as
   blobs; applying runs deletes first, then one transfer per target group.
   `max_deletes` (default 1000) needs force.
-- **Chunk format (protocol 2):** fkbr's own, not tar (`bundle/native.go`,
+- **Chunk format (protocol 3):** fkbr's own, not tar (`bundle/native.go`,
   protocol.md "Chunk format"): magic FKB2, per entry kind +
   prefix-shared name + varints, data unpadded, 0 byte at the end. The
   reader is strict (bounds on every field, CleanRel names, end byte
-  required) and fuzzed. Mixed protocol versions refuse each other with a
-  clear message.
+  required) and fuzzed. Each chunk's meta carries its xxh3-128
+  (`ChunkMeta.Sum`, also checksum scans; SHA-256 until protocol 2 cost
+  2.8 s/GiB per end on CPUs without SHA instructions). Mixed protocol
+  versions refuse each other with a clear message.
 - Sender: chunk sizes ramp 4, 8, 16 … MiB up to `chunk_size`
   (`bundle.Writer.limit`, depends only on seq: resume-safe); the walk runs
   ahead of the bundle writer and small files (≤ 1 MiB) are read by 8
@@ -230,7 +232,7 @@ package tests; docs/testplan.md lists them.
   up to 512 MiB (`SSHChunkSize`, `sshStagingQuota`), FreeBytes is
   MemAvailable − 64 MiB. Acks stay records on the home node. Stores say
   so with `ChunksInMemory()`: a restarted source rebuilds from the
-  lowest active ack (`rebuildFrom`) and checks each target's `ChunkSHA`
+  lowest active ack (`rebuildFrom`) and checks each target's `ChunkSum`
   (its last applied chunk, put before the ack); a target that finds a
   chunk gone after its meta waits for it again. The NFS path is
   unchanged.

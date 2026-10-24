@@ -12,7 +12,8 @@ import (
 
 // ProtocolVersion is the version of the on-NFS protocol and the wire DTOs.
 // 2: chunks in fkbr's own format instead of tar (2026-10-20).
-const ProtocolVersion = 2
+// 3: chunks and checksum scans hashed with xxh3-128, not SHA-256 (2026-10-24).
+const ProtocolVersion = 3
 
 var (
 	ErrUnknownNode = errors.New("unknown node")
@@ -336,10 +337,10 @@ type JobStatus struct {
 	Files  int64    `json:"files"`
 	Bytes  int64    `json:"bytes"`
 	Chunks int      `json:"chunks"`
-	// ChunkSHA is a target's SHA-256 of chunk Chunks-1, the last it
-	// applied, where sources keep chunks in memory (ssh): a restarted
-	// source rebuilds them and checks that one against it.
-	ChunkSHA string `json:"chunk_sha,omitempty"`
+	// ChunkSum is a target's checksum (xxh3-128) of chunk Chunks-1, the
+	// last it applied, where sources keep chunks in memory (ssh): a
+	// restarted source rebuilds them and checks that one against it.
+	ChunkSum string `json:"chunk_sum,omitempty"`
 	Skipped  int64  `json:"skipped"`
 	Errors   int64  `json:"errors"`
 	Error    string `json:"error,omitempty"`

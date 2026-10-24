@@ -1,7 +1,6 @@
 package inventory
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/zeebo/xxh3"
 
 	"fkbr/internal/api"
 	"fkbr/internal/localfs"
@@ -150,7 +151,7 @@ func hashFile(fsys localfs.FS, root, rel string) (string, error) {
 		return "", err
 	}
 	defer f.Close()
-	h := sha256.New()
+	h := xxh3.New128()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}

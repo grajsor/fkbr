@@ -89,7 +89,7 @@ and acks).
 
 ### Data: straight from source to target
 
-- A source keeps the chunks it makes (FKB2, zstd, SHA-256, as everywhere)
+- A source keeps the chunks it makes (FKB2, zstd, xxh3, as everywhere)
   in its memory until every active target has read them. **No chunk is
   written to any disk**, on the source, the target or the home node.
   `job_quota` bounds them per job and `staging_quota` in all; a chunk is
@@ -123,7 +123,7 @@ and acks).
 - A restarted source has lost the chunks it held. It builds them again
   from the lowest chunk an active target has not acked (chunks come out
   the same every time; those before it are made and dropped). Each
-  target records the SHA-256 of the last chunk it applied; if the
+  target records the checksum of the last chunk it applied; if the
   rebuilt one differs, the source's files changed and the job fails
   ("start the copy again"). A target that read a chunk's meta just
   before the restart waits for the chunk again.

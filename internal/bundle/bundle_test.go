@@ -2,7 +2,6 @@ package bundle
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/zeebo/xxh3"
 
 	"fkbr/internal/api"
 )
@@ -73,8 +74,8 @@ func readAll(t *testing.T, s *memSink) map[string][]byte {
 	t.Helper()
 	files := map[string][]byte{}
 	for i, c := range s.chunks {
-		sum := sha256.Sum256(c)
-		if hex.EncodeToString(sum[:]) != s.metas[i].SHA256 || int64(len(c)) != s.metas[i].Size {
+		sum := xxh3.Hash128(c).Bytes()
+		if hex.EncodeToString(sum[:]) != s.metas[i].Sum || int64(len(c)) != s.metas[i].Size {
 			t.Fatalf("chunk %d: meta mismatch", i)
 		}
 		err := Read(bytes.NewReader(c), s.metas[i].Compressed, func(h *Header, r io.Reader) error {

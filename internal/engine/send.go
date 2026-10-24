@@ -33,7 +33,7 @@ type sender struct {
 	resumeFrom int
 	// purged is the number of leading chunks already deleted from the share.
 	purged int
-	// applied is, by chunk, the SHA-256 a target applied (ChunkSHA), for
+	// applied is, by chunk, the checksum a target applied (ChunkSum), for
 	// chunks rebuilt after a restart lost them from memory.
 	applied   map[int]string
 	lastCheck time.Time
@@ -253,7 +253,7 @@ func (s *sender) run(ctx context.Context) error {
 
 // rebuildFrom sets where a source whose store keeps chunks in memory
 // starts: at the lowest ack of an active target, the chunks below it
-// built but not staged again. A target's last applied chunk (ChunkSHA)
+// built but not staged again. A target's last applied chunk (ChunkSum)
 // must come out the same, or the source changed since.
 func (s *sender) rebuildFrom(ctx context.Context, ride *rideOut) error {
 	done := map[string]bool{}
@@ -265,8 +265,8 @@ func (s *sender) rebuildFrom(ctx context.Context, ride *rideOut) error {
 		if p.State == api.JobDone {
 			done[p.Node] = true // its acks may be gone with the old run
 		}
-		if p.Chunks > 0 && p.ChunkSHA != "" {
-			s.applied[p.Chunks-1] = p.ChunkSHA
+		if p.Chunks > 0 && p.ChunkSum != "" {
+			s.applied[p.Chunks-1] = p.ChunkSum
 		}
 	}
 	from := -1
@@ -851,7 +851,7 @@ func (k *shareSink) Create(seq int) (io.WriteCloser, error) {
 
 func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
 	s := k.s
-	if sha, ok := s.applied[meta.Seq]; ok && sha != meta.SHA256 {
+	if sum, ok := s.applied[meta.Seq]; ok && sum != meta.Sum {
 		return fmt.Errorf("source changed since the interrupted run (chunk %d differs from what a target has); start the copy again", meta.Seq)
 	}
 	if k.cw == nil {
@@ -859,7 +859,7 @@ func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
 		// staged it must be identical, or the source changed meanwhile.
 		if old, err := s.e.st.ChunkMeta(k.ctx, s.e.Self(), s.job.ID, meta.Seq); err == nil {
 			var m bundle.ChunkMeta
-			if json.Unmarshal(old, &m) == nil && m.SHA256 != meta.SHA256 {
+			if json.Unmarshal(old, &m) == nil && m.Sum != meta.Sum {
 				return fmt.Errorf("source changed since the interrupted run (chunk %d differs); start the copy again", meta.Seq)
 			}
 		}
