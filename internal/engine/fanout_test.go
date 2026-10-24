@@ -158,13 +158,17 @@ func TestStalledTargetDetached(t *testing.T) {
 	}
 	mb.Register(context.Background(), api.NodeInfo{ID: "s2", Roots: []api.Root{{ID: "data", Writable: true}}})
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	beating := make(chan struct{})
 	go func() {
+		defer close(beating)
 		for ctx.Err() == nil {
 			mb.Heartbeat(ctx, "")
 			time.Sleep(20 * time.Millisecond)
 		}
 	}()
+	// A heartbeat still being written made the share's removal fail with
+	// "directory not empty".
+	defer func() { cancel(); <-beating }()
 	time.Sleep(50 * time.Millisecond)
 
 	id, err := master.Submit(context.Background(), api.TransferRequest{
