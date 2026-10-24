@@ -121,6 +121,8 @@ the commit it was built from.
 - `docs/FAQ.md`: short answers to common questions; start here
 - `docs/operations.md`: running nodes, commands, TUI keys, sync,
   privileges, and what fkbr leaves on a host
+- `docs/architecture.md`: how fkbr is built: layers, NFS and ssh, the
+  packages
 - `docs/protocol.md`: the on-share protocol (mailboxes, chunks, fan-out,
   sync)
 - `docs/benchmarks.md`: measured performance

@@ -1,4 +1,4 @@
-# fkbr NFS mailbox protocol (version 2)
+# fkbr NFS mailbox protocol (version 3)
 
 Nodes share nothing but one directory, normally an NFS mount. They never
 open network connections to each other. This document describes what lives
