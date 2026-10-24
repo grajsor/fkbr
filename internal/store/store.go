@@ -229,6 +229,9 @@ func (m *Dir) CreateChunk(_ context.Context, id string, seq int) (transport.Chun
 	if err := m.mkdir(filepath.Join(dir, "acks")); err != nil {
 		return nil, err
 	}
+	// A source killed while writing this chunk left its temp file; the
+	// restarted one writes the same chunk again (cloud run 2026-10-24).
+	m.removeTemps(id, chunkName(seq, ".chunk"))
 	f, err := os.CreateTemp(m.path("tmp"), "."+id+"-"+chunkName(seq, ".chunk")+".*")
 	if err != nil {
 		return nil, err
@@ -370,7 +373,23 @@ func (m *Dir) RemoveJobData(_ context.Context, id string) error {
 	if err := validJobID(id); err != nil {
 		return err
 	}
+	m.removeTemps(id, "") // a chunk a killed source was writing
 	return os.RemoveAll(m.path("data", m.self, id))
+}
+
+// removeTemps removes the temp files of job id's chunks (of chunk name, or
+// all), which only this node writes. Others are pruned after StaleTmp.
+func (m *Dir) removeTemps(id, name string) {
+	pre := "." + id + "-" + name
+	des, err := os.ReadDir(m.path("tmp"))
+	if err != nil {
+		return
+	}
+	for _, de := range des {
+		if strings.HasPrefix(de.Name(), pre) {
+			os.Remove(m.path("tmp", de.Name()))
+		}
+	}
 }
 
 // unstartedJobAge is when a job record that no node ever started is pruned.

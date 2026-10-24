@@ -507,3 +507,42 @@ func TestPruneKeepsScansWithTheirPlan(t *testing.T) {
 		}
 	}
 }
+
+// A source killed while writing a chunk leaves its temp file in tmp/; the
+// restarted source removes it when it writes that chunk again or when the
+// job ends, not an hour later (cloud run 2026-10-24: 312 MiB left).
+func TestKilledSourceTempChunksRemoved(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	const id, other = "0123456789abcdef01234567", "0123456789abcdef01234568"
+	left := func(seq int, job string) string {
+		p := filepath.Join(share, "tmp", "."+job+"-"+chunkName(seq, ".chunk")+".1234")
+		if err := os.WriteFile(p, []byte("half"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	same, later, theirs := left(6, id), left(7, id), left(6, other)
+	w, err := a.CreateChunk(ctx, id, 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Commit([]byte("{}")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(same); err == nil {
+		t.Error("the chunk written again left its old temp file")
+	}
+	if _, err := os.Stat(later); err != nil {
+		t.Error("a temp file of another chunk was removed while the job runs")
+	}
+	if err := a.RemoveJobData(ctx, id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(later); err == nil {
+		t.Error("the job ended and left a temp chunk")
+	}
+	if _, err := os.Stat(theirs); err != nil {
+		t.Error("another job's temp chunk was removed")
+	}
+}
