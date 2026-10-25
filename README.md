@@ -6,20 +6,27 @@ connect to each other: requests and data pass through a directory on it.
 It ships as a single static binary with a dual-pane TUI and a scriptable
 CLI.
 
-**Faster than tar and rsync.** Measured in the lab, through the same NFS
-share, every copy checked:
+**Faster than tar and rsync.** Measured in the lab, every copy checked.
 
-| | fkbr | tar | rsync | rsync is |
-|---|---|---|---|---|
-| 20,000 small files → 1 host | **5.6 s** | 6.5 s | 2 min 16 s | **24× slower** |
-| 200,000 small files → 1 host | **27 s** | 31 s | 22 min 44 s | **50× slower** |
-| 1 GiB file → 3 hosts | **32 s** | 38 s | 38 s | 1.2× slower |
+**Through an NFS share:**
+
+| | fkbr | tar | rsync |
+|---|---|---|---|
+| 20,000 small files → 1 host | **5.6 s** | 6.5 s | 2 min 16 s (**24× slower**) |
+| 200,000 small files → 1 host | **27 s** | 31 s | 22 min 44 s (**50× slower**) |
+| 1 GiB file → 3 hosts | **32 s** | 38 s | 38 s |
 
 rsync through NFS waits on the server for every file; fkbr packs small
 files into big chunks.
 
-Over ssh it beats rsync too: 200,000 files to three hosts in 46 s, rsync
-1 min 8 s. All the numbers: `docs/benchmarks.md`.
+**Over ssh, without a share:**
+
+| | fkbr | rsync |
+|---|---|---|
+| 20,000 small files → 3 hosts | **6.1 s** | 9.5 s |
+| 200,000 small files → 3 hosts | **46 s** | 1 min 8 s |
+
+All the numbers: `docs/benchmarks.md`.
 
 ## Features
 
