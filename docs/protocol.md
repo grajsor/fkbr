@@ -147,7 +147,11 @@ write policy.
    small files (up to 1 MiB) are read by a few workers in the meantime
    (at most 64 MiB ahead); the bundle keeps the walk order. A file bigger
    than the space left in a chunk is split into segments carried in
-   consecutive chunks. Each
+   consecutive chunks. A sparse file (fewer blocks than its size) is sent
+   as its data only: segments at their offsets, holes of 64 KiB or more
+   left out (`SEEK_DATA`/`SEEK_HOLE`), and an empty segment at 0 or at
+   its size where it starts or ends in a hole, so receivers need nothing
+   new. Each
    chunk's meta (`size`, `xxh3`, `first` entry, `bad` files) is published
    after the chunk itself. The source writes `COMPLETE` after the last
    chunk.

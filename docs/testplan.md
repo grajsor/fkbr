@@ -73,6 +73,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 |---|---|---|
 | Names with newlines, invalid UTF-8, 255 bytes; a 2849-byte path | Arrive intact | lab (weird `names`) |
 | Sparse, hard-linked, fifo, socket, unreadable file and dir, symlink loops | Sparse stays sparse; links as separate files; specials and unreadables reported | auto, lab |
+| A sparse file: 1 GiB with 8 MiB of data, starting and ending in holes | Only the data crosses the share (holes were sent as zeros); the copy is equal and sparse; an older receiver installs it the same | auto (`TestSparseFileHolesNotSent`, `TestSparseExtents`); lab 2026-10-25, rhel9 → CentOS 7 over the NAS: 16.3 s and 13 chunks before, 1.0 s and 2 chunks (8 MiB) after; to an old-build node the same |
 | Destination through a symlink pointing outside the root; `../` paths | Refused, nothing written outside | lab |
 | mtimes in 2100 and before 1970, nanoseconds | Kept exactly | lab |
 | Read-only directories on later copies, syncs and deletes | Made writable for the moment, mode restored (like rsync) | auto, lab |

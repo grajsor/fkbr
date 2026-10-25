@@ -2,10 +2,14 @@ package engine
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"sync"
+	"syscall"
+
+	"fkbr/internal/bundle"
 )
 
 // Reading many small files one after another waits on the disk for each
@@ -220,7 +224,82 @@ type aheadFile struct {
 	f *os.File
 }
 
-func readFileAhead(f *os.File) *aheadFile { return &aheadFile{readAhead(f), f} }
+// readFileAhead reads a big file ahead. A sparse one (fewer blocks than
+// its size) is read only where it has data: its holes are not sent.
+func readFileAhead(f *os.File) bundle.File {
+	if exts := dataExtents(f); exts != nil {
+		rs := make([]io.Reader, len(exts))
+		for i, e := range exts {
+			rs[i] = io.NewSectionReader(f, e.Off, e.Len)
+		}
+		return &sparseFile{aheadFile{readAhead(io.MultiReader(rs...)), f}, exts}
+	}
+	return &aheadFile{readAhead(f), f}
+}
+
+// sparseFile is a sparse file read ahead extent by extent (bundle.Sparse).
+type sparseFile struct {
+	aheadFile
+	exts []bundle.Extent
+}
+
+func (s *sparseFile) Extents() []bundle.Extent { return s.exts }
+
+const (
+	seekData = 3 // SEEK_DATA, SEEK_HOLE: Linux 3.1 and later
+	seekHole = 4
+	// Holes shorter than minHole are sent as zeros (a segment header
+	// each is not worth it), and a file in more than maxExtents pieces is
+	// sent whole.
+	minHole    = 64 << 10
+	maxExtents = 1 << 16
+)
+
+// dataExtents returns where a sparse file has data, or nil: not sparse,
+// or the filesystem cannot tell (then SEEK_DATA fails, or reports the
+// whole file as data).
+func dataExtents(f *os.File) []bundle.Extent {
+	fi, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Blocks*512 >= fi.Size() {
+		return nil
+	}
+	size := fi.Size()
+	exts := []bundle.Extent{}
+	for off := int64(0); off < size; {
+		data, err := f.Seek(off, seekData)
+		if errors.Is(err, syscall.ENXIO) {
+			break // a hole to the end
+		}
+		if err != nil {
+			return nil
+		}
+		hole, err := f.Seek(data, seekHole)
+		if err != nil {
+			return nil
+		}
+		hole = min(hole, size)
+		if n := len(exts); n > 0 && data-(exts[n-1].Off+exts[n-1].Len) < minHole {
+			exts[n-1].Len = hole - exts[n-1].Off
+		} else {
+			exts = append(exts, bundle.Extent{Off: data, Len: hole - data})
+		}
+		if len(exts) > maxExtents {
+			return nil
+		}
+		off = hole
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		return nil
+	}
+	if len(exts) == 1 && exts[0].Off == 0 && exts[0].Len == size {
+		return nil // no hole worth skipping
+	}
+	return exts
+}
 
 func (a *aheadFile) Stat() (fs.FileInfo, error) { return a.f.Stat() }
 

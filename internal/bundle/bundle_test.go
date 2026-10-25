@@ -220,3 +220,83 @@ func TestChunkSizesRamp(t *testing.T) {
 		}
 	}
 }
+
+// sparseItem is a file of size bytes whose data is only in exts (zeros
+// elsewhere); its reader yields just those bytes, as the sender's does.
+func sparseItem(name string, size int64, exts []Extent) (Item, []byte) {
+	full := make([]byte, size)
+	var data []byte
+	for i, e := range exts {
+		for j := e.Off; j < e.Off+e.Len; j++ {
+			full[j] = byte('a' + i)
+		}
+		data = append(data, full[e.Off:e.Off+e.Len]...)
+	}
+	return Item{
+		Name:  name,
+		Entry: api.Entry{Type: api.TypeFile, Size: size, Mode: 0o644, MtimeNs: mtime.UnixNano()},
+		Open: func() (File, error) {
+			return sparseFile{memFile{bytes.NewReader(data), size, mtime}, exts}, nil
+		},
+	}, full
+}
+
+type sparseFile struct {
+	memFile
+	exts []Extent
+}
+
+func (f sparseFile) Extents() []Extent { return f.exts }
+
+// Holes are not sent: a sparse file's chunks carry only its data, in
+// segments at their offsets, with a first segment at 0 and a last one
+// that ends at the file's size (where a receiver sets size and metadata).
+func TestSparseExtents(t *testing.T) {
+	s := &memSink{}
+	w := NewWriter(s, 64<<10, false)
+	a, afull := sparseItem("holes", 4<<20, []Extent{{100 << 10, 150 << 10}, {3 << 20, 10 << 10}})
+	b, bfull := sparseItem("allhole", 1<<30, nil)
+	c, cfull := sparseItem("dataend", 1<<20, []Extent{{1<<20 - 4096, 4096}})
+	for _, it := range []Item{a, b, c} {
+		must(t, w.Add(it))
+	}
+	_, err := w.Close()
+	must(t, err)
+	got := map[string][]byte{}
+	var segs []string
+	var stored int64
+	for i, ch := range s.chunks {
+		stored += int64(len(ch))
+		must(t, Read(bytes.NewReader(ch), s.metas[i].Compressed, func(h *Header, r io.Reader) error {
+			buf, ok := got[h.Name]
+			if !ok {
+				if h.Offset != 0 {
+					t.Errorf("%s: first segment at %d", h.Name, h.Offset)
+				}
+				buf = make([]byte, h.Entry.Size)
+				got[h.Name] = buf
+			}
+			if _, err := io.ReadFull(r, buf[h.Offset:h.Offset+h.Length]); err != nil {
+				return err
+			}
+			if h.Last() {
+				segs = append(segs, h.Name)
+			}
+			return nil
+		}))
+	}
+	for name, want := range map[string][]byte{"holes": afull, "allhole": bfull, "dataend": cfull} {
+		if !bytes.Equal(got[name], want) {
+			t.Errorf("%s: content differs", name)
+		}
+	}
+	if strings.Join(segs, ",") != "holes,allhole,dataend" {
+		t.Errorf("last segments: %v", segs)
+	}
+	if stored > 200<<10 {
+		t.Errorf("%d bytes in chunks for 164 KiB of data", stored)
+	}
+	if want := int64(4<<20 + 1<<30 + 1<<20); w.Bytes != want {
+		t.Errorf("Bytes %d, want %d (holes count as done)", w.Bytes, want)
+	}
+}

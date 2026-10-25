@@ -230,8 +230,8 @@ A sync makes one or more targets match a source, one way, like
 | `internal/transport/nfsmailbox` | the store on NFS, with the refresh trick against attribute caching |
 | `internal/sshlink` | nodes over ssh: the home end (records, relay), the remote end, sessions, chunks in memory |
 | `internal/sshlink/frame` | the link protocol: frames, streams, flow control, keepalive |
-| `internal/bundle` | fkbr's chunk format (FKB2): strict reader, optional zstd, big files split over chunks |
-| `internal/receive` | installing on a target: staging in `.fkbr-tmp`, confined to the root (`os.Root`), metadata in the right order, holes for zero blocks |
+| `internal/bundle` | fkbr's chunk format (FKB2): strict reader, optional zstd, big files split over chunks, sparse files as their data only |
+| `internal/receive` | installing on a target: staging in `.fkbr-tmp`, confined to the root (`os.Root`), metadata in the right order, holes for zero blocks and for what a sparse source left out |
 | `internal/inventory` | streaming scans, snapshots and the k-way merge planner |
 | `internal/localfs` | the roots: confined access, capability probes (chown, DAC), name rules, mtime range, private-dir checks |
 | `internal/exclude` | rsync-like exclude patterns |

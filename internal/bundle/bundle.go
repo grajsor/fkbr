@@ -63,6 +63,17 @@ type Item struct {
 	Open  func() (File, error)
 }
 
+// Sparse is a File that knows where its data is: Extents are its data,
+// in order and apart, and Read yields just those bytes, one extent after
+// the other. The holes between them are not sent (a receiver leaves them
+// holes).
+type Sparse interface {
+	Extents() []Extent
+}
+
+// Extent is a range of a file's bytes.
+type Extent struct{ Off, Len int64 }
+
 // Writer produces chunks of approximately ChunkSize uncompressed bytes.
 // The first chunks are smaller (rampStart, doubling up to ChunkSize), so
 // targets can start consuming within moments instead of waiting for a
@@ -230,50 +241,74 @@ func (w *Writer) addFile(it Item) error {
 	}
 	defer f.Close()
 	total := it.Entry.Size
+	parts := []Extent{{0, total}}
+	if sp, ok := f.(Sparse); ok {
+		parts = parts[:0]
+		for _, e := range sp.Extents() {
+			if e.Len > 0 && e.Off < total {
+				parts = append(parts, Extent{e.Off, min(e.Len, total-e.Off)})
+			}
+		}
+	}
+	// A file starts with a segment at 0 (it creates the file) and ends
+	// with one that reaches its size (it sets size and metadata), empty
+	// where the file starts or ends in a hole.
+	if len(parts) == 0 || parts[0].Off > 0 {
+		parts = append([]Extent{{0, 0}}, parts...)
+	}
+	if last := parts[len(parts)-1]; last.Off+last.Len < total {
+		parts = append(parts, Extent{total, 0})
+	}
 	var itemErr error
-	for off := int64(0); ; {
-		if err := w.open(); err != nil {
-			return err
-		}
-		seg := total - off
-		limit := w.limit()
-		remain := limit - w.cur.raw.n
-		if seg > remain {
-			// Split only if a worthwhile piece fits; otherwise start fresh.
-			if remain < limit/16 && w.cur.meta.Entries > 0 {
-				if err := w.closeChunk(); err != nil {
-					return err
+	covered := int64(0)
+	for _, p := range parts {
+		w.Bytes += p.Off - covered // a hole: done without sending anything
+		off, end := p.Off, p.Off+p.Len
+		for {
+			if err := w.open(); err != nil {
+				return err
+			}
+			seg := end - off
+			limit := w.limit()
+			remain := limit - w.cur.raw.n
+			if seg > remain {
+				// Split only if a worthwhile piece fits; otherwise start fresh.
+				if remain < limit/16 && w.cur.meta.Entries > 0 {
+					if err := w.closeChunk(); err != nil {
+						return err
+					}
+					continue
 				}
-				continue
+				seg = max(remain, 0)
+				if seg == 0 {
+					seg = min(end-off, limit)
+				}
 			}
-			seg = max(remain, 0)
-			if seg == 0 {
-				seg = min(total-off, limit)
+			w.note(it.Name, off)
+			if err := w.cur.ew.header(it.Name, it.Entry, off, seg); err != nil {
+				return err
+			}
+			n, err := io.CopyN(w.cur.ew, f, seg)
+			if err != nil {
+				// Shrunk or unreadable: pad so the chunk stays valid, mark bad.
+				if _, perr := io.CopyN(w.cur.ew, zeroReader{}, seg-n); perr != nil {
+					return perr
+				}
+				if itemErr == nil {
+					itemErr = &ItemError{it.Name, fmt.Errorf("read: %w", err)}
+					w.cur.meta.Bad = append(w.cur.meta.Bad, it.Name)
+				}
+			}
+			w.Bytes += seg
+			off += seg
+			if off >= end {
+				break
+			}
+			if err := w.closeChunk(); err != nil { // chunk is full
+				return err
 			}
 		}
-		w.note(it.Name, off)
-		if err := w.cur.ew.header(it.Name, it.Entry, off, seg); err != nil {
-			return err
-		}
-		n, err := io.CopyN(w.cur.ew, f, seg)
-		if err != nil {
-			// Shrunk or unreadable: pad so the chunk stays valid, mark bad.
-			if _, perr := io.CopyN(w.cur.ew, zeroReader{}, seg-n); perr != nil {
-				return perr
-			}
-			if itemErr == nil {
-				itemErr = &ItemError{it.Name, fmt.Errorf("read: %w", err)}
-				w.cur.meta.Bad = append(w.cur.meta.Bad, it.Name)
-			}
-		}
-		w.Bytes += seg
-		off += seg
-		if off >= total {
-			break
-		}
-		if err := w.closeChunk(); err != nil { // chunk is full
-			return err
-		}
+		covered = end
 	}
 	if itemErr == nil {
 		if fi, err := f.Stat(); err != nil || fi.Size() != total || fi.ModTime().UnixNano() != it.Entry.MtimeNs {

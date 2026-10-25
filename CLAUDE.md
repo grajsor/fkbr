@@ -165,7 +165,10 @@ Every runtime use of the name comes from `internal/product`.
   (`bundle.Writer.limit`, depends only on seq: resume-safe); the walk runs
   ahead of the bundle writer and small files (≤ 1 MiB) are read by 8
   workers within a 64 MiB budget (`engine/prefetch.go`); the bundle keeps
-  walk order. Receiver: reads each chunk ahead (`readAhead`), sets file
+  walk order. A big sparse file is sent as its data extents only
+  (`dataExtents`, `bundle.Sparse`): segments at their offsets, an empty
+  one at 0 or at the size for a hole there; the format is unchanged, old
+  receivers install it. Receiver: reads each chunk ahead (`readAhead`), sets file
   metadata through the open fd (`setFileMeta`), moves a new destination
   dir in with one rename (`moveNewDir`), creates staged files through a
   cached staging dir (`stagingDir`; closed in MarkBad, Commit and Abort).
@@ -357,6 +360,4 @@ pty, answer `ESC]11;?` and `ESC[6n` or nothing draws for ~5 s.
 - The TUI copy/sync dialogs still show the internal root id `files`.
 - An `.fkbr-tmp` staging dir is visible in destination roots during a
   transfer.
-- Sparse files cross the share as real zeros; detecting holes on the
-  source would help.
 - A job whose only problems are type clashes ends `done` with errors.
