@@ -141,6 +141,7 @@ func paintsEveryCell(t *testing.T, p termenv.Profile) {
 		for _, f := range []struct{ name, text string }{
 			{"a.xml", "<a x=\"1\">\n  <!-- c -->\n  <b>t</b>\n</a>"},
 			{"a.json", "{\n  \"k\": [1, true, \"s\"]\n}"},
+			{"a.sh", "#!/bin/sh\nif [ \"$1\" ]; then # c\n  echo 'x'\nfi"},
 		} {
 			d := newTextDialog("s1:data/"+f.name, f.text)
 			d.lang = language(f.name, f.text)

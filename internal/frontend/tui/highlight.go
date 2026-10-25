@@ -9,12 +9,12 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-// Light syntax highlighting for the file viewer (F3): XML and JSON, by file
-// extension or an <?xml declaration. Colours are for the light dialog
-// background.
+// Light syntax highlighting for the file viewer (F3): XML, JSON and shell
+// scripts, by file extension, an <?xml declaration or a shell's #! line.
+// Colours are for the light dialog background.
 var (
-	cCodeTag     = lipgloss.CompleteColor{TrueColor: "#116a3e", ANSI256: "22", ANSI: "2"}  // XML tags
-	cCodeKey     = lipgloss.CompleteColor{TrueColor: "#4a52b6", ANSI256: "61", ANSI: "4"}  // XML attributes, JSON keys
+	cCodeTag     = lipgloss.CompleteColor{TrueColor: "#116a3e", ANSI256: "22", ANSI: "2"}  // XML tags, shell keywords
+	cCodeKey     = lipgloss.CompleteColor{TrueColor: "#4a52b6", ANSI256: "61", ANSI: "4"}  // XML attributes, JSON keys, shell variables
 	cCodeString  = lipgloss.CompleteColor{TrueColor: "#a8321f", ANSI256: "124", ANSI: "1"} // quoted values
 	cCodeLiteral = lipgloss.CompleteColor{TrueColor: "#8a5a00", ANSI256: "94", ANSI: "5"}  // numbers, true/false/null
 	cCodeComment = lipgloss.CompleteColor{TrueColor: "#5f6165", ANSI256: "241", ANSI: "0"}
@@ -27,9 +27,24 @@ func language(name, text string) string {
 		return "xml"
 	case ".json", ".geojson", ".jsonl", ".ndjson":
 		return "json"
+	case ".sh", ".bash":
+		return "sh"
 	}
 	if strings.HasPrefix(strings.TrimLeft(text, " \t\r\n\ufeff"), "<?xml") {
 		return "xml"
+	}
+	if shebang, ok := strings.CutPrefix(text, "#!"); ok {
+		first, _, _ := strings.Cut(shebang, "\n")
+		f := strings.Fields(first)
+		if len(f) > 1 && path.Base(f[0]) == "env" {
+			f = f[1:]
+		}
+		if len(f) > 0 {
+			switch path.Base(f[0]) {
+			case "sh", "bash", "dash", "ksh", "zsh":
+				return "sh"
+			}
+		}
 	}
 	return ""
 }
@@ -68,6 +83,8 @@ func highlight(st *styles, lang, text string, width int) string {
 		lines = tokenizeXML(strings.Split(text, "\n"))
 	case "json":
 		lines = tokenizeJSON(strings.Split(text, "\n"))
+	case "sh":
+		lines = tokenizeShell(strings.Split(text, "\n"))
 	}
 	var out []string
 	for _, line := range lines {
@@ -276,6 +293,123 @@ func tokenizeJSON(lines []string) [][]segment {
 				}
 				segs = append(segs, segment{string(rs[i:j]), clPlain})
 				i = j
+			}
+		}
+		out[li] = segs
+	}
+	return out
+}
+
+// shellKeywords are coloured where a word may start a command.
+var shellKeywords = map[string]bool{
+	"if": true, "then": true, "elif": true, "else": true, "fi": true,
+	"for": true, "while": true, "until": true, "do": true, "done": true,
+	"case": true, "esac": true, "in": true, "select": true, "function": true,
+	"return": true, "local": true, "export": true, "readonly": true, "declare": true,
+}
+
+// tokenizeShell classifies sh and bash lightly: comments, quoted strings
+// (which may run over several lines), keywords and $variables, also
+// inside double quotes. Here-documents are left plain.
+func tokenizeShell(lines []string) [][]segment {
+	quote := rune(0) // the quote a string from an earlier line is still in
+	out := make([][]segment, len(lines))
+	for li, line := range lines {
+		var segs []segment
+		emit := func(s string, c int) {
+			if s == "" {
+				return
+			}
+			if n := len(segs); n > 0 && segs[n-1].class == c {
+				segs[n-1].text += s
+				return
+			}
+			segs = append(segs, segment{s, c})
+		}
+		rs := []rune(line)
+		// boundary: where a word or a comment may start or end.
+		boundary := func(i int) bool {
+			return i < 0 || i >= len(rs) || strings.ContainsRune(" \t;&|()`{}", rs[i])
+		}
+		// variable returns the end of a $variable at i, or i.
+		variable := func(i int) int {
+			if i+1 >= len(rs) {
+				return i
+			}
+			switch r := rs[i+1]; {
+			case r == '{':
+				if end := strings.IndexRune(string(rs[i:]), '}'); end > 0 {
+					return i + len([]rune(string(rs[i:])[:end])) + 1
+				}
+			case r == '_' || unicode.IsLetter(r):
+				j := i + 1
+				for j < len(rs) && (rs[j] == '_' || unicode.IsLetter(rs[j]) || unicode.IsDigit(rs[j])) {
+					j++
+				}
+				return j
+			case unicode.IsDigit(r) || strings.ContainsRune("@*#?$!-", r):
+				return i + 2
+			}
+			return i
+		}
+		for i := 0; i < len(rs); {
+			r := rs[i]
+			switch {
+			case quote == '\'': // nothing is special up to the closing quote
+				j := i
+				for j < len(rs) && rs[j] != '\'' {
+					j++
+				}
+				if j < len(rs) {
+					j++
+					quote = 0
+				}
+				emit(string(rs[i:j]), clString)
+				i = j
+			case quote == '"':
+				switch {
+				case r == '\\' && i+1 < len(rs):
+					emit(string(rs[i:i+2]), clString)
+					i += 2
+				case r == '$' && variable(i) > i:
+					j := variable(i)
+					emit(string(rs[i:j]), clKey)
+					i = j
+				default:
+					if r == '"' {
+						quote = 0
+					}
+					emit(string(r), clString)
+					i++
+				}
+			case r == '\\':
+				emit(string(rs[i:min(i+2, len(rs))]), clPlain)
+				i += 2
+			case r == '\'' || r == '"':
+				quote = r
+				emit(string(r), clString)
+				i++
+			case r == '#' && boundary(i-1):
+				emit(string(rs[i:]), clComment)
+				i = len(rs)
+			case r == '$' && variable(i) > i:
+				j := variable(i)
+				emit(string(rs[i:j]), clKey)
+				i = j
+			case unicode.IsLetter(r) || r == '_':
+				j := i
+				for j < len(rs) && (rs[j] == '_' || rs[j] == '-' || unicode.IsLetter(rs[j]) || unicode.IsDigit(rs[j])) {
+					j++
+				}
+				c := clPlain
+				if shellKeywords[string(rs[i:j])] && boundary(i-1) && boundary(j) {
+					c = clTag
+				}
+				emit(string(rs[i:j]), c)
+				i = j
+			default:
+				emit(string(r), clPlain)
+				i++
 			}
 		}
 		out[li] = segs

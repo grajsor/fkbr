@@ -22,6 +22,19 @@ func TestLanguage(t *testing.T) {
 	if language("n:files/build.conf", "\n  <?xml version=\"1.0\"?><a/>") != "xml" {
 		t.Error("<?xml declaration not detected")
 	}
+	for name, want := range map[string]string{"n:files/run.sh": "sh", "n:files/x.BASH": "sh"} {
+		if got := language(name, "plain"); got != want {
+			t.Errorf("%s: %q, want %q", name, got, want)
+		}
+	}
+	for text, want := range map[string]string{
+		"#!/bin/bash\necho": "sh", "#!/bin/sh -e\n": "sh", "#!/usr/bin/env bash\n": "sh",
+		"#! /bin/dash": "sh", "#!/usr/bin/python3\n": "", "# just a comment": "",
+	} {
+		if got := language("n:files/noext", text); got != want {
+			t.Errorf("%q: %q, want %q", text, got, want)
+		}
+	}
 }
 
 // classes renders segments as "class:text" for compact comparison.
@@ -60,6 +73,28 @@ func TestTokenizeXML(t *testing.T) {
 func TestTokenizeJSON(t *testing.T) {
 	got := classes(tokenizeJSON([]string{`{"name": "fk\"br", "n": -1.5e3, "ok": true, "x": null}`}))
 	want := `p:{ key:"name" p::  str:"fk\"br" p:,  key:"n" p::  lit:-1.5e3 p:,  key:"ok" p::  lit:true p:,  key:"x" p::  lit:null p:}`
+	if got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestTokenizeShell(t *testing.T) {
+	got := classes(tokenizeShell([]string{
+		`#!/bin/bash`,
+		`if [ "$HOME" != '' ]; then  # check`,
+		`  echo "${n:-1} \"x\" items" $# $1 a#b \#x $(date)`,
+		`x='one`,
+		`two # not a comment' ; fi`,
+		`fiction done-x for`,
+	}))
+	want := strings.Join([]string{
+		`com:#!/bin/bash`,
+		`tag:if p: [  str:" key:$HOME str:" p: !=  str:'' p: ];  tag:then p:   com:# check`,
+		`p:  echo  str:" key:${n:-1} str: \"x\" items" p:  key:$# p:  key:$1 p: a#b \#x $(date)`,
+		`p:x= str:'one`,
+		`str:two # not a comment' p: ;  tag:fi`,
+		`p:fiction done-x  tag:for`,
+	}, "\n")
 	if got != want {
 		t.Errorf("\n got %s\nwant %s", got, want)
 	}

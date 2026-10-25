@@ -300,7 +300,7 @@ own padding). Without colours, `styles.highlight` writes reverse video.
   · help", sections in capitals, one key per row, 15-column key field.
 - Job details (Enter in F9) update live; totals come from a background
   count on the source (`engine/count.go`).
-- `q` quits like F10. F3 highlights XML/JSON. `-colors auto|true|256|16|none`.
+- `q` quits like F10. F3 highlights XML, JSON and shell (`.sh`, `.bash`, a shell `#!`). `-colors auto|true|256|16|none`.
 - Mouse (`mouse.go`): click, double click = Enter, right click marks
   (drag marks every row passed), wheel, key bar cells, dialog hints and
   settings lines clickable. `-mouse=false` turns it off.

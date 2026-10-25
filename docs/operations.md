@@ -342,7 +342,7 @@ keys.
 | Key | Action |
 |---|---|
 | Insert / Space, `+` `-` `*` | select; select all, none, invert. In the node list they mark nodes: the marked nodes are `@dest` |
-| F3 | view a file (first 64 KiB; XML and JSON highlighted, binary files as hex) |
+| F3 | view a file (first 64 KiB; XML, JSON and shell scripts highlighted, binary files as hex) |
 | F4 | sync: make the other side match this pane (plan shown first). Nothing selected: the whole directory. Selected folders: each into a folder of the same name; selected files are copied. Mirror (Ctrl+O) deletes only inside what is synced |
 | F5 / F6 | copy / move the selection. The destination defaults to `@dest` while nodes are marked, else to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`). Marked nodes that are offline are detached, to catch up later, as with `@all` |
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |

@@ -481,7 +481,7 @@ MOUSE
   Shift+drag     select text (-mouse=false: no Shift needed)
 
 FILES
-  F3             view (first 64 KiB; XML and JSON coloured)
+  F3             view (first 64 KiB; XML, JSON and shell coloured)
   F5             copy the marked entries, or the one under the cursor
   F6             move: copy, then delete here once every copy succeeded
   F7             new folder
