@@ -15,8 +15,8 @@ a test that fails without it.
 | | |
 |---|---:|
 | Hours of fault runs | **over 35 h** |
-| Copied trees checked against their source | **over 10,000** |
-| Faults injected (kills, stops, cuts, full disks, …) | **over 1,000** |
+| Copied trees checked against their source | **over 11,000** |
+| Faults injected (kills, stops, cuts, full disks, …) | **over 1,400** |
 | Files lost or corrupted | **0** |
 | Bugs found by these runs, each fixed with a test | **48** |
 | Tests in `go test ./...` (also run with nodes linked over ssh, and under `-race`) | **over 330** |
@@ -120,14 +120,17 @@ After every round, with the faults off:
 | 2026-10-25 | torture v2, run 2 | + 2 fixes | 2 h 32 min | 377 | 1,030 | 314 | **1** |
 | 2026-10-25 | torture v2, soak | + 2 fixes | 1 h 14 min | 202 | 538 | 25 | 0 |
 | 2026-10-25 | torture v2, run 3 | + 3 fixes | 1 h 37 min | 226 | 577 | 176 | **1** |
-| 2026-10-25 | **torture v2, run 4** | **e79d440** | 1 h 26 min | 216 | 579 | 178 | 0 |
+| 2026-10-25 | torture v2, run 4 | e79d440 | 1 h 26 min | 216 | 579 | 178 | 0 |
+| 2026-10-25 | **torture v2, run 5** | **5b8e542** | 1 h 26 min | 206 | 569 | 182 | 0 |
 
 "Trees checked" counts target folders compared file by file with their
 source after a job.
 
-The last run, on e79d440 with every fix, found nothing: 216
-jobs under 178 faults, every target exact or made exact by one sync,
-memory at most 75 MiB per node, open files at most 26.
+The last run, on 5b8e542 with every fix and sparse files sent as their
+data only, found nothing: 206 jobs under 182 faults, every target exact
+or made exact by one sync, memory at most 81 MiB per node, open files at
+most 26. Its 64 MiB sparse test file was checked exact 70 times, over
+the share and over ssh.
 
 The 16 h soak showed no leak: the longest-running process (7 h 18 min)
 stayed at 42-91 MB of memory and 8-15 open files. In the night of
