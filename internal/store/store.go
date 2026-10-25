@@ -22,6 +22,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -215,8 +216,10 @@ func (m *Dir) SetComplete(_ context.Context, id string, chunks int) error {
 type chunkWriter struct {
 	m    *Dir
 	f    *syncedFile
+	id   string
 	dir  string
 	seq  int
+	n    int64 // bytes written
 	done bool
 }
 
@@ -235,10 +238,14 @@ func (m *Dir) CreateChunk(_ context.Context, id string, seq int) (transport.Chun
 	if err != nil {
 		return nil, err
 	}
-	return &chunkWriter{m: m, f: m.newSyncedFile(f), dir: dir, seq: seq}, nil
+	return &chunkWriter{m: m, f: m.newSyncedFile(f), id: id, dir: dir, seq: seq}, nil
 }
 
-func (w *chunkWriter) Write(p []byte) (int, error) { return w.f.Write(p) }
+func (w *chunkWriter) Write(p []byte) (int, error) {
+	n, err := w.f.Write(p)
+	w.n += int64(n)
+	return n, err
+}
 
 func (w *chunkWriter) Commit(meta []byte) error {
 	defer w.Abort()
@@ -255,6 +262,7 @@ func (w *chunkWriter) Commit(meta []byte) error {
 		return err
 	}
 	w.done = true
+	w.m.staged.set(w.id, w.seq, w.n)
 	return w.m.write(filepath.Join(w.dir, chunkName(w.seq, ".json")), meta)
 }
 
@@ -292,7 +300,8 @@ func (m *Dir) DeleteChunk(_ context.Context, id string, seq int) error {
 		return err
 	}
 	err = m.fs.Remove(filepath.Join(dir, chunkName(seq, ".chunk")))
-	if errors.Is(err, fs.ErrNotExist) {
+	if err == nil || errors.Is(err, fs.ErrNotExist) {
+		m.staged.drop(id, seq)
 		return nil
 	}
 	return err
@@ -339,14 +348,76 @@ func (m *Dir) FreeBytes() (int64, error) {
 	return int64(st.Bavail) * int64(st.Bsize), nil
 }
 
+// stagedCount is this node's chunks on the share, job -> seq -> size, so
+// StagedBytes, asked before every chunk, need not list and stat every
+// staged chunk each time: with small chunks and a big window that was
+// thousands of NFS stats per chunk (review 2026-10-25). Only this node
+// writes chunks there, and its CreateChunk, DeleteChunk and RemoveJobData
+// keep the count; anything else (a prune, a hand, the run before) is
+// caught by a full scan at the first call and every stagedRescan.
+type stagedCount struct {
+	mu   sync.Mutex
+	jobs map[string]map[int]int64 // nil: not scanned yet
+	at   time.Time                // of the last scan
+}
+
+// stagedRescan is how long counted chunks are trusted without a scan.
+var stagedRescan = 5 * time.Second
+
+func (c *stagedCount) set(id string, seq int, n int64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.jobs == nil {
+		return // the first scan sees it
+	}
+	if c.jobs[id] == nil {
+		c.jobs[id] = map[int]int64{}
+	}
+	c.jobs[id][seq] = n
+}
+
+func (c *stagedCount) drop(id string, seq int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if seq < 0 {
+		delete(c.jobs, id)
+	} else {
+		delete(c.jobs[id], seq)
+	}
+}
+
 func (m *Dir) StagedBytes(_ context.Context, id string) (job, total int64, err error) {
+	c := &m.staged
+	c.mu.Lock() // held through a scan: a change after it is applied on top
+	defer c.mu.Unlock()
+	if c.jobs == nil || time.Since(c.at) >= stagedRescan {
+		jobs, err := m.scanStaged()
+		if err != nil {
+			return 0, 0, err
+		}
+		c.jobs, c.at = jobs, time.Now()
+	}
+	for j, chunks := range c.jobs {
+		for _, n := range chunks {
+			total += n
+			if j == id {
+				job += n
+			}
+		}
+	}
+	return job, total, nil
+}
+
+// scanStaged lists this node's chunks on the share.
+func (m *Dir) scanStaged() (map[string]map[int]int64, error) {
+	staged := map[string]map[int]int64{}
 	base := m.path("data", m.self)
 	jobs, err := m.fs.ReadDir(base)
 	if errors.Is(err, fs.ErrNotExist) {
-		return 0, 0, nil
+		return staged, nil
 	}
 	if err != nil {
-		return 0, 0, err
+		return nil, err
 	}
 	for _, j := range jobs {
 		des, err := m.fs.ReadDir(filepath.Join(base, j.Name()))
@@ -354,18 +425,20 @@ func (m *Dir) StagedBytes(_ context.Context, id string) (job, total int64, err e
 			continue
 		}
 		for _, de := range des {
-			if !strings.HasSuffix(de.Name(), ".chunk") {
+			name, ok := strings.CutSuffix(de.Name(), ".chunk")
+			seq, err := strconv.Atoi(name)
+			if !ok || err != nil {
 				continue
 			}
 			if fi, err := de.Info(); err == nil {
-				total += fi.Size()
-				if j.Name() == id {
-					job += fi.Size()
+				if staged[j.Name()] == nil {
+					staged[j.Name()] = map[int]int64{}
 				}
+				staged[j.Name()][seq] = fi.Size()
 			}
 		}
 	}
-	return job, total, nil
+	return staged, nil
 }
 
 func (m *Dir) RemoveJobData(_ context.Context, id string) error {
@@ -373,7 +446,9 @@ func (m *Dir) RemoveJobData(_ context.Context, id string) error {
 		return err
 	}
 	m.removeTemps(id, "") // a chunk a killed source was writing
-	return m.fs.RemoveAll(m.path("data", m.self, id))
+	err := m.fs.RemoveAll(m.path("data", m.self, id))
+	m.staged.drop(id, -1)
+	return err
 }
 
 // removeTemps removes the temp files of job id's chunks (of chunk name, or

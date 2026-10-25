@@ -546,3 +546,54 @@ func TestKilledSourceTempChunksRemoved(t *testing.T) {
 		t.Error("another job's temp chunk was removed")
 	}
 }
+
+// StagedBytes counts this node's chunks as it writes and deletes them,
+// and lists them only every stagedRescan: before, every chunk listed and
+// stat'ed all staged chunks (review 2026-10-25). What changes behind its
+// back shows at the next scan.
+func TestStagedBytesCounted(t *testing.T) {
+	share := t.TempDir()
+	a := open(t, share, "a")
+	const id, other = "0123456789abcdef01234567", "0123456789abcdef01234568"
+	put := func(job string, seq, n int) {
+		t.Helper()
+		w, err := a.CreateChunk(ctx, job, seq)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write(make([]byte, n)); err != nil {
+			t.Fatal(err)
+		}
+		if err := w.Commit([]byte("{}")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := func(what string, job, total int64) {
+		t.Helper()
+		j, tot, err := a.StagedBytes(ctx, id)
+		if err != nil || j != job || tot != total {
+			t.Errorf("%s: %d of %d staged (%v), want %d of %d", what, j, tot, err, job, total)
+		}
+	}
+	put(id, 0, 100) // before the first scan
+	want("first scan", 100, 100)
+	put(id, 1, 10)
+	put(other, 0, 1000)
+	want("written", 110, 1110)
+	put(id, 1, 20) // written again (a resumed source)
+	want("rewritten", 120, 1120)
+	if err := a.DeleteChunk(ctx, id, 0); err != nil {
+		t.Fatal(err)
+	}
+	want("deleted", 20, 1020)
+	if err := a.RemoveJobData(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	want("job removed", 20, 20)
+
+	// Behind its back: trusted until the next scan.
+	os.Remove(filepath.Join(share, "data", "a", id, chunkName(1, ".chunk")))
+	want("removed by hand, no scan yet", 20, 20)
+	a.staged.at = time.Now().Add(-stagedRescan)
+	want("after a scan", 0, 0)
+}

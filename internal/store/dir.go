@@ -85,6 +85,7 @@ type Dir struct {
 	// its own folders on the share. A client that only looks (a CLI
 	// command without a running node) creates none of them.
 	registered atomic.Bool
+	staged     stagedCount
 }
 
 // Now is the current time by the share's clock: job IDs and times made
@@ -552,6 +553,7 @@ func (m *Dir) pruneOrphanData(cutoff time.Time) error {
 		}
 		if fi, err := de.Info(); err == nil && fi.ModTime().Before(cutoff) {
 			errs = append(errs, m.fs.RemoveAll(m.path("data", m.self, de.Name())))
+			m.staged.drop(de.Name(), -1)
 		}
 	}
 	return errors.Join(errs...)
