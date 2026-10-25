@@ -5,9 +5,12 @@ package api
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"slices"
 	"time"
+
+	"github.com/zeebo/xxh3"
 )
 
 // ProtocolVersion is the version of the on-NFS protocol and the wire DTOs.
@@ -460,23 +463,33 @@ type ReadResult struct {
 	ModTime time.Time `json:"mtime,omitzero"`
 }
 
-// WriteRequest carries a file's new content. Size and ModTime are the
-// file as it was read: a file that differs now is left alone
-// (ErrChanged). A zero ModTime (from an older node's read) checks the size
-// only.
+// WriteRequest carries a file's new content. Size, Sum and ModTime are
+// the file as it was read: a file that differs now is left alone
+// (ErrChanged). Sum (ContentSum of what was read) is checked through the
+// opened file; without it, size and ModTime are (a zero ModTime, from an
+// older node's read: the size only).
 type WriteRequest struct {
 	Node    string    `json:"node,omitempty"`
 	Root    string    `json:"root"`
 	Path    string    `json:"path"`
 	Data    []byte    `json:"data"`
 	Size    int64     `json:"size"`
+	Sum     string    `json:"sum,omitempty"`
 	ModTime time.Time `json:"mtime,omitzero"`
 }
 
-// WriteResult is the file as written, for the next Write.
+// WriteResult is the file as written, for the next Write. Notes say what
+// the save did beyond writing (setuid/setgid removed, written in place).
 type WriteResult struct {
 	Size    int64     `json:"size"`
 	ModTime time.Time `json:"mtime"`
+	Notes   []string  `json:"notes,omitempty"`
+}
+
+// ContentSum is the xxh3-128 of a file's content, as WriteRequest.Sum.
+func ContentSum(b []byte) string {
+	s := xxh3.Hash128(b).Bytes()
+	return hex.EncodeToString(s[:])
 }
 
 // GroupAll is the built-in destination group: "@all" is every registered

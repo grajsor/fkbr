@@ -87,8 +87,9 @@ func TestWriteFile(t *testing.T) {
 	}
 }
 
-// A hard-linked file or one reached through a symlink is written in
-// place: the other name sees the new content, the link stays a link.
+// A hard-linked file is written in place: the other name sees the new
+// content, and the save says it was in place. A file reached through a
+// symlink is replaced like any other (the link stays a link).
 func TestWriteFileInPlace(t *testing.T) {
 	share := t.TempDir()
 	a, root := node(t, share, "a")
@@ -97,31 +98,158 @@ func TestWriteFileInPlace(t *testing.T) {
 	if err := os.Link(f, filepath.Join(root, "hard")); err != nil {
 		t.Fatal(err)
 	}
-	os.Symlink("f", filepath.Join(root, "sym"))
-	ino := func(p string) uint64 {
-		fi, err := os.Stat(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return fi.Sys().(*syscall.Stat_t).Ino
-	}
-	before := ino(f)
+	g := filepath.Join(root, "g")
+	os.WriteFile(g, []byte("old"), 0o644)
+	os.Symlink("g", filepath.Join(root, "sym"))
+	before := ino(t, f)
 	ctx := context.Background()
-	for i, p := range []string{"hard", "sym"} {
-		fi, _ := os.Stat(f)
-		data := strings.Repeat("new", i+2)
-		if _, err := a.Write(ctx, api.WriteRequest{Root: "data", Path: p, Data: []byte(data), Size: fi.Size(), ModTime: fi.ModTime()}); err != nil {
-			t.Fatalf("%s: %v", p, err)
-		}
-		if got, _ := os.ReadFile(f); string(got) != data {
-			t.Fatalf("%s: f is %q", p, got)
-		}
+	res, err := a.Write(ctx, readForWrite(t, root, "hard", "new data"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if ino(f) != before || ino(filepath.Join(root, "hard")) != before {
-		t.Error("the file was replaced, not written in place")
+	if got, _ := os.ReadFile(f); string(got) != "new data" || ino(t, f) != before {
+		t.Fatalf("f is %q, inode changed: %v", got, ino(t, f) != before)
+	}
+	if len(res.Notes) != 1 || !strings.Contains(res.Notes[0], "in place (it has other hard links)") {
+		t.Errorf("notes %q", res.Notes)
+	}
+	gIno := ino(t, g)
+	if res, err = a.Write(ctx, readForWrite(t, root, "sym", "via the link")); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := os.ReadFile(g); string(got) != "via the link" || ino(t, g) == gIno || len(res.Notes) != 0 {
+		t.Errorf("g is %q, replaced %v, notes %q", got, ino(t, g) != gIno, res.Notes)
 	}
 	if fi, _ := os.Lstat(filepath.Join(root, "sym")); fi.Mode()&os.ModeSymlink == 0 {
 		t.Error("sym is no longer a symlink")
+	}
+}
+
+// readForWrite is a WriteRequest for rel as it is now, with new content.
+func readForWrite(t *testing.T, root, rel, data string) api.WriteRequest {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(root, rel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return api.WriteRequest{Root: "data", Path: rel, Data: []byte(data), Size: int64(len(b)), Sum: api.ContentSum(b)}
+}
+
+func ino(t *testing.T, p string) uint64 {
+	t.Helper()
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Sys().(*syscall.Stat_t).Ino
+}
+
+// A save leaves setuid/setgid off unless allow_setid, as a copy does,
+// whether the file is replaced or written in place (review 2026-10-25:
+// an edit kept them, so it could do more than a copy).
+func TestWriteDropsSetid(t *testing.T) {
+	share := t.TempDir()
+	cfg := nodeCfg(t, share, "a")
+	a := build(t, cfg)
+	root := cfg.Roots[0].Path
+	for _, name := range []string{"suid", "linked"} {
+		p := filepath.Join(root, name)
+		os.WriteFile(p, []byte("#!/bin/sh\n"), 0o755)
+		if err := os.Chmod(p, 0o755|os.ModeSetuid|os.ModeSetgid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	os.Link(filepath.Join(root, "linked"), filepath.Join(root, "other-name"))
+	ctx := context.Background()
+	for _, name := range []string{"suid", "linked"} {
+		res, err := a.Write(ctx, readForWrite(t, root, name, "#!/bin/sh\necho\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		fi, _ := os.Stat(filepath.Join(root, name))
+		if fi.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 || fi.Mode().Perm() != 0o755 {
+			t.Errorf("%s: mode %v after a save", name, fi.Mode())
+		}
+		if len(res.Notes) == 0 || !strings.Contains(res.Notes[0], "setuid/setgid removed") {
+			t.Errorf("%s: notes %q", name, res.Notes)
+		}
+	}
+	// With allow_setid the bits stay.
+	cfg.Transfer.AllowSetID = true
+	p := filepath.Join(root, "kept")
+	os.WriteFile(p, []byte("x"), 0o755)
+	os.Chmod(p, 0o755|os.ModeSetuid)
+	if _, err := a.Write(ctx, readForWrite(t, root, "kept", "y")); err != nil {
+		t.Fatal(err)
+	}
+	if fi, _ := os.Stat(p); fi.Mode()&os.ModeSetuid == 0 {
+		t.Errorf("allow_setid: mode %v", fi.Mode())
+	}
+}
+
+// The checks run on where a symlink leads: a link into the staging area
+// is refused like the name itself, and its target stays as it was
+// (review 2026-10-25).
+func TestWriteThroughSymlinkChecked(t *testing.T) {
+	share := t.TempDir()
+	a, root := node(t, share, "a")
+	staged := filepath.Join(root, ".fkbr-tmp", "job", "x")
+	os.MkdirAll(filepath.Dir(staged), 0o700)
+	os.WriteFile(staged, []byte("staged"), 0o600)
+	os.Symlink(".fkbr-tmp/job/x", filepath.Join(root, "notes"))
+	if _, err := a.Write(context.Background(), readForWrite(t, root, "notes", "changed")); !errors.Is(err, api.ErrBadPath) {
+		t.Fatalf("write through a link into staging: %v", err)
+	}
+	if got, _ := os.ReadFile(staged); string(got) != "staged" {
+		t.Fatalf("staged file is %q", got)
+	}
+}
+
+// The file must still hold what was read: the same size and mtime with
+// other content is caught by the sum (review 2026-10-25: on an NFS root a
+// stale stat let another host's change be overwritten).
+func TestWriteChecksContent(t *testing.T) {
+	share := t.TempDir()
+	a, root := node(t, share, "a")
+	p := filepath.Join(root, "f")
+	os.WriteFile(p, []byte("aaaa"), 0o644)
+	req := readForWrite(t, root, "f", "mine")
+	fi, _ := os.Stat(p)
+	os.WriteFile(p, []byte("bbbb"), 0o644)    // another edit, same length,
+	os.Chtimes(p, fi.ModTime(), fi.ModTime()) // in the same mtime tick
+	req.ModTime = fi.ModTime()
+	if _, err := a.Write(context.Background(), req); !errors.Is(err, api.ErrChanged) {
+		t.Fatalf("other content, same size and mtime: %v", err)
+	}
+	if got, _ := os.ReadFile(p); string(got) != "bbbb" {
+		t.Fatalf("overwritten: %q", got)
+	}
+}
+
+// A save a crash interrupted leaves its new file beside the old one; the
+// node removes it when it starts again. Two saves never share a name.
+func TestWriteLeftoverSwept(t *testing.T) {
+	share := t.TempDir()
+	cfg := nodeCfg(t, share, "a")
+	a := build(t, cfg)
+	root := cfg.Roots[0].Path
+	left := filepath.Join(root, ".f.fkbr-edit-0123456789abcdef")
+	os.WriteFile(left, []byte("half"), 0o600)
+	os.MkdirAll(a.editsDir(), 0o700)
+	os.WriteFile(filepath.Join(a.editsDir(), "0123456789abcdef"), []byte(`{"root":"data","path":".f.fkbr-edit-0123456789abcdef"}`), 0o600)
+	runWorker(t, a)
+	if _, err := os.Lstat(left); !os.IsNotExist(err) {
+		t.Fatalf("leftover still there: %v", err)
+	}
+	if ents, _ := os.ReadDir(a.editsDir()); len(ents) != 0 {
+		t.Errorf("records left: %v", ents)
+	}
+	os.WriteFile(filepath.Join(root, "f"), []byte("x"), 0o644)
+	if _, err := a.Write(context.Background(), readForWrite(t, root, "f", "y")); err != nil {
+		t.Fatal(err)
+	}
+	if ents, _ := os.ReadDir(a.editsDir()); len(ents) != 0 {
+		t.Errorf("record of a finished save left: %v", ents)
 	}
 }
 

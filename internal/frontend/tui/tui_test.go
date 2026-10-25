@@ -33,8 +33,9 @@ type fakeClient struct {
 	events chan api.Event
 	read   []byte // what Read returns, if set
 	writes []api.WriteRequest
-	// writeErr: Write fails with it.
-	writeErr error
+	// writeErr: Write fails with it; writeNotes come with a save.
+	writeErr   error
+	writeNotes []string
 }
 
 func newFake() *fakeClient {
@@ -140,7 +141,7 @@ func (f *fakeClient) Write(_ context.Context, r api.WriteRequest) (*api.WriteRes
 	}
 	f.writes = append(f.writes, r)
 	f.read = r.Data
-	return &api.WriteResult{Size: int64(len(r.Data)), ModTime: time.Unix(int64(len(f.writes)), 0)}, nil
+	return &api.WriteResult{Size: int64(len(r.Data)), ModTime: time.Unix(int64(len(f.writes)), 0), Notes: f.writeNotes}, nil
 }
 
 func (f *fakeClient) Read(_ context.Context, r api.ReadRequest) (*api.ReadResult, error) {
@@ -1065,11 +1066,22 @@ func TestEditorSaves(t *testing.T) {
 	if string(w.Data) != "Xone\ntwo!\nz\n" || w.Node != "master" || w.Root != "data" || w.Path != "a.txt" || w.Size != 8 {
 		t.Fatalf("write: %+v %q", w, w.Data)
 	}
+	if w.Sum != api.ContentSum([]byte("one\ntwo\n")) {
+		t.Errorf("sum %q is not that of what was read", w.Sum)
+	}
 	if e.modified || h.m.dlg != e || !strings.Contains(e.note, "saved") {
 		t.Fatalf("after save: modified %v dialog %T note %q", e.modified, h.m.dlg, e.note)
 	}
-	// A second save sends what the first one wrote as the file's state.
+	// A second save sends what the first one wrote as the file's state,
+	// and shows what the node had to do.
+	h.f.writeNotes = []string{"setuid/setgid removed (allow_setid is off)"}
 	h.key("left", "delete", "ctrl+s")
+	if !strings.Contains(e.note, "setuid/setgid removed") {
+		t.Errorf("note %q", e.note)
+	}
+	if h.f.writes[1].Sum != api.ContentSum([]byte("Xone\ntwo!\nz\n")) {
+		t.Errorf("second sum is not that of the first save")
+	}
 	if len(h.f.writes) != 2 || h.f.writes[1].Size != 12 || string(h.f.writes[1].Data) != "Xone\ntwo!\nz" || !h.f.writes[1].ModTime.Equal(time.Unix(1, 0)) {
 		t.Fatalf("second write: %+v", h.f.writes)
 	}

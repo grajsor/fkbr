@@ -307,6 +307,7 @@ func (e *Engine) Run(ctx context.Context) error {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	e.sweepEdits() // the lock is ours: no save of this node is under way
 	ctx, runCancel := context.WithCancel(ctx)
 	defer runCancel()
 	// Runs after the jobs below have paused, while the lock is still held,

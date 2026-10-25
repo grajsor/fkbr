@@ -309,9 +309,15 @@ own padding). Without colours, `styles.highlight` writes reverse video.
 - `q` quits like F10. F3 highlights XML, JSON, YAML, shell and Python (by extension, `<?xml`,
   a `#!`). Ctrl+E in the viewer opens a small editor (`editor.go`; hidden
   for now: not in F1 or the user docs, the owner's wish). It saves through
-  `Write` (`api.FeatureWrite`), only over the file as it was read
-  (`ErrChanged`); `engine.writeLocal` renames a new file over one we own
-  with one link, else writes in place. `-colors auto|true|256|16|none`.
+  `Write` (`api.FeatureWrite`, `engine/write.go`): the node opens the
+  file once (symlinks followed) and checks where it really is
+  (`/proc/self/fd`, then `writablePath`) and that it holds what was read
+  (`Sum`, xxh3 through that fd: an NFS stat can be 30 min old;
+  `ErrChanged`); setuid/setgid go unless `allow_setid`, as on a copy; a
+  file with one link that we own gets a new one renamed over it (random
+  name, noted in `<state>/edits` so a crash's leftover is swept at start,
+  folder fsynced), others are written in place and the result says so
+  (`WriteResult.Notes`). `-colors auto|true|256|16|none`.
 - Mouse (`mouse.go`): click, double click = Enter, right click marks
   (drag marks every row passed), wheel, key bar cells, dialog hints and
   settings lines clickable. `-mouse=false` turns it off.

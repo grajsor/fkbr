@@ -95,7 +95,8 @@ func (d *editDialog) save(m *model) tea.Cmd {
 	}
 	d.saving, d.note, d.noteErr = true, "saving…", false
 	f := d.file
-	req := api.WriteRequest{Node: f.node, Root: f.root, Path: f.path, Data: d.text(), Size: f.res.Size, ModTime: f.res.ModTime}
+	req := api.WriteRequest{Node: f.node, Root: f.root, Path: f.path, Data: d.text(),
+		Size: f.res.Size, Sum: api.ContentSum(f.res.Data), ModTime: f.res.ModTime}
 	return func() tea.Msg {
 		res, err := m.c.Write(m.ctx, req)
 		return editSavedMsg{d: d, res: res, err: err}
@@ -113,6 +114,9 @@ func (d *editDialog) saved(msg editSavedMsg) dialog {
 	d.file.res = &api.ReadResult{Data: data, Size: msg.res.Size, EOF: true, ModTime: msg.res.ModTime}
 	d.back.setText(renderFile(d.file.res))
 	d.modified, d.note, d.noteErr = false, fmt.Sprintf("saved, %d bytes", len(data)), false
+	for _, n := range msg.res.Notes {
+		d.note += "; " + n
+	}
 	if d.closing {
 		return d.back
 	}
