@@ -467,7 +467,7 @@ MOVING AROUND
   PgUp PgDn      a page up or down
   Home End       first or last entry
   Enter          open a folder, node or root; on a file: view it
-  Backspace      up: folder, root, then the node list
+  Backspace      up a folder; from the top of this host's shared folder on up to / (root local), then the node list
   Tab            switch pane
   F2             go to the node list
   Ctrl+R         reload this pane
@@ -521,6 +521,14 @@ JOBS (F9)
   Esc            back
 
 `) + jobs + m.sshHelp() + `
+
+SETTINGS (F11)
+  The settings people change most: colours, mouse, what the copy dialogs start with, this node's name, share, roles and limits. Kept in ~/.{name}.conf, or in {name}.conf beside the binary if there is one; only what you change is written. The TUI's own settings apply at once, the node's when it starts again.
+  ↑ ↓            choose a setting
+  Enter, ← →     change it: the next choice, or type a value
+  d              back to the default
+  Ctrl+S         save
+  o              also opens it, where the terminal takes F11
 
 QUIT AND HELP
   F1, ?          this help

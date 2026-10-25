@@ -131,7 +131,7 @@ func (r *rootFlags) Set(s string) error {
 }
 
 func run() error {
-	cfgPath := flag.String("config", "", product.Expand("config file (default ${ENV}CONFIG, else {name}.yaml next to the binary, else none)"))
+	cfgPath := flag.String("config", "", product.Expand("config file (default ${ENV}CONFIG, else {name}.conf next to the binary, else ~/.{name}.conf)"))
 	node := flag.String("node", "", "this node's ID (default: short hostname)")
 	share := flag.String("share", "", "the shared directory (alternative to the SHARE argument)")
 	sshBin := flag.String("ssh-bin", "", product.Expand("{name} on the hosts of an ssh: share (default {name}, on their PATH)"))
@@ -293,7 +293,16 @@ func run() error {
 	case "check":
 		return runCheck(ctx, cfg)
 	case "tui":
-		return runTUI(ctx, cfg, *forceLocal, tui.Options{Colors: *colors, Version: version, NoMouse: !*mouse, StartInDirs: true}, level)
+		opts := tui.Options{Colors: *colors, Version: version, NoMouse: !*mouse, StartInDirs: true,
+			ConfigPath: cfg.ConfigPath, Overridden: overridden(shareArg != "" || *share != ""),
+			IfExists: cfg.TUI.IfExists, Compress: cfg.TUI.Compress, Exclude: cfg.TUI.Exclude}
+		if opts.Overridden["tui.colors"] == "" && cfg.TUI.Colors != "" {
+			opts.Colors = cfg.TUI.Colors
+		}
+		if opts.Overridden["tui.mouse"] == "" && cfg.TUI.Mouse != nil {
+			opts.NoMouse = !*cfg.TUI.Mouse
+		}
+		return runTUI(ctx, cfg, *forceLocal, opts, level)
 	}
 	c, err := connect(ctx, cfg, *forceLocal, log)
 	if err != nil {
@@ -342,6 +351,26 @@ func stdout() io.Writer {
 // commandFlags are command flags that share a name with a global flag; after
 // that command, the command's own wins.
 var commandFlags = map[string][]string{"prune": {"keep"}, "sync": {"v"}}
+
+// overridden names the config keys a flag given on the command line sets
+// for this run (key -> flag), for the TUI's settings dialog.
+func overridden(shareGiven bool) map[string]string {
+	keys := map[string]string{
+		"node": "node_id", "ssh-bin": "ssh_bin", "local-root": "local_root", "roles": "roles",
+		"keep": "keep_done", "chunk-size": "transfer.chunk_size", "job-quota": "transfer.job_quota",
+		"staging-quota": "transfer.staging_quota", "colors": "tui.colors", "mouse": "tui.mouse",
+	}
+	out := map[string]string{}
+	flag.Visit(func(f *flag.Flag) {
+		if k, ok := keys[f.Name]; ok {
+			out[k] = "-" + f.Name
+		}
+	})
+	if shareGiven {
+		out["nfs_root"] = "the share given"
+	}
+	return out
+}
 
 // globalFlags takes the global flags out of a command's arguments, so they
 // work after the command too ("fkbr SHARE daemon -node a"). Everything from

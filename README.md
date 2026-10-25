@@ -75,6 +75,10 @@ doing, updated live.
 
 ![The viewer showing a build configuration on build01](docs/screenshots/fkbr-view.png)
 
+**Settings (F11).** Colours, mouse, what the copy dialogs start with,
+this node's name, share and limits, kept in the config file; only what
+you change is written.
+
 **F1** lists every key.
 
 ## Download

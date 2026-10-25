@@ -9,12 +9,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"fkbr/internal/exclude"
 	"fkbr/internal/mountinfo"
 	"fkbr/internal/product"
 )
@@ -95,7 +97,31 @@ type Config struct {
 	ForgetAfter time.Duration `yaml:"forget_after"`
 	Transfer    Transfer      `yaml:"transfer"`
 	Sync        Sync          `yaml:"sync"`
+	// TUI holds the TUI's own settings (F11); the node ignores them.
+	TUI TUI `yaml:"tui"`
 }
+
+// TUI settings; command-line flags win over them.
+type TUI struct {
+	// Colors: auto (default), true, 256, 16 or none (-colors).
+	Colors string `yaml:"colors"`
+	// Mouse: on unless false (-mouse).
+	Mouse *bool `yaml:"mouse"`
+	// IfExists is what F5/F6 start with for a file already at the
+	// destination: skip (default), overwrite-if-older or overwrite.
+	IfExists string `yaml:"if_exists"`
+	// Compress: F5, F6 and F4 start with zstd on.
+	Compress bool `yaml:"compress"`
+	// Exclude prefills the dialogs' exclude field (patterns separated by
+	// spaces, as typed there).
+	Exclude string `yaml:"exclude"`
+}
+
+// TUIColors and TUIIfExists are what tui.colors and tui.if_exists take.
+var (
+	TUIColors   = []string{"auto", "true", "256", "16", "none"}
+	TUIIfExists = []string{"skip", "overwrite-if-older", "overwrite"}
+)
 
 type Sync struct {
 	// MaxDeletes caps deletions per target in a sync plan unless the apply
@@ -146,6 +172,20 @@ func (b *ByteSize) UnmarshalYAML(n *yaml.Node) error {
 	return nil
 }
 
+// String writes b as ParseByteSize reads it, in the largest unit that
+// divides it: 128MiB, 1GiB, 1500KiB.
+func (b ByteSize) String() string {
+	for _, u := range []struct {
+		shift int
+		name  string
+	}{{40, "TiB"}, {30, "GiB"}, {20, "MiB"}, {10, "KiB"}} {
+		if b != 0 && b%(1<<u.shift) == 0 {
+			return strconv.FormatInt(int64(b)>>u.shift, 10) + u.name
+		}
+	}
+	return strconv.FormatInt(int64(b), 10)
+}
+
 func ParseByteSize(s string) (ByteSize, error) {
 	t := strings.TrimSuffix(strings.TrimSpace(s), "B")
 	t = strings.TrimSuffix(t, "i")
@@ -185,11 +225,12 @@ func DefaultPath() string {
 	return ""
 }
 
-// WritePath is the config file, also where the TUI keeps the ssh hosts it
-// links: the one given (-config), else $FKBR_CONFIG, else fkbr.yaml next
-// to the executable if it is there, else ~/.fkbr.conf. That last one is
-// the only file fkbr ever puts in a home directory, and only once a host
-// is linked from the TUI.
+// WritePath is the config file, also where the TUI keeps its settings
+// (F11) and the ssh hosts it links (F7): the one given (-config), else
+// $FKBR_CONFIG, else fkbr.conf next to the executable if it is there
+// (fkbr.yaml, its older name, too), else ~/.fkbr.conf. That last one is
+// the usual place, and the only file fkbr ever puts in a home directory:
+// once settings are saved or a host is linked from the TUI.
 func WritePath(given string) string {
 	if given != "" {
 		return given
@@ -198,9 +239,11 @@ func WritePath(given string) string {
 		return p
 	}
 	if exe, err := os.Executable(); err == nil {
-		p := filepath.Join(filepath.Dir(exe), product.Name+".yaml")
-		if _, err := os.Stat(p); err == nil {
-			return p
+		for _, name := range []string{product.Name + ".conf", product.Name + ".yaml"} {
+			p := filepath.Join(filepath.Dir(exe), name)
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
 		}
 	}
 	if home, err := os.UserHomeDir(); err == nil {
@@ -507,6 +550,18 @@ func (c *Config) Validate() error {
 	}
 	if c.ForgetAfter > 0 && c.ForgetAfter <= c.OfflineAfter {
 		errs = append(errs, fmt.Errorf("forget_after (%s) must exceed offline_after (%s)", c.ForgetAfter, c.OfflineAfter))
+	}
+	if v := c.TUI.Colors; v != "" && !slices.Contains(TUIColors, v) {
+		errs = append(errs, fmt.Errorf("tui.colors %q: want one of %s", v, strings.Join(TUIColors, ", ")))
+	}
+	if v := c.TUI.IfExists; v != "" && !slices.Contains(TUIIfExists, v) {
+		errs = append(errs, fmt.Errorf("tui.if_exists %q: want one of %s", v, strings.Join(TUIIfExists, ", ")))
+	}
+	if _, err := exclude.New(strings.Fields(c.TUI.Exclude)); err != nil {
+		errs = append(errs, fmt.Errorf("tui.exclude: %w", err))
+	}
+	if c.Sync.MaxDeletes < -1 {
+		errs = append(errs, fmt.Errorf("sync.max_deletes must be -1 (no limit) or more"))
 	}
 	t := c.Transfer
 	if t.ChunkSize < 1<<20 {

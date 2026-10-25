@@ -204,12 +204,13 @@ func (m *model) wheel(msg tea.MouseMsg, d int) tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-var fkeys = []tea.KeyType{tea.KeyF1, tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6, tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10}
+var fkeys = []tea.KeyType{tea.KeyF1, tea.KeyF2, tea.KeyF3, tea.KeyF4, tea.KeyF5, tea.KeyF6, tea.KeyF7, tea.KeyF8, tea.KeyF9, tea.KeyF10, tea.KeyF11}
 
 // keyBarClick presses the key whose cell is at column x (see keyBar).
 func (m *model) keyBarClick(x int) tea.Cmd {
-	cell := max(4, m.width/len(fkeys))
-	if k := x / cell; k < len(fkeys) {
+	n := barKeys(m.width)
+	cell := max(4, m.width/n)
+	if k := x / cell; k < n {
 		_, cmd := m.Update(tea.KeyMsg{Type: fkeys[k]})
 		return cmd
 	}
@@ -248,8 +249,9 @@ func (m *model) dialogClick(msg tea.MouseMsg) tea.Cmd {
 var hintKeys = map[string]tea.KeyMsg{
 	"Enter": {Type: tea.KeyEnter}, "Tab": {Type: tea.KeyTab}, "Esc": {Type: tea.KeyEsc},
 	"^A": {Type: tea.KeyCtrlA}, "^O": {Type: tea.KeyCtrlO}, "^K": {Type: tea.KeyCtrlK}, "^Z": {Type: tea.KeyCtrlZ},
-	"^N": {Type: tea.KeyCtrlN},
-	"y":  {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
+	"^N": {Type: tea.KeyCtrlN}, "^S": {Type: tea.KeyCtrlS},
+	"d": {Type: tea.KeyRunes, Runes: []rune("d")}, "↑↓": {Type: tea.KeyDown},
+	"y": {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
 	"l": {Type: tea.KeyRunes, Runes: []rune("l")},
 }
 

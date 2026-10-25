@@ -3,7 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -233,8 +235,8 @@ func (h *harness) key(keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyDelete}
 		case "f4":
 			msg = tea.KeyMsg{Type: tea.KeyF4}
-		case "f2", "f3", "f5", "f6", "f7", "f8", "f9":
-			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"f2": tea.KeyF2, "f3": tea.KeyF3, "f5": tea.KeyF5, "f6": tea.KeyF6, "f7": tea.KeyF7, "f8": tea.KeyF8, "f9": tea.KeyF9}[k]}
+		case "f2", "f3", "f5", "f6", "f7", "f8", "f9", "f11":
+			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"f2": tea.KeyF2, "f3": tea.KeyF3, "f5": tea.KeyF5, "f6": tea.KeyF6, "f7": tea.KeyF7, "f8": tea.KeyF8, "f9": tea.KeyF9, "f11": tea.KeyF11}[k]}
 		default:
 			msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(k)}
 		}
@@ -301,6 +303,51 @@ func TestNavigation(t *testing.T) {
 	}
 	if !strings.Contains(h.m.View(), "nodes 2/2 online") {
 		t.Error("header missing node count")
+	}
+}
+
+// On this host, Backspace at the top of the shared folder goes on up
+// into the local root (/), at the folder above; at the top of that it
+// goes to the node list. The roots list is there only when the node is
+// opened from the node list.
+func TestUpFromSharedIntoLocal(t *testing.T) {
+	h := newHarness(t)
+	h.f.nodes[0].Roots = []api.Root{{ID: "data", Path: "/home/bmr", Writable: true}, {ID: "local", Path: "/", Writable: true, Local: true}}
+	h.f.files["master:local/home"] = []api.Entry{{Name: "alice", Type: api.TypeDir}, {Name: "bmr", Type: api.TypeDir}}
+	h.f.files["master:local/."] = []api.Entry{{Name: "etc", Type: api.TypeDir}, {Name: "home", Type: api.TypeDir}}
+	h.run(h.m.loadNodes())
+	p := h.m.panes[0]
+	h.open("master", "data")
+	if p.level != levelDir || p.root != "data" {
+		t.Fatalf("start: %d %s", p.level, p.root)
+	}
+	h.key("backspace")
+	if p.level != levelDir || p.root != "local" || p.path != "home" || h.cursorName(0) != "bmr" {
+		t.Fatalf("up from the shared folder: level %d %s:%s cursor %q", p.level, p.root, p.path, h.cursorName(0))
+	}
+	h.key("backspace")
+	if p.root != "local" || p.path != "." || h.cursorName(0) != "home" {
+		t.Fatalf("up to /: %s:%s cursor %q", p.root, p.path, h.cursorName(0))
+	}
+	h.key("backspace")
+	if p.level != levelNodes || h.cursorName(0) != "master" {
+		t.Fatalf("up from /: level %d cursor %q", p.level, h.cursorName(0))
+	}
+	// Enter on ../ goes the same way.
+	h.open("master", "data")
+	p.cursorTo("..")
+	h.key("enter")
+	if p.root != "local" || p.path != "home" {
+		t.Fatalf("../ at the top: %s:%s", p.root, p.path)
+	}
+	// A shared folder outside the local root keeps the roots list.
+	h.f.nodes[0].Roots[1].Path = "/srv"
+	h.run(h.m.loadNodes())
+	h.key("f2")
+	h.open("master", "data")
+	h.key("backspace")
+	if p.level != levelRoots {
+		t.Fatalf("shared folder outside local: level %d", p.level)
 	}
 }
 
@@ -1152,5 +1199,141 @@ func TestEditorRefuses(t *testing.T) {
 	h.key("ctrl+e")
 	if _, ok := h.m.dlg.(*textDialog); !ok {
 		t.Fatalf("Ctrl+E in the help opened %T", h.m.dlg)
+	}
+}
+
+// settingsAt puts the settings dialog's cursor on key.
+func settingsAt(t *testing.T, d *settingsDialog, key string) {
+	t.Helper()
+	for i, r := range d.rows {
+		if r.key == key {
+			d.focus = i
+			return
+		}
+	}
+	t.Fatalf("no setting %s", key)
+}
+
+// F11 changes settings in the config file: only what changed is written,
+// the rest of the file stays; the TUI's own settings apply at once.
+func TestSettingsDialog(t *testing.T) {
+	h := newHarness(t)
+	p := filepath.Join(t.TempDir(), "fkbr.yaml")
+	os.WriteFile(p, []byte("# mine\nssh: [web01]\ntransfer:\n  max_jobs: 3\n"), 0o600)
+	h.m.prefs = prefs{configPath: p, overridden: map[string]string{"node_id": "-node"}, mouse: true}
+	h.key("f11")
+	d, ok := h.m.dlg.(*settingsDialog)
+	if !ok {
+		t.Fatalf("F11 opened %T", h.m.dlg)
+	}
+	view := h.m.View()
+	for _, want := range []string{"Colours", "auto  (default)", "-node wins this run"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q", want)
+		}
+	}
+	settingsAt(t, d, "ssh")
+	if !strings.Contains(d.shown(d.focus), "web01") {
+		t.Errorf("hosts row: %q", d.shown(d.focus))
+	}
+	if !strings.Contains(h.m.View(), "Hosts") { // the cursor scrolls into view
+		t.Error("the last row is not scrolled into view")
+	}
+	settingsAt(t, d, "transfer.max_jobs")
+	if d.shown(d.focus) != "3" {
+		t.Errorf("jobs at once from the file: %q", d.shown(d.focus))
+	}
+	settingsAt(t, d, "tui.if_exists")
+	h.key("right", "right") // skip -> overwrite-if-older -> overwrite
+	settingsAt(t, d, "tui.compress")
+	h.key("enter")
+	settingsAt(t, d, "tui.exclude")
+	h.key("enter", ".git *.tmp", "enter")
+	settingsAt(t, d, "transfer.chunk_size")
+	h.key("enter", "1K", "enter")
+	if d.edit == nil || !strings.Contains(d.err, "at least 1MiB") {
+		t.Fatalf("a chunk of 1K accepted: edit %v err %q", d.edit != nil, d.err)
+	}
+	h.key("esc")
+	settingsAt(t, d, "transfer.max_jobs")
+	h.key("d") // back to the default: the key goes
+	settingsAt(t, d, "roles")
+	h.key("enter", "web, edge", "enter")
+	h.key("ctrl+s")
+	if h.m.dlg != nil {
+		t.Fatalf("still open after saving: %q", d.err)
+	}
+	b, _ := os.ReadFile(p)
+	got := string(b)
+	for _, want := range []string{"# mine", "ssh: [web01]", "if_exists: overwrite", "compress: true", "exclude: .git *.tmp", "roles: [web, edge]"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file lacks %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "max_jobs") || strings.Contains(got, "chunk_size") {
+		t.Errorf("file:\n%s", got)
+	}
+	if !strings.Contains(h.m.status, "settings saved") || !strings.Contains(h.m.status, "2 of them apply when") {
+		t.Errorf("status %q", h.m.status)
+	}
+	// The copy dialog starts from them now.
+	h.open("master", "data")
+	h.m.panes[0].cursorTo("a.txt")
+	h.key("f5")
+	td, ok := h.m.dlg.(*transferDialog)
+	if !ok || conflictPolicies[td.conflict] != api.ConflictOverwrite || !td.compress || td.inputs[3].Value() != ".git *.tmp" {
+		t.Fatalf("copy dialog: %T %+v", h.m.dlg, td)
+	}
+}
+
+// Esc with changes asks; n leaves the file as it was. A file with a
+// mistake is named, and nothing is written.
+func TestSettingsDialogAsks(t *testing.T) {
+	h := newHarness(t)
+	p := filepath.Join(t.TempDir(), "fkbr.yaml")
+	h.m.prefs = prefs{configPath: p, mouse: true}
+	h.key("f11")
+	d := h.m.dlg.(*settingsDialog)
+	settingsAt(t, d, "tui.mouse")
+	h.key("enter", "esc")
+	if !d.asking || !strings.Contains(h.m.View(), "Save the changes?") {
+		t.Fatal("Esc with a change did not ask")
+	}
+	h.key("n")
+	if h.m.dlg != nil {
+		t.Fatal("n did not close")
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Fatal("a file was made without saving")
+	}
+	// Saving the share with ssh hosts in the file is refused.
+	os.WriteFile(p, []byte("ssh: [web01]\n"), 0o600)
+	share := t.TempDir()
+	h.key("f11")
+	d = h.m.dlg.(*settingsDialog)
+	settingsAt(t, d, "nfs_root")
+	h.key("enter", share, "enter", "ctrl+s")
+	if h.m.dlg != d || !strings.Contains(d.err, "not saved") {
+		t.Fatalf("share and ssh hosts saved together: %q", d.err)
+	}
+	if b, _ := os.ReadFile(p); string(b) != "ssh: [web01]\n" {
+		t.Errorf("file changed: %q", b)
+	}
+}
+
+// A click puts the cursor on a setting; a second click on a choice
+// changes it.
+func TestSettingsClick(t *testing.T) {
+	h := newHarness(t)
+	h.m.prefs = prefs{configPath: filepath.Join(t.TempDir(), "x.yaml"), mouse: true}
+	h.key("f11")
+	d := h.m.dlg.(*settingsDialog)
+	line := "  Compress (zstd)            off  (default)"
+	if !d.focusLine(line) || d.rows[d.focus].key != "tui.compress" || d.values[d.focus] != "" {
+		t.Fatalf("first click: focus %s value %q", d.rows[d.focus].key, d.values[d.focus])
+	}
+	d.focusLine(line)
+	if d.values[d.focus] != "on" {
+		t.Errorf("second click: %q", d.values[d.focus])
 	}
 }

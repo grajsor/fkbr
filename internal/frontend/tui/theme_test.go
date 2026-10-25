@@ -127,7 +127,7 @@ func paintsEveryCell(t *testing.T, p termenv.Profile) {
 		h.key("f9")
 		check("jobs focus")
 		h.key("esc")
-		for _, k := range []string{"f1", "f5", "f4", "f7", "f8"} {
+		for _, k := range []string{"f1", "f5", "f4", "f7", "f8", "f11"} {
 			h.key(k)
 			if h.m.dlg == nil {
 				t.Fatalf("%s opened no dialog", k)

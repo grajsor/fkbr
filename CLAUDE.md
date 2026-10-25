@@ -20,12 +20,14 @@ copyright "The Author".
 
 - **Nothing installed, ever.** No package, install script, systemd unit,
   system user, or files in `/etc`, `/var` or `$HOME`. Ship one binary;
-  config is optional (flags, `$FKBR_CONFIG`, or `fkbr.yaml` beside the
+  config is optional (flags, `$FKBR_CONFIG`, or `fkbr.conf` beside the
   binary). "Very incognito". The ssh hosts linked from the TUI (F7) go
   in the config file's `ssh:` list (`config.WritePath`): `-config`,
-  `$FKBR_CONFIG`, `fkbr.yaml` beside the binary if it exists, and only if
+  `$FKBR_CONFIG`, `fkbr.conf` beside the binary if it exists (`fkbr.yaml`,
+  its older name, too), and only if
   none of those exists, `~/.fkbr.conf` (the owner's call; the one file
-  fkbr may put in `$HOME`, written only when a host is linked).
+  fkbr may put in `$HOME`, written only when a host is linked or
+  settings are saved with F11).
 - **Swarm, no master/slave.** `cd /dir && fkbr /mnt/nfs/somedir` registers
   the host (named after its short hostname) and shares the current
   directory. Without a share, `fkbr` runs this host on its own (an ssh
@@ -293,6 +295,18 @@ the panel or dialog background (pad with a styled fill, not lipgloss's
 own padding). Without colours, `styles.highlight` writes reverse video.
 
 - Names: `name/` dirs, `name@` symlinks, `../` up row (`pane.formatRow`).
+- F11 (or `o`): settings (`settings.go`), rows of the config file's
+  common keys (`settingRows`: load/save per key); `config.SaveSettings`
+  sets only the keys changed (yaml.Node, comments kept, a default value
+  removes its key) and refuses what `CheckSettings` would not start
+  with. TUI keys (`tui:`) apply at once (`applyPrefs`), unless a flag
+  set them (`Options.Overridden`, shown in the row); the rest at the
+  next start. The key bar shows 11 keys where each gets 4 cells
+  (`barKeys`).
+- Panes start in this host's shared dir and `local` (or another node).
+  Backspace at the top of the shared dir goes on up into root `local` at
+  the parent (`upIntoLocal`), at the top of `local` to the node list; the
+  roots level is only reached from the node list.
 - Liveness: every 30 s the header name slides out, the version runs
   through as a ticker and slides back (`anim.go`); a yellow spinner
   replaces a corner of the jobs panel (`withCorner`). The owner rejected a

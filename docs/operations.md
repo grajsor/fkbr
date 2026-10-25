@@ -10,18 +10,18 @@ Tested on CentOS 7, Rocky 8, 9 and 10, and Debian 12.
 
 | Where | What | Lifetime |
 |---|---|---|
-| wherever you copied it | the binary (any name) and optionally `fkbr.yaml` beside it | yours |
+| wherever you copied it | the binary (any name) and optionally `fkbr.conf` beside it | yours |
 | `/tmp/fkbr-<uid>-<node>/` | worker lock and API socket; `node.log` when the TUI runs the node | lock and socket removed on clean exit; the log stays (at most 2 × 1 MiB) |
 | `<root>/.fkbr-tmp/` in a destination root | staging for a transfer in progress | removed when the transfer ends; leftovers of a node that was down are removed at its next prune |
 | the share directory you pass | node registry; finished job records, sync plans and failed requests | records pruned after `keep_done` (1h), see below |
 | `/tmp/fkbr-<uid>-<node>-ssh/` | without a share, or with `ssh:`: the same as the share above, private to you | as above |
 | `/tmp/fkbr-<uid>-<node>-link/` | on a host linked over ssh: lock and socket (the data it sends stays in memory) | removed on a clean exit |
-| `~/.fkbr.conf` | only if there is no other config file: the ssh hosts you linked from the TUI (F7) | until you unlink them (F8) or delete it |
+| `~/.fkbr.conf` | only if there is no other config file: the settings you saved (F11) and the ssh hosts you linked (F7) in the TUI | until you delete it |
 
 Nothing is written to `/etc` or `/var`. The one file fkbr may put in your
-home directory is `~/.fkbr.conf`: only when you link a host from the TUI
-and neither `$FKBR_CONFIG` nor `fkbr.yaml` beside the binary exists. fkbr
-reads nothing else from there.
+home directory is `~/.fkbr.conf`: only when you save settings (F11) or
+link a host (F7) in the TUI, and neither `$FKBR_CONFIG` nor `fkbr.conf`
+beside the binary exists. fkbr reads nothing else from there.
 
 **Permissions on the share.** Hosts usually run fkbr as different users,
 and every node creates and deletes entries in the others' directories. So
@@ -34,8 +34,8 @@ with tighter permissions). Shares made by versions before this used
 `fkbr SHARE check` lists directories that are still closed and who owns
 them.
 
-**Keep the binary and `fkbr.yaml` on local disk**, not on the share.
-fkbr reads `fkbr.yaml` from beside the binary when it starts, so anyone who
+**Keep the binary and `fkbr.conf` on local disk**, not on the share.
+fkbr reads `fkbr.conf` from beside the binary when it starts, so anyone who
 can write where they are could change either one and have it run as you
 on every host that starts it.
 
@@ -157,11 +157,15 @@ name. Closing the terminal (an ssh session that drops) stops a TUI's node
 cleanly, like quitting.
 
 **Config file (optional).** The same settings can live in a YAML file:
-`-config FILE`, else `$FKBR_CONFIG`, else `fkbr.yaml` next to the binary
-if it is there, else `~/.fkbr.conf` if that is there. See
+`-config FILE`, else `$FKBR_CONFIG`, else `fkbr.conf` next to the binary
+if it is there, else `~/.fkbr.conf` if that is there. The TUI's settings
+dialog (F11) changes the common ones there: colours, mouse, what the copy
+dialogs start with (`tui:`), this node's name, share, roles, who may
+write to it, root `local`, and the transfer limits. See
 `examples/config.yaml` for every option, including tuning. Arguments and
-flags override the file; a share given on the command line wins over the
-file's `ssh:` hosts, and a file may not name both `nfs_root` and `ssh`.
+flags override the file (F11 says when one does); a share given on the
+command line wins over the file's `ssh:` hosts, and a file may not name
+both `nfs_root` and `ssh`.
 
 Check a host before relying on it:
 
@@ -277,10 +281,11 @@ shares the directory you started in with it, as on a share.
   is in root `local`; if the shared directory has a folder `local`
   (`cd /usr`), `local/x` is refused and `files/local/x` names the folder.
 - **Which file:** the config file fkbr reads (`-config`, else
-  `$FKBR_CONFIG`, else `fkbr.yaml` beside the binary if it is there),
+  `$FKBR_CONFIG`, else `fkbr.conf` beside the binary if it is there),
   else `~/.fkbr.conf`, created with mode 0600. fkbr changes only its
-  `ssh:` list and keeps the rest, comments and mode included, and never
-  writes through a symlink.
+  `ssh:` list (F7, F8) and the keys you change in F11, and keeps the
+  rest, comments and mode included; a value set back to its default is
+  removed. It never writes through a symlink.
 
 ## Commands
 
@@ -334,10 +339,14 @@ off.
 
 ## TUI
 
-Each pane starts at the node list. Enter opens a node's shared directory,
-Backspace goes back up and F2 jumps to the node list, so either pane can
-show any node. Nodes with several roots show a roots level in between. F1 lists all
-keys.
+The left pane starts in the directory you started in (root `files`), the
+right one on another node, or in `/` (root `local`) when there is none.
+Enter opens a folder, or a node's shared directory from the node list.
+Backspace goes back up: from the top of this host's shared directory on
+up into `/` as one tree (the title changes to `local`), and from there to
+the node list. F2 jumps to the node list, so either pane can show any
+node; a node with several roots shows them when opened there. F1 lists
+all keys.
 
 | Key | Action |
 |---|---|
@@ -348,6 +357,7 @@ keys.
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
 | F9 | jobs panel with progress and ETA: Enter for details (time elapsed, each node's state, time-stamped notes), `c` cancel, `u` catch up |
 | F10, `q` | quit; if this TUI is the node and it has running jobs, it asks first (its part pauses and resumes the next time) |
+| F11, `o` | settings, kept in the config file: Enter or ← → changes one, `d` sets the default, Ctrl+S saves. The TUI's own apply at once, the node's when it starts again (`o` where the terminal takes F11 for full screen) |
 | F1, `?` | help: every key, how sync works, and this node's log file |
 
 The colours fill the screen in dark green, like Norton Commander's blue.

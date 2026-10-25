@@ -7,7 +7,10 @@ Copy and sync files between machines that share an NFS mount. One file, nothing 
 `fkbr-linux-amd64` for x86-64, `fkbr-linux-arm64` for ARM. Works on almost any Linux, old or new.
 
 **Where do I put it?**
-On each machine's own disk, not on the share: anyone who can write to the share could swap it. If you use a config file (`fkbr.yaml`), keep it there too.
+On each machine's own disk, not on the share: anyone who can write to the share could swap it. If you keep a config file beside it (`fkbr.conf`), that goes there too.
+
+**How do I change its settings?**
+Press F11 in it: colours, mouse, what copies start with, the machine's name and share, limits. They are kept in `~/.fkbr.conf`; a `fkbr.conf` beside fkbr, if you make one, is used instead.
 
 **How do I start?**
 On every machine:
@@ -18,7 +21,7 @@ cd /dir/to/share
 This opens the TUI. The machine joins under its hostname and shares the folder you are in.
 
 **No NFS, only ssh?**
-Start it on one machine with the others listed: `./fkbr ssh:web01,db01:/data`. Or just `./fkbr`, then F2 and F7 to add a machine; it is kept in the config file for next time (`fkbr.yaml` beside fkbr if you have one, else `~/.fkbr.conf`). They need the fkbr file too, and ssh must log in without a password (a key). See `operations.md`, "Over ssh".
+Start it on one machine with the others listed: `./fkbr ssh:web01,db01:/data`. Or just `./fkbr`, then F2 and F7 to add a machine; it is kept in the config file for next time (`fkbr.conf` beside fkbr if you have one, else `~/.fkbr.conf`). They need the fkbr file too, and ssh must log in without a password (a key). See `operations.md`, "Over ssh".
 
 **No share at all?**
 `./fkbr` alone opens the TUI here: this folder on the left, `/` on the right. Nobody else sees `/`.

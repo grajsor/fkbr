@@ -45,6 +45,15 @@ type Options struct {
 	// StartInDirs opens the panes in this node's directory and its local
 	// root (or another node) instead of the node list.
 	StartInDirs bool
+	// ConfigPath is the config file the settings dialog (F11) edits;
+	// Overridden its keys a command-line flag sets this run (key -> flag).
+	ConfigPath string
+	Overridden map[string]string
+	// IfExists, Compress and Exclude are what F5, F6 and F4 start with
+	// (config tui.if_exists, tui.compress, tui.exclude).
+	IfExists string
+	Compress bool
+	Exclude  string
 }
 
 // Run starts the TUI and blocks until the user quits.
@@ -53,6 +62,8 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 		return err
 	}
 	m := newModel(ctx, c)
+	m.prefs = prefsFrom(opts)
+	m.lastExclude = m.prefs.exclude
 	m.runsNode = opts.RunsNode
 	m.startPanes = opts.StartInDirs
 	m.logPath = opts.LogPath
@@ -100,6 +111,8 @@ type model struct {
 	active      int
 	// lastExclude prefills the next copy or sync dialog's exclude field.
 	lastExclude string
+	// prefs are the TUI's own settings (F11, settings.go).
+	prefs prefs
 	// lastClick, dlgBox and drag serve the mouse (mouse.go, scrollbar.go);
 	// markOn and markRow a right-button drag that marks rows.
 	lastClick click
@@ -638,6 +651,8 @@ func (m *model) key(msg tea.KeyMsg) tea.Cmd {
 		if len(m.jobOrder) > 0 {
 			m.jobsFocus = true
 		}
+	case "f11", "o":
+		m.dlg = newSettingsDialog(m)
 	}
 	return nil
 }
@@ -735,8 +750,22 @@ func (m *model) up(i int) tea.Cmd {
 			return nil
 		}
 		if p.path == "." {
+			n := m.nodes[p.node]
+			if local, dir, base, ok := upIntoLocal(n, p.root); ok {
+				// This host's shared folder is a folder of its local root:
+				// on up there, as if it were one tree.
+				p.root, p.path, p.want = local, dir, base
+				return m.load(i, 0)
+			}
+			if r := rootByID(n, p.root); r != nil && r.Local {
+				keep := p.node // the top of /: the roots list is for F2
+				p.level, p.node, p.root = levelNodes, "", ""
+				p.setNodes(m.sortedNodes(), m.links)
+				p.cursorTo(keep)
+				return nil
+			}
 			p.level, p.want = levelRoots, p.root
-			p.setRoots(m.nodes[p.node])
+			p.setRoots(n)
 			return nil
 		}
 		p.want = path.Base(p.path)
@@ -747,6 +776,36 @@ func (m *model) up(i int) tea.Cmd {
 		p.level, p.node = levelNodes, ""
 		p.setNodes(m.sortedNodes(), m.links)
 		p.cursorTo(keep)
+	}
+	return nil
+}
+
+// upIntoLocal says where Backspace at the top of root id of node n goes
+// when n is this host and the root lies in its local root: that root's
+// ID, the folder above, and the name to put the cursor on.
+func upIntoLocal(n api.Node, id string) (local, dir, base string, ok bool) {
+	cur := rootByID(n, id)
+	if !n.Self || cur == nil || cur.Local || cur.Path == "" {
+		return "", "", "", false
+	}
+	for _, r := range n.Roots {
+		if !r.Local || r.Path == "" {
+			continue
+		}
+		rel, inside := strings.CutPrefix(cur.Path, strings.TrimSuffix(r.Path, "/")+"/")
+		if !inside || rel == "" {
+			continue
+		}
+		return r.ID, path.Dir(rel), path.Base(rel), true
+	}
+	return "", "", "", false
+}
+
+func rootByID(n api.Node, id string) *api.Root {
+	for i := range n.Roots {
+		if n.Roots[i].ID == id {
+			return &n.Roots[i]
+		}
 	}
 	return nil
 }
@@ -766,6 +825,7 @@ func (m *model) openTransfer(move bool) {
 	}
 	dNodes, dRoot = m.destDefault(dNodes, dRoot)
 	d := newTransferDialog(move, src, names, dNodes, dRoot, dDir, m.lastExclude)
+	d.conflict, d.compress = m.prefs.ifExists, m.prefs.compress
 	d.dest = m.destList()
 	m.dlg = d
 }
@@ -782,6 +842,7 @@ func (m *model) openSync() {
 	}
 	dNodes, dRoot = m.destDefault(dNodes, dRoot)
 	d := newSyncDialog(src, dNodes, dRoot, dDir, m.lastExclude)
+	d.compress = m.prefs.compress
 	d.dest = m.destList()
 	// Only an explicit selection counts: with none, the whole directory.
 	for _, r := range src.rows {
@@ -1402,11 +1463,21 @@ func (m *model) renderJobs(h int) string {
 	return m.st.withCorner(box, m.jobsFocus, spinChar(m.spin))
 }
 
+// barKeys is how many keys the key bar shows: F11 only where all eleven
+// get a cell of 4 or more.
+func barKeys(width int) int {
+	if width/11 >= 4 {
+		return 11
+	}
+	return 10
+}
+
 func (m *model) keyBar() string {
 	keys := []struct{ n, label string }{
 		{"1", "Help"}, {"2", "Nodes"}, {"3", "View"}, {"4", "Sync"}, {"5", "Copy"},
-		{"6", "Move"}, {"7", "Mkdir"}, {"8", "Delete"}, {"9", "Jobs"}, {"10", "Quit"},
+		{"6", "Move"}, {"7", "Mkdir"}, {"8", "Delete"}, {"9", "Jobs"}, {"10", "Quit"}, {"11", "Setup"},
 	}
+	keys = keys[:barKeys(m.width)]
 	cell := max(4, m.width/len(keys))
 	var b strings.Builder
 	for _, k := range keys {

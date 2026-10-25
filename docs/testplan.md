@@ -175,7 +175,7 @@ that: from the share onto a node's host, and from another local user.
 | Node names and IDs in requests and job records were not checked, so a forged `../` reached outside fkbr's folder on the share (reply files, ack folders) | Checked when read; bad job records are pruned | `TestForgedNamesStayOnTheShare` |
 | A sync scan probed (wrote a file in) the folder it was asked for before checking the path: `../x`, or a symlink out of the root, led it elsewhere | Path checked first; probes only in a folder inside the root | `TestScanProbeStaysInRoot` |
 | A huge file on the share (a request, job record or status) was read whole and could make a node run out of memory | Files over 64 MiB are refused | `TestShareReadsAreCapped` |
-| A binary or `fkbr.yaml` kept on the share could be changed by anyone who can write there | Docs: keep both on local disk (operations.md, FAQ) | – |
+| A binary or `fkbr.conf` kept on the share could be changed by anyone who can write there | Docs: keep both on local disk (operations.md, FAQ) | – |
 
 Each test fails with its fix taken out.
 
@@ -262,7 +262,7 @@ ssh hosts linked from the TUI (`operations.md`, "Without a share").
 | A sync from or into the local root | Refused for now | auto (`TestLocalRootUnseenByPeers`) |
 | `check` with the local root `/` | Reads it, writes nothing there | manual (cloud session) |
 | Hosts kept in the config file: added twice, removed, the owner's comments and keys, a symlink in its place | Each host once; the rest of the file and its mode kept (a new file 0600); never written through the symlink | auto (`TestSavedHosts`) |
-| Which config file: `-config`, `$FKBR_CONFIG`, `fkbr.yaml` beside the binary, `~/.fkbr.conf` | Read and written in that order; `~/.fkbr.conf` only when none of the others is there | auto (`TestConfigPathOrder`) |
+| Which config file: `-config`, `$FKBR_CONFIG`, `fkbr.conf` beside the binary (or `fkbr.yaml`, its older name), `~/.fkbr.conf` | Read and written in that order; `~/.fkbr.conf` only when none of the others is there | auto (`TestConfigPathOrder`) |
 | No share: a host linked while the node runs, saved, linked again at the next start, unlinked | Online, saved; back on restart; leaves and is forgotten | auto (`TestSSHHostsLinkedAtRuntime`) |
 | TUI: panes open in this directory and another node or the local root; a host not up yet shows with why; F7 links, F8 unlinks; on a share F7/F8 in the node list do nothing new | As stated | auto (`TestStartPanesAndLinkRows`, `TestLinkAndUnlinkFromTheNodeList`, `TestNoLinkKeysOnAShare`) |
 | The TUI on a real terminal: start without a share, F7 a real host, quit and start again | As above | **todo** (lab) |
@@ -295,6 +295,8 @@ Found by a code review of the whole ssh branch (2026-10-23):
 | The TUI asked a node on a share for its links on every node list refresh | Asked once | `TestNotHomeAskedOnce` |
 | Two `firstLine` helpers that differed on long lines | One | (none) |
 | A pane listing a node's roots (`files`, `local`) put its cursor back on the top row at every node refresh, a few seconds apart (found by the owner, 2026-10-25) | The cursor stays on its row | `TestRootsRefreshKeepsCursor` |
+| Backspace at the top of this host's shared folder showed a list of two roots (asked by the owner: one tree) | It goes on up into root `local` at the folder above, and from `/` to the node list; a shared folder outside `local` keeps the roots list | `TestUpFromSharedIntoLocal` |
+| Settings (F11, asked by the owner): the config file kept by the TUI | Only the keys changed are written, comments, the ssh list and the mode kept; a default removes its key; a value or a file the node could not start with is refused and named; Esc with changes asks; the TUI's own apply at once, unless a flag set them | `TestSaveSettings`, `TestSaveSettingsRefused`, `TestSettingsDialog`, `TestSettingsDialogAsks`, `TestSettingsClick`, `TestThemePaintsEveryCell` |
 
 ## 13. Cloud test run (2026-10-24)
 

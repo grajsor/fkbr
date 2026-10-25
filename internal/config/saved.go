@@ -96,12 +96,7 @@ func editSaved(p string, edit func([]string) []string) error {
 		return err
 	}
 	if doc == nil {
-		head := product.Expand("{name} config; ssh lists the hosts linked from the TUI (F7 in a node list adds one, F8 removes it)")
-		// A file of comments only reads as empty: keep them.
-		if b, err := os.ReadFile(p); err == nil && len(bytes.TrimSpace(b)) > 0 {
-			head = string(bytes.TrimSpace(b))
-		}
-		doc = &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, HeadComment: head}}}
+		doc = newSaved(p)
 	}
 	top := doc.Content[0]
 	var seq *yaml.Node
@@ -123,6 +118,22 @@ func editSaved(p string, edit func([]string) []string) error {
 	for _, h := range hosts {
 		seq.Content = append(seq.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: h})
 	}
+	return writeSaved(p, doc)
+}
+
+// newSaved is the document of a config file not there yet (or of
+// comments only, which are kept).
+func newSaved(p string) *yaml.Node {
+	head := product.Expand("{name} config: F11 in the TUI changes settings here, F7 and F8 in a node list the ssh hosts")
+	if b, err := os.ReadFile(p); err == nil && len(bytes.TrimSpace(b)) > 0 {
+		head = string(bytes.TrimSpace(b))
+	}
+	return &yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode, HeadComment: head}}}
+}
+
+// writeSaved writes doc to the config file at p, keeping its mode; a new
+// file gets 0600. Not through a symlink planted in its place.
+func writeSaved(p string, doc *yaml.Node) error {
 	var buf bytes.Buffer
 	enc := yaml.NewEncoder(&buf)
 	enc.SetIndent(2)
@@ -130,7 +141,6 @@ func editSaved(p string, edit func([]string) []string) error {
 		return err
 	}
 	enc.Close()
-	// Not through a symlink planted in its place.
 	mode := fs.FileMode(0o600)
 	if fi, err := os.Lstat(p); err == nil {
 		if fi.Mode()&fs.ModeSymlink != 0 {
