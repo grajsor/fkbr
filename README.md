@@ -82,25 +82,27 @@ doing, updated live.
 One self-contained binary per architecture, for any Linux with kernel
 3.10 or newer (CentOS 7 and up). No libraries, nothing to install:
 
-- [fkbr-linux-amd64.zip](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-amd64.zip):
-  x86-64
-- [fkbr-linux-arm64.zip](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-arm64.zip):
-  ARM64, such as a Raspberry Pi 3, 4 or 5 with a 64-bit OS, and newer
+- **x86-64:**
+  [fkbr-linux-amd64.tar.gz](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-amd64.tar.gz)
+  or [.zip](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-amd64.zip)
+- **ARM64**, such as a Raspberry Pi 3, 4 or 5 with a 64-bit OS, and newer:
+  [fkbr-linux-arm64.tar.gz](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-arm64.tar.gz)
+  or [.zip](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-arm64.zip)
 
 Checksums and older versions are on the
 [releases page](https://github.com/grajsor/fkbr/releases). Unpack it
 where it should live:
 
 ```
-unzip fkbr-linux-amd64.zip    # fkbr, LICENSE, README.md
+tar -xzf fkbr-linux-amd64.tar.gz    # fkbr, LICENSE, README.md
 ```
 
 Or build it yourself with Go 1.26 or newer. `make` cross-compiles both
-architectures, `make release` also makes the zips:
+architectures, `make release` also packs them:
 
 ```
 make            # dist/fkbr-linux-amd64 and dist/fkbr-linux-arm64
-make release    # dist/fkbr-linux-amd64.zip and dist/fkbr-linux-arm64.zip
+make release    # dist/fkbr-linux-{amd64,arm64}.tar.gz and .zip
 ```
 
 ## Quick start

@@ -31,15 +31,16 @@ dist: build
 	@file $(addprefix dist/$(NAME)-linux-,$(ARCHES))
 	@cat dist/SHA256SUMS
 
-# Downloads: dist/$(NAME)-linux-<arch>.zip, each holding the binary as
-# $(NAME) with LICENSE and README.md. The arm64 build is plain ARMv8.0
+# Downloads: dist/$(NAME)-linux-<arch>.tar.gz and .zip (minimal RHEL has
+# no unzip), each holding the binary as $(NAME) with LICENSE and README.md. The arm64 build is plain ARMv8.0
 # (GOARM64 default): it runs on a Raspberry Pi 3, 4 or 5 with a 64-bit
 # OS and anything newer.
 release: build
-	$(foreach a,$(ARCHES),rm -rf dist/zip-$(a) dist/$(NAME)-linux-$(a).zip && mkdir dist/zip-$(a) && \
+	$(foreach a,$(ARCHES),rm -rf dist/zip-$(a) dist/$(NAME)-linux-$(a).zip dist/$(NAME)-linux-$(a).tar.gz && mkdir dist/zip-$(a) && \
 		cp dist/$(NAME)-linux-$(a) dist/zip-$(a)/$(NAME) && cp LICENSE README.md dist/zip-$(a)/ && \
-		(cd dist/zip-$(a) && zip -q -X ../$(NAME)-linux-$(a).zip $(NAME) LICENSE README.md) && rm -r dist/zip-$(a) &&) true
-	cd dist && sha256sum $(addprefix $(NAME)-linux-,$(ARCHES)) $(addsuffix .zip,$(addprefix $(NAME)-linux-,$(ARCHES))) > SHA256SUMS
+		(cd dist/zip-$(a) && zip -q -X ../$(NAME)-linux-$(a).zip $(NAME) LICENSE README.md && \
+		tar --owner=0 --group=0 -czf ../$(NAME)-linux-$(a).tar.gz $(NAME) LICENSE README.md) && rm -r dist/zip-$(a) &&) true
+	cd dist && sha256sum $(foreach a,$(ARCHES),$(NAME)-linux-$(a) $(NAME)-linux-$(a).tar.gz $(NAME)-linux-$(a).zip) > SHA256SUMS
 
 test:
 	go test ./...

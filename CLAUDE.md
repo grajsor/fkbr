@@ -62,7 +62,7 @@ bubbletea/lipgloss/bubbles v2 (charm.land) would be a port, not a bump.
 
 ```
 make            # both arches + dist/SHA256SUMS, bin/fkbr -> host arch
-make release    # also dist/fkbr-linux-{amd64,arm64}.zip (binary, LICENSE, README)
+make release    # also dist/fkbr-linux-{amd64,arm64}.{tar.gz,zip} (binary, LICENSE, README)
                 # for the GitHub release the README links to (latest/download)
 make vet        # go vet + gofmt check
 go test ./...   # ~90 s on a small arm64 box; engine tests run real nodes on temp dirs
