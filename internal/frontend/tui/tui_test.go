@@ -229,6 +229,8 @@ func (h *harness) key(keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlK}
 		case "ctrl+end":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlEnd}
+		case "ctrl+z", "ctrl+y":
+			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"ctrl+z": tea.KeyCtrlZ, "ctrl+y": tea.KeyCtrlY}[k]}
 		case "ctrl+u":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlU}
 		case "ctrl+s":
@@ -1399,5 +1401,88 @@ func TestEditorLineNumbers(t *testing.T) {
 		if !strings.Contains(view, want) {
 			t.Errorf("view lacks %q", want)
 		}
+	}
+}
+
+// Cut lines go back whole, above the cursor's line, wherever the cursor
+// is in it (the owner: moved into a line, they split it).
+func TestEditorPasteWholeLines(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("one\ntwo\nthree\nfour\nfive\n")
+	h.key("ctrl+e", "ctrl+k", "ctrl+k") // one, two
+	e := h.m.dlg.(*editDialog)
+	h.key("down", "right", "right", "ctrl+u") // in the middle of "four"
+	if got := string(e.text()); got != "three\none\ntwo\nfour\nfive\n" {
+		t.Fatalf("pasted mid-line: %q", got)
+	}
+	if e.row != 3 || e.col != 0 {
+		t.Errorf("cursor %d:%d, want on four", e.row, e.col)
+	}
+}
+
+// Ctrl+Z undoes a step, Ctrl+Y redoes it: a run of typing, of Backspace
+// or of Ctrl+K is one step; undone back to the saved text, the file is
+// not modified; a new edit drops what could be redone.
+func TestEditorUndo(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("one\ntwo\n")
+	h.key("ctrl+e", "end", "a", "b", "c") // typing: one step
+	e := h.m.dlg.(*editDialog)
+	h.key("backspace", "backspace") // a run of Backspace: one step
+	h.key("down", "ctrl+k")         // a cut: one step
+	if got := string(e.text()); got != "onea\n" {
+		t.Fatalf("after the edits: %q", got)
+	}
+	h.key("ctrl+z")
+	if got := string(e.text()); got != "onea\ntwo\n" {
+		t.Fatalf("undo the cut: %q", got)
+	}
+	h.key("ctrl+z")
+	if got := string(e.text()); got != "oneabc\ntwo\n" {
+		t.Fatalf("undo the backspaces: %q", got)
+	}
+	h.key("ctrl+z")
+	if got := string(e.text()); got != "one\ntwo\n" || e.modified {
+		t.Fatalf("undo the typing: %q, modified %v", got, e.modified)
+	}
+	h.key("ctrl+z") // nothing left: no change
+	if got := string(e.text()); got != "one\ntwo\n" {
+		t.Fatalf("undo past the start: %q", got)
+	}
+	h.key("ctrl+y", "ctrl+y")
+	if got := string(e.text()); got != "onea\ntwo\n" || !e.modified {
+		t.Fatalf("redo twice: %q, modified %v", got, e.modified)
+	}
+	h.key("x") // a new edit: nothing to redo
+	typed := string(e.text())
+	h.key("ctrl+y")
+	if got := string(e.text()); got != typed || len(e.redo) != 0 {
+		t.Fatalf("redo after a new edit: %q, was %q", got, typed)
+	}
+	// A key that changes nothing is no step.
+	h.key("ctrl+home", "backspace", "ctrl+z")
+	if got := string(e.text()); got != "onea\ntwo\n" {
+		t.Fatalf("undo after a backspace at the start: %q", got)
+	}
+}
+
+// Undo always gets back to the file as it was opened, also past maxUndo
+// steps: the first stays, later ones are merged.
+func TestEditorUndoToStart(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("start\n")
+	h.key("ctrl+e")
+	e := h.m.dlg.(*editDialog)
+	for i := range maxUndo + 50 { // each a step of its own: typing, then Enter
+		h.key(string(rune('a'+i%26)), "enter")
+	}
+	if len(e.undo) > maxUndo {
+		t.Fatalf("%d steps kept", len(e.undo))
+	}
+	for range 2 * maxUndo {
+		h.key("ctrl+z")
+	}
+	if got := string(e.text()); got != "start\n" || e.modified {
+		t.Fatalf("undone to %d bytes, modified %v", len(got), e.modified)
 	}
 }

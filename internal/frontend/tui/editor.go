@@ -61,7 +61,24 @@ type editDialog struct {
 	// in nano, any other key ends that (cutting starts it afresh).
 	cut    [][]rune
 	cutRun bool
+	// undo and redo hold the text as it was before each edit (Ctrl+Z,
+	// Ctrl+Y); a run of typing, of Backspace, Delete or Ctrl+K is one
+	// step (lastEdit), until another key comes between. savedText is the
+	// text as last read or saved: the same text again is not modified.
+	undo, redo []editState
+	lastEdit   string
+	edits      int // counts changes, to tell whether a key made one
+	savedText  string
 }
+
+type editState struct {
+	lines    [][]rune
+	row, col int
+}
+
+// maxUndo bounds the steps kept; past it the oldest after the first
+// are merged.
+const maxUndo = 500
 
 func newEditDialog(back *textDialog) *editDialog {
 	text := string(back.file.res.Data)
@@ -73,7 +90,43 @@ func newEditDialog(back *textDialog) *editDialog {
 	for _, l := range strings.Split(text, "\n") {
 		d.lines = append(d.lines, []rune(l))
 	}
+	d.savedText = string(d.text())
 	return d
+}
+
+func (d *editDialog) state() editState {
+	lines := make([][]rune, len(d.lines))
+	for i, l := range d.lines {
+		lines[i] = append([]rune(nil), l...)
+	}
+	return editState{lines, d.row, d.col}
+}
+
+func (d *editDialog) restore(st editState) {
+	d.lines, d.row, d.col = st.lines, st.row, st.col
+	d.modified = string(d.text()) != d.savedText
+}
+
+// undoKind is the undo step a key's edit belongs to ("": no edit).
+func undoKind(key string, msg tea.KeyMsg) string {
+	switch key {
+	case "ctrl+k":
+		return "cut"
+	case "ctrl+u":
+		return "paste"
+	case "enter":
+		return "enter"
+	case "backspace", "ctrl+h":
+		return "back"
+	case "delete", "ctrl+d":
+		return "del"
+	case "tab":
+		return "type"
+	}
+	if msg.Type == tea.KeyRunes || msg.Type == tea.KeySpace {
+		return "type"
+	}
+	return ""
 }
 
 func (d *editDialog) text() []byte {
@@ -119,6 +172,7 @@ func (d *editDialog) saved(msg editSavedMsg) dialog {
 	data := d.text()
 	d.file.res = &api.ReadResult{Data: data, Size: msg.res.Size, EOF: true, ModTime: msg.res.ModTime}
 	d.back.setText(renderFile(d.file.res))
+	d.savedText = string(data)
 	d.modified, d.note, d.noteErr = false, fmt.Sprintf("saved, %d bytes", len(data)), false
 	for _, n := range msg.res.Notes {
 		d.note += "; " + n
@@ -151,7 +205,44 @@ func (d *editDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 	if key != "ctrl+k" {
 		d.cutRun = false
 	}
+	// One undo step for a run of edits of one kind; a new run (or a paste,
+	// or Enter) starts a step with the text as it was before it.
+	kind := undoKind(key, msg)
+	pushed, before := false, d.edits
+	if kind != "" && (kind != d.lastEdit || kind == "paste" || kind == "enter") {
+		d.undo = append(d.undo, d.state())
+		if len(d.undo) > maxUndo {
+			// The first step (the file as opened) stays: the two after it
+			// become one, so undoing always gets back to the start.
+			d.undo = append(d.undo[:1], d.undo[2:]...)
+		}
+		pushed = true
+	}
+	d.lastEdit = kind
+	defer func() {
+		switch {
+		case pushed && d.edits == before: // the key changed nothing
+			d.undo = d.undo[:len(d.undo)-1]
+		case d.edits != before:
+			d.redo = nil
+			d.modified = string(d.text()) != d.savedText
+		}
+	}()
 	switch key {
+	case "ctrl+z":
+		if n := len(d.undo); n > 0 {
+			d.redo = append(d.redo, d.state())
+			d.restore(d.undo[n-1])
+			d.undo = d.undo[:n-1]
+		}
+		return false, nil
+	case "ctrl+y":
+		if n := len(d.redo); n > 0 {
+			d.undo = append(d.undo, d.state())
+			d.restore(d.redo[n-1])
+			d.redo = d.redo[:n-1]
+		}
+		return false, nil
 	case "ctrl+k":
 		d.cutLine()
 	case "ctrl+u":
@@ -232,6 +323,7 @@ func (d *editDialog) insert(rs []rune) {
 			d.col++
 		}
 		d.modified = true
+		d.edits++
 	}
 }
 
@@ -255,11 +347,16 @@ func (d *editDialog) cutLine() {
 	}
 	d.col = 0
 	d.modified = true
+	d.edits++
 }
 
-// paste puts the cut lines in at the cursor, each with its newline, as
-// often as it is asked to.
+// paste puts the cut lines in above the cursor's line, whole, wherever
+// the cursor is in it (at the cursor, as nano does, they split the line),
+// as often as it is asked to.
 func (d *editDialog) paste() {
+	if len(d.cut) > 0 {
+		d.col = 0
+	}
 	for _, l := range d.cut {
 		d.insert(append(append([]rune(nil), l...), '\n'))
 	}
@@ -281,6 +378,7 @@ func (d *editDialog) backspace() {
 		return
 	}
 	d.modified = true
+	d.edits++
 }
 
 func (d *editDialog) delete() {
@@ -295,6 +393,7 @@ func (d *editDialog) delete() {
 		return
 	}
 	d.modified = true
+	d.edits++
 }
 
 // cells lays a line out: what each rune shows as (tabs as spaces, control
@@ -376,7 +475,7 @@ func (d *editDialog) view(st *styles, width, height int) string {
 	}
 	pos := fmt.Sprintf(" %d:%d", d.row+1, d.col+1)
 	title := st.dialogTitle.Render(fit("edit "+d.title+mark, w-len(pos)) + pos)
-	hint := "Ctrl+S save · ^K cut line · ^U paste · Esc back to the view"
+	hint := "Ctrl+S save · ^K cut line · ^U paste · ^Z undo · ^Y redo · Esc back to the view"
 	switch {
 	case d.asking:
 		hint = "Save the changes? y = save · n = throw them away · Esc = keep editing"

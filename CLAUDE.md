@@ -342,7 +342,10 @@ own padding). Without colours, `styles.highlight` writes reverse video.
 - `q` quits like F10. F3 highlights XML, JSON, YAML, shell and Python (by extension, `<?xml`,
   a `#!`). Ctrl+E in the viewer opens a small editor (`editor.go`: line
   numbers, Ctrl+K cuts a line, Ctrl+Ks in a row gather, Ctrl+U pastes
-  them, as in nano; hidden
+  them whole above the cursor's line (not at the cursor, as nano does),
+  Ctrl+Z/Ctrl+Y undo and redo (a run of typing, Backspace or Ctrl+K is
+  one step; always back to the file as opened: past 500 steps the oldest
+  after the first merge); hidden
   for now: not in F1 or the user docs, the owner's wish). It saves through
   `Write` (`api.FeatureWrite`, `engine/write.go`): the node opens the
   file once (symlinks followed) and checks where it really is
