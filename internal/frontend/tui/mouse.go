@@ -261,20 +261,23 @@ var hintKeys = map[string]tea.KeyMsg{
 
 // hintKey finds the key of the hint at column col of a hint line
 // ("Enter start · Tab next field · Esc cancel": the first word of the
-// part clicked).
+// part clicked that names a key, so "Not saved.  ^S save" is ^S).
 func hintKey(line string, col int, k *tea.KeyMsg) bool {
 	const sep = " · "
 	start := 0
 	for _, part := range strings.Split(line, sep) {
 		w := ansi.StringWidth(part)
 		if col < start+w {
-			f := strings.Fields(part)
-			if col < start || len(f) == 0 {
+			if col < start {
 				return false
 			}
-			var ok bool
-			*k, ok = hintKeys[f[0]]
-			return ok
+			for _, f := range strings.Fields(part) {
+				var ok bool
+				if *k, ok = hintKeys[f]; ok {
+					return true
+				}
+			}
+			return false
 		}
 		start += w + ansi.StringWidth(sep)
 	}

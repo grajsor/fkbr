@@ -1155,20 +1155,25 @@ func TestEditorAsksBeforeLeaving(t *testing.T) {
 	v := h.viewFile("a\n")
 	h.key("ctrl+e", "b", "esc")
 	e := h.m.dlg.(*editDialog)
-	if !e.asking || !strings.Contains(h.m.View(), "Save the changes?") {
+	if !e.asking || !strings.Contains(h.m.View(), "Not saved.") {
 		t.Fatal("Esc with changes did not ask")
+	}
+	// Typing on answers nothing: a stray y saved the file.
+	h.key("y", "n", "Y", "N", "enter", "x")
+	if !e.asking || h.m.dlg != e || len(h.f.writes) != 0 || string(e.text()) != "ba\n" {
+		t.Fatalf("typing answered the question: asking %v, %T, writes %d, text %q", e.asking, h.m.dlg, len(h.f.writes), e.text())
 	}
 	h.key("esc") // keep editing
 	if e.asking || h.m.dlg != e {
 		t.Fatal("Esc did not go back to editing")
 	}
-	h.key("esc", "n")
+	h.key("esc", "ctrl+x")
 	if h.m.dlg != v || len(h.f.writes) != 0 || v.text != "a\n" {
-		t.Fatalf("n: %T writes %d text %q", h.m.dlg, len(h.f.writes), v.text)
+		t.Fatalf("^X: %T writes %d text %q", h.m.dlg, len(h.f.writes), v.text)
 	}
-	h.key("ctrl+e", "c", "esc", "y")
+	h.key("ctrl+e", "c", "esc", "ctrl+s")
 	if h.m.dlg != v || len(h.f.writes) != 1 || string(h.f.writes[0].Data) != "ca\n" {
-		t.Fatalf("y: %T writes %+v", h.m.dlg, h.f.writes)
+		t.Fatalf("^S: %T writes %+v", h.m.dlg, h.f.writes)
 	}
 }
 
@@ -1588,5 +1593,20 @@ func TestViewerFind(t *testing.T) {
 	h.key("ctrl+w", "Backspace", "enter") // ("backspace" would be the key)
 	if help.match < 0 || !strings.Contains(help.plain[help.match], "Backspace") {
 		t.Fatalf("find in the help: %d", help.match)
+	}
+}
+
+// A click on a hint presses the first key its part names.
+func TestHintKey(t *testing.T) {
+	line := "Not saved.  ^S save and close · ^X close without saving · Esc keep editing"
+	for col, want := range map[int]tea.KeyType{2: tea.KeyCtrlS, 14: tea.KeyCtrlS, 35: tea.KeyCtrlX, 62: tea.KeyEsc} {
+		var k tea.KeyMsg
+		if !hintKey(line, col, &k) || k.Type != want {
+			t.Errorf("column %d: %v %v, want %v", col, k, k.Type, want)
+		}
+	}
+	var k tea.KeyMsg
+	if hintKey("progress · counting the total", 3, &k) {
+		t.Errorf("a part naming no key pressed %v", k)
 	}
 }

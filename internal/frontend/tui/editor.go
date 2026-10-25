@@ -17,10 +17,10 @@ import (
 	"fkbr/internal/safetext"
 )
 
-// The editor: Ctrl+E in the file viewer (not in the help yet). A small
-// nano: type, move, cut lines with Ctrl+K and paste them with Ctrl+U, save
-// with Ctrl+S (or Ctrl+O); Esc goes back to the view, asking first about
-// changes not saved. Lines are numbered down the left.
+// The editor: Ctrl+E in the file viewer. A small nano: type, move, cut
+// lines with Ctrl+K and paste them with Ctrl+U, save with Ctrl+S (or
+// Ctrl+O); Esc or Ctrl+X goes back to the view, asking first about changes
+// not saved. Lines are numbered down the left.
 
 // viewedFile is the file a viewer shows, as read.
 type viewedFile struct {
@@ -55,7 +55,7 @@ type editDialog struct {
 	height   int  // lines shown at the last view, for PgUp/PgDn
 	modified bool
 	saving   bool
-	asking   bool // Esc with changes not saved: save them?
+	asking   bool // Esc or Ctrl+X with changes not saved: save them?
 	closing  bool // close once the save in progress is done
 	note     string
 	noteErr  bool
@@ -215,11 +215,13 @@ func (d *editDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	if d.asking {
+		// Answered with Ctrl keys only: one typed on after Esc must not
+		// save the file or throw the changes away (a stray y saved).
 		switch msg.String() {
-		case "y", "Y":
+		case "ctrl+s", "ctrl+o":
 			d.asking, d.closing = false, true
 			return false, d.save(m)
-		case "n", "N":
+		case "ctrl+x":
 			m.dlg = d.back
 			return false, nil
 		case "esc":
@@ -598,7 +600,7 @@ func (d *editDialog) view(st *styles, width, height int) string {
 		st.styleInputs(0, d.finding)
 		foot = padTo(st, d.finding.View(), w) // coloured: fit would count the escapes
 	case d.asking:
-		foot = fit("Save the changes? y = save · n = throw them away · Esc = keep editing", w)
+		foot = fit("Not saved.  ^S save and close · ^X close without saving · Esc keep editing", w)
 	case d.note != "" && d.noteErr:
 		foot = st.dialogErr.Render(fit(d.note, w))
 	case d.note != "":
