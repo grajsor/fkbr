@@ -10,6 +10,7 @@
 package bundle
 
 import (
+	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -88,6 +89,7 @@ type Writer struct {
 	cur       *chunk
 	// Files and Bytes count entries and file content bytes added.
 	Files, Bytes int64
+	buf          []byte // a file's window being read (addFile)
 }
 
 func NewWriter(sink Sink, chunkSize int64, compress bool) *Writer {
@@ -234,6 +236,19 @@ type ItemError struct {
 func (e *ItemError) Error() string { return e.Name + ": " + e.Err.Error() }
 func (e *ItemError) Unwrap() error { return e.Err }
 
+// Which parts of a file are sent depends on its content only, so a
+// resumed source regenerates the same chunks whatever the disk layout
+// does meanwhile: a file is read in windows, and each window's blocks of
+// zeroBlock bytes that hold nothing but zeros are left out (a receiver
+// leaves holes there). What a Sparse file says only spares reading what
+// is certainly zeros.
+const (
+	zeroBlock  = 64 << 10
+	readWindow = 4 << 20 // also the longest segment
+)
+
+var zeros = make([]byte, zeroBlock)
+
 func (w *Writer) addFile(it Item) error {
 	f, err := it.Open()
 	if err != nil {
@@ -241,86 +256,164 @@ func (w *Writer) addFile(it Item) error {
 	}
 	defer f.Close()
 	total := it.Entry.Size
-	parts := []Extent{{0, total}}
+	var known []Extent // where f has data; nil: it may be anywhere
 	if sp, ok := f.(Sparse); ok {
-		parts = parts[:0]
+		known = []Extent{}
 		for _, e := range sp.Extents() {
 			if e.Len > 0 && e.Off < total {
-				parts = append(parts, Extent{e.Off, min(e.Len, total-e.Off)})
+				known = append(known, Extent{e.Off, min(e.Len, total-e.Off)})
+			}
+		}
+	}
+	if w.buf == nil {
+		w.buf = make([]byte, readWindow)
+	}
+	segs := &fileSegs{w: w, it: it}
+	broken := false // a read failed: the rest counts as zeros (the file is bad)
+	read := func(p []byte) {
+		if broken {
+			clear(p)
+			return
+		}
+		if k, err := io.ReadFull(f, p); err != nil {
+			// Shrunk or unreadable: zeros for the rest, marked bad.
+			clear(p[k:])
+			broken = true
+			segs.bad(fmt.Errorf("read: %w", err))
+		}
+	}
+	ki := 0
+	for win := int64(0); win < total; win += readWindow {
+		n := min(readWindow, total-win)
+		buf := w.buf[:n]
+		w.Bytes += n
+		if known == nil {
+			read(buf)
+		} else {
+			for ki < len(known) && known[ki].Off+known[ki].Len <= win {
+				ki++
+			}
+			if ki == len(known) || known[ki].Off >= win+n {
+				continue // all hole
+			}
+			clear(buf)
+			for j := ki; j < len(known) && known[j].Off < win+n; j++ {
+				a, b := max(known[j].Off, win), min(known[j].Off+known[j].Len, win+n)
+				read(buf[a-win : b-win])
+			}
+		}
+		// Each run of blocks with data is a segment.
+		for b := int64(0); b < n; {
+			e := min(b+zeroBlock, n)
+			if bytes.Equal(buf[b:e], zeros[:e-b]) {
+				b = e
+				continue
+			}
+			start := b
+			for b = e; b < n; b = e {
+				e = min(b+zeroBlock, n)
+				if bytes.Equal(buf[b:e], zeros[:e-b]) {
+					break
+				}
+			}
+			if err := segs.write(win+start, buf[start:b]); err != nil {
+				return err
 			}
 		}
 	}
 	// A file starts with a segment at 0 (it creates the file) and ends
 	// with one that reaches its size (it sets size and metadata), empty
-	// where the file starts or ends in a hole.
-	if len(parts) == 0 || parts[0].Off > 0 {
-		parts = append([]Extent{{0, 0}}, parts...)
-	}
-	if last := parts[len(parts)-1]; last.Off+last.Len < total {
-		parts = append(parts, Extent{total, 0})
-	}
-	var itemErr error
-	covered := int64(0)
-	for _, p := range parts {
-		w.Bytes += p.Off - covered // a hole: done without sending anything
-		off, end := p.Off, p.Off+p.Len
-		for {
-			if err := w.open(); err != nil {
-				return err
-			}
-			seg := end - off
-			limit := w.limit()
-			remain := limit - w.cur.raw.n
-			if seg > remain {
-				// Split only if a worthwhile piece fits; otherwise start fresh.
-				if remain < limit/16 && w.cur.meta.Entries > 0 {
-					if err := w.closeChunk(); err != nil {
-						return err
-					}
-					continue
-				}
-				seg = max(remain, 0)
-				if seg == 0 {
-					seg = min(end-off, limit)
-				}
-			}
-			w.note(it.Name, off)
-			if err := w.cur.ew.header(it.Name, it.Entry, off, seg); err != nil {
-				return err
-			}
-			n, err := io.CopyN(w.cur.ew, f, seg)
-			if err != nil {
-				// Shrunk or unreadable: pad so the chunk stays valid, mark bad.
-				if _, perr := io.CopyN(w.cur.ew, zeroReader{}, seg-n); perr != nil {
-					return perr
-				}
-				if itemErr == nil {
-					itemErr = &ItemError{it.Name, fmt.Errorf("read: %w", err)}
-					w.cur.meta.Bad = append(w.cur.meta.Bad, it.Name)
-				}
-			}
-			w.Bytes += seg
-			off += seg
-			if off >= end {
-				break
-			}
-			if err := w.closeChunk(); err != nil { // chunk is full
-				return err
-			}
+	// where the file starts or ends in zeros.
+	if !segs.started {
+		if err := segs.write(0, nil); err != nil {
+			return err
 		}
-		covered = end
 	}
-	if itemErr == nil {
+	if segs.end < total {
+		if err := segs.write(total, nil); err != nil {
+			return err
+		}
+	}
+	if segs.err == nil {
 		if fi, err := f.Stat(); err != nil || fi.Size() != total || fi.ModTime().UnixNano() != it.Entry.MtimeNs {
-			itemErr = &ItemError{it.Name, errors.New("changed while being read")}
-			w.cur.meta.Bad = append(w.cur.meta.Bad, it.Name)
+			segs.bad(errors.New("changed while being read"))
 		}
+	}
+	if segs.err != nil {
+		w.cur.meta.Bad = append(w.cur.meta.Bad, it.Name)
 	}
 	w.Files++
 	if err := w.maybeRoll(); err != nil {
 		return err
 	}
-	return itemErr
+	if segs.err != nil {
+		return segs.err
+	}
+	return nil
+}
+
+// fileSegs writes one file's segments, split where chunks fill up.
+type fileSegs struct {
+	w       *Writer
+	it      Item
+	started bool  // a segment is written (the first must be at 0)
+	end     int64 // where the last one ended
+	err     *ItemError
+}
+
+// bad notes why the file cannot be trusted; addFile marks it Bad in the
+// chunk with its last segment.
+func (s *fileSegs) bad(err error) {
+	if s.err == nil {
+		s.err = &ItemError{s.it.Name, err}
+	}
+}
+
+func (s *fileSegs) write(off int64, data []byte) error {
+	w := s.w
+	if !s.started && off > 0 {
+		if err := s.write(0, nil); err != nil {
+			return err
+		}
+	}
+	s.started = true
+	for {
+		if err := w.open(); err != nil {
+			return err
+		}
+		seg := int64(len(data))
+		limit := w.limit()
+		remain := limit - w.cur.raw.n
+		if seg > remain {
+			// Split only if a worthwhile piece fits; otherwise start fresh.
+			if remain < limit/16 && w.cur.meta.Entries > 0 {
+				if err := w.closeChunk(); err != nil {
+					return err
+				}
+				continue
+			}
+			seg = max(remain, 0)
+			if seg == 0 {
+				seg = min(int64(len(data)), limit)
+			}
+		}
+		w.note(s.it.Name, off)
+		if err := w.cur.ew.header(s.it.Name, s.it.Entry, off, seg); err != nil {
+			return err
+		}
+		if _, err := w.cur.ew.Write(data[:seg]); err != nil {
+			return err
+		}
+		off += seg
+		data = data[seg:]
+		s.end = off
+		if len(data) == 0 {
+			return nil
+		}
+		if err := w.closeChunk(); err != nil { // chunk is full
+			return err
+		}
+	}
 }
 
 func (w *Writer) maybeRoll() error {
@@ -347,13 +440,6 @@ func (w *Writer) Abort() {
 		w.cur.out.Close()
 		w.cur = nil
 	}
-}
-
-type zeroReader struct{}
-
-func (zeroReader) Read(p []byte) (int, error) {
-	clear(p)
-	return len(p), nil
 }
 
 // Header is one entry read from a chunk. For file segments, Offset and

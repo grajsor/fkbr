@@ -165,10 +165,13 @@ Every runtime use of the name comes from `internal/product`.
   (`bundle.Writer.limit`, depends only on seq: resume-safe); the walk runs
   ahead of the bundle writer and small files (≤ 1 MiB) are read by 8
   workers within a 64 MiB budget (`engine/prefetch.go`); the bundle keeps
-  walk order. A big sparse file is sent as its data extents only
-  (`dataExtents`, `bundle.Sparse`): segments at their offsets, an empty
-  one at 0 or at the size for a hole there; the format is unchanged, old
-  receivers install it. Receiver: reads each chunk ahead (`readAhead`), sets file
+  walk order. Zeros are not sent: a file is read in 4 MiB windows and
+  its all-zero 64 KiB blocks are left out (segments at their offsets, an
+  empty one at 0 or at the size where it starts or ends in zeros; the
+  format is unchanged, old receivers install it). By content only, so a
+  resumed source makes the same chunks whatever the disk layout does;
+  `dataExtents`/`bundle.Sparse` only spare reading a sparse file's holes.
+  Receiver: reads each chunk ahead (`readAhead`), sets file
   metadata through the open fd (`setFileMeta`), moves a new destination
   dir in with one rename (`moveNewDir`), creates staged files through a
   cached staging dir (`stagingDir`; closed in MarkBad, Commit and Abort).

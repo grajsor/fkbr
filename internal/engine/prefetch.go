@@ -225,7 +225,9 @@ type aheadFile struct {
 }
 
 // readFileAhead reads a big file ahead. A sparse one (fewer blocks than
-// its size) is read only where it has data: its holes are not sent.
+// its size) is read only where it has data: its holes are zeros, which
+// the bundle leaves out anyway (by content: zero blocks of a dense file
+// are left out the same), so they need not be read.
 func readFileAhead(f *os.File) bundle.File {
 	if exts := dataExtents(f); exts != nil {
 		rs := make([]io.Reader, len(exts))
@@ -238,6 +240,8 @@ func readFileAhead(f *os.File) bundle.File {
 }
 
 // sparseFile is a sparse file read ahead extent by extent (bundle.Sparse).
+// The extents only spare reading: what is sent does not depend on them,
+// so a resumed source makes the same chunks if they change.
 type sparseFile struct {
 	aheadFile
 	exts []bundle.Extent
@@ -248,9 +252,8 @@ func (s *sparseFile) Extents() []bundle.Extent { return s.exts }
 const (
 	seekData = 3 // SEEK_DATA, SEEK_HOLE: Linux 3.1 and later
 	seekHole = 4
-	// Holes shorter than minHole are sent as zeros (a segment header
-	// each is not worth it), and a file in more than maxExtents pieces is
-	// sent whole.
+	// Holes shorter than minHole are read as zeros (not worth a seek),
+	// and a file in more than maxExtents pieces is read whole.
 	minHole    = 64 << 10
 	maxExtents = 1 << 16
 )

@@ -85,10 +85,15 @@ func readAll(t *testing.T, s *memSink) map[string][]byte {
 			}
 			b, _ := io.ReadAll(r)
 			buf := files[h.Name]
-			if int64(len(buf)) != h.Offset {
+			if int64(len(buf)) > h.Offset {
 				t.Fatalf("%s: segment at %d, have %d bytes", h.Name, h.Offset, len(buf))
 			}
-			files[h.Name] = append(buf, b...)
+			buf = append(buf, make([]byte, h.Offset-int64(len(buf)))...) // zeros left out
+			buf = append(buf, b...)
+			if h.Last() {
+				buf = buf[:h.Entry.Size]
+			}
+			files[h.Name] = buf
 			return nil
 		})
 		if err != nil {
@@ -194,7 +199,7 @@ func must(t testing.TB, err error) {
 func TestChunkSizesRamp(t *testing.T) {
 	s := &memSink{}
 	w := NewWriter(s, 32<<20, false)
-	data := make([]byte, 100<<10)
+	data := bytes.Repeat([]byte("x"), 100<<10) // not zeros: those are left out
 	want := map[string][]byte{}
 	for i := 0; i < 900; i++ { // ~88 MiB
 		name := fmt.Sprintf("f%03d", i)
@@ -293,10 +298,60 @@ func TestSparseExtents(t *testing.T) {
 	if strings.Join(segs, ",") != "holes,allhole,dataend" {
 		t.Errorf("last segments: %v", segs)
 	}
-	if stored > 200<<10 {
+	// Data goes in whole blocks of zeroBlock: 3 + 1 + 1 of them here.
+	if stored > 5*zeroBlock+16<<10 {
 		t.Errorf("%d bytes in chunks for 164 KiB of data", stored)
 	}
 	if want := int64(4<<20 + 1<<30 + 1<<20); w.Bytes != want {
 		t.Errorf("Bytes %d, want %d (holes count as done)", w.Bytes, want)
+	}
+}
+
+// What is sent depends on the content only: the same file gives the same
+// chunks whether the disk reports its holes, reports zeros as data (a
+// layout changed by writeback, preallocation or a defrag), or nothing.
+func TestSparseOutputFollowsContent(t *testing.T) {
+	const size = 9 << 20
+	full := make([]byte, size)
+	for i := 3 << 20; i < 3<<20+300<<10; i++ { // data in the middle
+		full[i] = byte(i)
+	}
+	full[size-1] = 1 // and at the very end
+	layouts := map[string][]Extent{
+		"exact":    {{3 << 20, 300 << 10}, {size - 1, 1}},
+		"coarse":   {{2 << 20, 4 << 20}, {size - 64<<10, 64 << 10}}, // zeros reported as data
+		"dense":    nil,                                             // no Sparse at all
+		"one hole": {{2 << 20, size - 2<<20}},
+	}
+	var first []byte
+	for name, exts := range layouts {
+		s := &memSink{}
+		w := NewWriter(s, 4<<20, false)
+		it := Item{Name: "img", Entry: api.Entry{Type: api.TypeFile, Size: size, Mode: 0o644, MtimeNs: mtime.UnixNano()}}
+		it.Open = func() (File, error) {
+			if exts == nil {
+				return memFile{bytes.NewReader(full), size, mtime}, nil
+			}
+			var data []byte
+			for _, e := range exts {
+				data = append(data, full[e.Off:e.Off+e.Len]...)
+			}
+			return sparseFile{memFile{bytes.NewReader(data), size, mtime}, exts}, nil
+		}
+		must(t, w.Add(it))
+		_, err := w.Close()
+		must(t, err)
+		all := bytes.Join(s.chunks, nil)
+		if got := readAll(t, s)["img"]; !bytes.Equal(got, full) {
+			t.Fatalf("%s: content differs", name)
+		}
+		if first == nil {
+			first = all
+		} else if !bytes.Equal(all, first) {
+			t.Errorf("%s: other chunks than another layout of the same content", name)
+		}
+		if len(all) > 600<<10 {
+			t.Errorf("%s: %d bytes sent for 300 KiB of data", name, len(all))
+		}
 	}
 }

@@ -348,11 +348,12 @@ exact. Run 4, on e79d440 with the four fixes below (12 rounds, 216 jobs,
 | A cancel that removed a chunk after the target had read its meta (the source removes chunks before metas) ended that target failed ("chunk 1: open …: no such file or directory"; seen once in `TestCancelDuringAck`) | The target asks the job and ends cancelled | `TestCancelBetweenMetaAndChunk` |
 | Torture run 3: `sync` exited 0 with nothing copied when its transfer could not be submitted (a target offline at the apply); the reason was in the plan but never shown, and the TUI said "0 transfer jobs submitted" | `sync` prints the problem and fails ("1 of 2 transfers not submitted"); the TUI shows it as an error | `TestSyncTransferNotSubmitted` (cli, tui) |
 
-## 15. Review of file saving (2026-10-25)
+## 15. Review of file saving and sparse files (2026-10-25)
 
 A review of the day's new code: saving a file through `api.Write` (a peer
-replaces a file's content). Each finding fixed, with a test, and checked
-on the lab against the build before.
+replaces a file's content) and sending sparse files as their data only.
+All five fixed, each with a test, and checked on the lab against the
+build before.
 
 | Found | Now | Test |
 |---|---|---|
@@ -360,6 +361,7 @@ on the lab against the build before.
 | The checks ran on the path as written, the write followed symlinks: a link into `.fkbr-tmp` or the share was written through | The file is opened once and the checks run on where it really is; lab: "notes leads to .fkbr-tmp/job/x … staging area", the staged file untouched | `TestWriteThroughSymlinkChecked` |
 | "Unchanged since it was read" was size and mtime from a stat: on a root on NFS (`actimeo=1800`) the stat could be 30 min old, and two edits of one length in one mtime tick passed | The node checks the content's xxh3 through the opened file (opening fetches fresh attributes); lab: a file changed on rhel8 and saved from rhel9: the old build overwrote it, the new one says "changed since it was read" | `TestWriteChecksContent` |
 | A save's new file had one name per process (two saves of one file collided), a crash left it in the user's folder, the folder was not synced, and a save in place said nothing | Random name, noted in the node's state dir and removed at the next start if a crash left it; folder synced; a save in place says why and that a crash could leave it mixed | `TestWriteLeftoverSwept`, `TestWriteFileInPlace` |
+| Which parts of a sparse file were sent followed the disk layout, so a resumed source whose file was laid out differently (writeback, preallocation, a defrag) failed: "source changed since the interrupted run". Preallocated zeros were sent; btrfs/ZFS compressed files walked their extents for nothing | Zero blocks (64 KiB) are left out by content, the layout only spares reading holes; lab (Pi, ext4): an interrupted copy of a sparse file, zeros written into a hole meanwhile (content and mtime the same): the old build failed, the new one resumed, the copy equal | `TestSparseOutputFollowsContent`, `TestSparseExtents`, `TestSparseFileHolesNotSent` |
 
 ## How to run the lab tests
 
