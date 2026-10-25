@@ -225,6 +225,12 @@ func (h *harness) key(keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlO}
 		case "ctrl+e":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlE}
+		case "ctrl+k":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlK}
+		case "ctrl+end":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlEnd}
+		case "ctrl+u":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlU}
 		case "ctrl+s":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlS}
 		case "end":
@@ -1335,5 +1341,63 @@ func TestSettingsClick(t *testing.T) {
 	d.focusLine(line)
 	if d.values[d.focus] != "on" {
 		t.Errorf("second click: %q", d.values[d.focus])
+	}
+}
+
+// Ctrl+K cuts the line; Ctrl+Ks in a row gather the lines, Ctrl+U pastes
+// them all at the cursor (and again), as in nano; another key between
+// them starts a new cut.
+func TestEditorCutPaste(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("a\nb\nc\nd\ne\n")
+	h.key("ctrl+e", "ctrl+k", "ctrl+k") // a and b
+	e := h.m.dlg.(*editDialog)
+	if got := string(e.text()); got != "c\nd\ne\n" || len(e.cut) != 2 {
+		t.Fatalf("after two cuts: %q, cut %d lines", got, len(e.cut))
+	}
+	h.key("down", "ctrl+u") // both, above d
+	if got := string(e.text()); got != "c\na\nb\nd\ne\n" {
+		t.Fatalf("pasted: %q", got)
+	}
+	h.key("ctrl+u") // again
+	if got := string(e.text()); got != "c\na\nb\na\nb\nd\ne\n" {
+		t.Fatalf("pasted twice: %q", got)
+	}
+	h.key("ctrl+k") // d: a new cut, not added to a and b
+	h.key("up", "ctrl+u")
+	if got := string(e.text()); got != "c\na\nb\na\nd\nb\ne\n" || len(e.cut) != 1 {
+		t.Fatalf("a new cut: %q, cut %d lines", got, len(e.cut))
+	}
+	// The empty line after the last newline is no line to cut; a last line
+	// without a newline is cut, and the line stays, empty.
+	h.key("ctrl+end", "ctrl+k")
+	if got := string(e.text()); got != "c\na\nb\na\nd\nb\ne\n" || e.row != 7 {
+		t.Fatalf("cut on the end: %q, row %d", got, e.row)
+	}
+	h.key("x", "ctrl+k")
+	if got := string(e.text()); got != "c\na\nb\na\nd\nb\ne\n" || string(e.cut[0]) != "x" {
+		t.Fatalf("cut a last line without a newline: %q, cut %q", got, e.cut)
+	}
+	h.key("ctrl+s")
+	if w := h.f.writes[len(h.f.writes)-1]; string(w.Data) != "c\na\nb\na\nd\nb\ne\n" {
+		t.Errorf("saved %q", w.Data)
+	}
+}
+
+// Lines are numbered down the left, and the cursor's column still lines
+// up with the text.
+func TestEditorLineNumbers(t *testing.T) {
+	h := newHarness(t)
+	var b strings.Builder
+	for i := 1; i <= 12; i++ {
+		fmt.Fprintf(&b, "line %d\n", i)
+	}
+	h.viewFile(b.String())
+	h.key("ctrl+e")
+	view := stripANSI(h.m.View())
+	for _, want := range []string{" 1 line 1", " 9 line 9", "10 line 10", "12 line 12", "13 "} {
+		if !strings.Contains(view, want) {
+			t.Errorf("view lacks %q", want)
+		}
 	}
 }

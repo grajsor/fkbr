@@ -249,7 +249,7 @@ func (m *model) dialogClick(msg tea.MouseMsg) tea.Cmd {
 var hintKeys = map[string]tea.KeyMsg{
 	"Enter": {Type: tea.KeyEnter}, "Tab": {Type: tea.KeyTab}, "Esc": {Type: tea.KeyEsc},
 	"^A": {Type: tea.KeyCtrlA}, "^O": {Type: tea.KeyCtrlO}, "^K": {Type: tea.KeyCtrlK}, "^Z": {Type: tea.KeyCtrlZ},
-	"^N": {Type: tea.KeyCtrlN}, "^S": {Type: tea.KeyCtrlS},
+	"^N": {Type: tea.KeyCtrlN}, "^S": {Type: tea.KeyCtrlS}, "^U": {Type: tea.KeyCtrlU},
 	"d": {Type: tea.KeyRunes, Runes: []rune("d")}, "↑↓": {Type: tea.KeyDown},
 	"y": {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
 	"l": {Type: tea.KeyRunes, Runes: []rune("l")},

@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -15,8 +16,9 @@ import (
 )
 
 // The editor: Ctrl+E in the file viewer (not in the help yet). A small
-// nano: type, move, save with Ctrl+S (or Ctrl+O); Esc goes back to the
-// view, asking first about changes not saved.
+// nano: type, move, cut lines with Ctrl+K and paste them with Ctrl+U, save
+// with Ctrl+S (or Ctrl+O); Esc goes back to the view, asking first about
+// changes not saved. Lines are numbered down the left.
 
 // viewedFile is the file a viewer shows, as read.
 type viewedFile struct {
@@ -55,6 +57,10 @@ type editDialog struct {
 	closing  bool // close once the save in progress is done
 	note     string
 	noteErr  bool
+	// cut holds the lines Ctrl+K cut; consecutive Ctrl+Ks add to it, as
+	// in nano, any other key ends that (cutting starts it afresh).
+	cut    [][]rune
+	cutRun bool
 }
 
 func newEditDialog(back *textDialog) *editDialog {
@@ -141,7 +147,15 @@ func (d *editDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 		return false, nil // the text stays as sent until the answer
 	}
 	d.note = ""
-	switch msg.String() {
+	key := msg.String()
+	if key != "ctrl+k" {
+		d.cutRun = false
+	}
+	switch key {
+	case "ctrl+k":
+		d.cutLine()
+	case "ctrl+u":
+		d.paste()
 	case "esc":
 		if !d.modified {
 			m.dlg = d.back
@@ -221,6 +235,36 @@ func (d *editDialog) insert(rs []rune) {
 	}
 }
 
+// cutLine cuts the cursor's line into the cut buffer (added to it
+// while Ctrl+K follows Ctrl+K). The empty line after a last newline is
+// not a line: cutting there does nothing.
+func (d *editDialog) cutLine() {
+	last := d.row == len(d.lines)-1
+	if last && len(d.lines[d.row]) == 0 && len(d.lines) > 1 {
+		return
+	}
+	if !d.cutRun {
+		d.cut = nil
+	}
+	d.cutRun = true
+	d.cut = append(d.cut, append([]rune(nil), d.lines[d.row]...))
+	if last {
+		d.lines[d.row] = nil // the last line: emptied, it stays
+	} else {
+		d.lines = append(d.lines[:d.row], d.lines[d.row+1:]...)
+	}
+	d.col = 0
+	d.modified = true
+}
+
+// paste puts the cut lines in at the cursor, each with its newline, as
+// often as it is asked to.
+func (d *editDialog) paste() {
+	for _, l := range d.cut {
+		d.insert(append(append([]rune(nil), l...), '\n'))
+	}
+}
+
 func (d *editDialog) backspace() {
 	switch {
 	case d.col > 0:
@@ -282,12 +326,18 @@ func (d *editDialog) view(st *styles, width, height int) string {
 		d.top = d.row - h + 1
 	}
 	text := st.inputLabel
+	num := st.inputLabel.Foreground(cCodeComment)
+	// Line numbers down the left, as wide as the last one needs.
+	gutter := len(strconv.Itoa(len(d.lines))) + 1
+	full := w
+	w = max(4, full-gutter)
 	var out []string
 	for i := d.top; i < d.top+h; i++ {
 		if i >= len(d.lines) {
-			out = append(out, text.Render(strings.Repeat(" ", w)))
+			out = append(out, text.Render(strings.Repeat(" ", full)))
 			continue
 		}
+		n := num.Render(fmt.Sprintf("%*d ", gutter-1, i+1))
 		shown, at := cells(d.lines[i])
 		// The cursor's line scrolls sideways to keep the cursor in sight;
 		// the others show their start.
@@ -317,15 +367,16 @@ func (d *editDialog) view(st *styles, width, height int) string {
 			used++
 		}
 		b.WriteString(text.Render(strings.Repeat(" ", max(0, w-used))))
-		out = append(out, b.String())
+		out = append(out, n+b.String())
 	}
+	w = full
 	mark := ""
 	if d.modified {
 		mark = " *"
 	}
 	pos := fmt.Sprintf(" %d:%d", d.row+1, d.col+1)
 	title := st.dialogTitle.Render(fit("edit "+d.title+mark, w-len(pos)) + pos)
-	hint := "Ctrl+S save · Esc back to the view"
+	hint := "Ctrl+S save · ^K cut line · ^U paste · Esc back to the view"
 	switch {
 	case d.asking:
 		hint = "Save the changes? y = save · n = throw them away · Esc = keep editing"

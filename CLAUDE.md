@@ -324,7 +324,9 @@ own padding). Without colours, `styles.highlight` writes reverse video.
 - Job details (Enter in F9) update live; totals come from a background
   count on the source (`engine/count.go`).
 - `q` quits like F10. F3 highlights XML, JSON, YAML, shell and Python (by extension, `<?xml`,
-  a `#!`). Ctrl+E in the viewer opens a small editor (`editor.go`; hidden
+  a `#!`). Ctrl+E in the viewer opens a small editor (`editor.go`: line
+  numbers, Ctrl+K cuts a line, Ctrl+Ks in a row gather, Ctrl+U pastes
+  them, as in nano; hidden
   for now: not in F1 or the user docs, the owner's wish). It saves through
   `Write` (`api.FeatureWrite`, `engine/write.go`): the node opens the
   file once (symlinks followed) and checks where it really is
