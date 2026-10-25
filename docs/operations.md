@@ -34,6 +34,16 @@ with tighter permissions). Shares made by versions before this used
 `fkbr SHARE check` lists directories that are still closed and who owns
 them.
 
+**The share is a directory of its own.** fkbr refuses `/`, your home
+directory, the directory the binary is in, and a directory with other
+things in it that is no share yet: make an empty one on the NFS mount
+(what a NAS keeps at an export's top, `lost+found`, `.snapshot`,
+`#recycle`, `@eaDir`, may be there). Its folders (`tmp`, `nodes`, `jobs`,
+`data` ...) must be real folders: fkbr works only inside the share, never
+through a symlink out of it, and puts back a real folder where one was
+replaced by a link. To give chunks more room, mount more space as the
+share.
+
 **Keep the binary and `fkbr.conf` on local disk**, not on the share.
 fkbr reads `fkbr.conf` from beside the binary when it starts, so anyone who
 can write where they are could change either one and have it run as you

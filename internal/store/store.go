@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -112,7 +111,7 @@ func (m *Dir) GetJob(_ context.Context, id string) (*api.Job, error) {
 	m.fresh(dir)
 	m.fresh(filepath.Join(dir, "status"))
 	m.fresh(filepath.Join(dir, "detached"))
-	data, err := readFile(filepath.Join(dir, "job.json"))
+	data, err := m.readFile(filepath.Join(dir, "job.json"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("%w: %s", api.ErrUnknownJob, id)
 	}
@@ -134,20 +133,20 @@ func (m *Dir) GetJob(_ context.Context, id string) (*api.Job, error) {
 		job.Cancelled = true
 	}
 	job.Detached = nil
-	if names, err := listJSON(filepath.Join(dir, "detached")); err == nil {
+	if names, err := m.listJSON(filepath.Join(dir, "detached")); err == nil {
 		for _, n := range names {
 			var d api.Detached
-			if b, err := readFile(filepath.Join(dir, "detached", n)); err == nil && json.Unmarshal(b, &d) == nil {
+			if b, err := m.readFile(filepath.Join(dir, "detached", n)); err == nil && json.Unmarshal(b, &d) == nil {
 				job.Detached = append(job.Detached, d)
 			}
 		}
 	}
-	names, err := listJSON(filepath.Join(dir, "status"))
+	names, err := m.listJSON(filepath.Join(dir, "status"))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 	for _, n := range names {
-		b, err := readFile(filepath.Join(dir, "status", n))
+		b, err := m.readFile(filepath.Join(dir, "status", n))
 		if err != nil {
 			continue
 		}
@@ -161,7 +160,7 @@ func (m *Dir) GetJob(_ context.Context, id string) (*api.Job, error) {
 
 func (m *Dir) ListJobs(ctx context.Context) ([]api.Job, error) {
 	m.fresh(m.path("jobs"))
-	des, err := os.ReadDir(m.path("jobs"))
+	des, err := m.fs.ReadDir(m.path("jobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -200,7 +199,7 @@ func (m *Dir) RequestCancel(_ context.Context, id string) error {
 		return err
 	}
 	m.fresh(m.path("jobs", id))
-	if _, err := os.Stat(m.path("jobs", id, "job.json")); err != nil {
+	if _, err := m.fs.Stat(m.path("jobs", id, "job.json")); err != nil {
 		return fmt.Errorf("%w: %s", api.ErrUnknownJob, id)
 	}
 	return m.write(m.path("jobs", id, "CANCEL"), []byte(m.self+"\n"))
@@ -232,7 +231,7 @@ func (m *Dir) CreateChunk(_ context.Context, id string, seq int) (transport.Chun
 	// A source killed while writing this chunk left its temp file; the
 	// restarted one writes the same chunk again (cloud run 2026-10-24).
 	m.removeTemps(id, chunkName(seq, ".chunk"))
-	f, err := os.CreateTemp(m.path("tmp"), "."+id+"-"+chunkName(seq, ".chunk")+".*")
+	f, err := m.fs.CreateTemp(m.path("tmp"), "."+id+"-"+chunkName(seq, ".chunk")+".*")
 	if err != nil {
 		return nil, err
 	}
@@ -252,7 +251,7 @@ func (w *chunkWriter) Commit(meta []byte) error {
 	if err := w.f.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(w.f.Name(), filepath.Join(w.dir, chunkName(w.seq, ".chunk"))); err != nil {
+	if err := w.m.fs.Rename(w.f.Name(), filepath.Join(w.dir, chunkName(w.seq, ".chunk"))); err != nil {
 		return err
 	}
 	w.done = true
@@ -262,7 +261,7 @@ func (w *chunkWriter) Commit(meta []byte) error {
 func (w *chunkWriter) Abort() {
 	if !w.done {
 		w.f.Close()
-		os.Remove(w.f.Name())
+		w.m.fs.Remove(w.f.Name())
 		w.done = true
 	}
 }
@@ -279,7 +278,7 @@ func (m *Dir) OpenChunk(_ context.Context, src, id string, seq int) (io.ReadClos
 		return nil, err
 	}
 	m.fresh(m.path("data", src, id))
-	return os.Open(m.path("data", src, id, chunkName(seq, ".chunk")))
+	return m.fs.Open(m.path("data", src, id, chunkName(seq, ".chunk")))
 }
 
 func (m *Dir) DeleteChunk(_ context.Context, id string, seq int) error {
@@ -288,11 +287,11 @@ func (m *Dir) DeleteChunk(_ context.Context, id string, seq int) error {
 	}
 	dir := m.path("data", m.self, id)
 	// Meta first, so a reader never finds meta without its chunk.
-	err := os.Remove(filepath.Join(dir, chunkName(seq, ".json")))
+	err := m.fs.Remove(filepath.Join(dir, chunkName(seq, ".json")))
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
-	err = os.Remove(filepath.Join(dir, chunkName(seq, ".chunk")))
+	err = m.fs.Remove(filepath.Join(dir, chunkName(seq, ".chunk")))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -342,7 +341,7 @@ func (m *Dir) FreeBytes() (int64, error) {
 
 func (m *Dir) StagedBytes(_ context.Context, id string) (job, total int64, err error) {
 	base := m.path("data", m.self)
-	jobs, err := os.ReadDir(base)
+	jobs, err := m.fs.ReadDir(base)
 	if errors.Is(err, fs.ErrNotExist) {
 		return 0, 0, nil
 	}
@@ -350,7 +349,7 @@ func (m *Dir) StagedBytes(_ context.Context, id string) (job, total int64, err e
 		return 0, 0, err
 	}
 	for _, j := range jobs {
-		des, err := os.ReadDir(filepath.Join(base, j.Name()))
+		des, err := m.fs.ReadDir(filepath.Join(base, j.Name()))
 		if err != nil {
 			continue
 		}
@@ -374,20 +373,20 @@ func (m *Dir) RemoveJobData(_ context.Context, id string) error {
 		return err
 	}
 	m.removeTemps(id, "") // a chunk a killed source was writing
-	return os.RemoveAll(m.path("data", m.self, id))
+	return m.fs.RemoveAll(m.path("data", m.self, id))
 }
 
 // removeTemps removes the temp files of job id's chunks (of chunk name, or
 // all), which only this node writes. Others are pruned after StaleTmp.
 func (m *Dir) removeTemps(id, name string) {
 	pre := "." + id + "-" + name
-	des, err := os.ReadDir(m.path("tmp"))
+	des, err := m.fs.ReadDir(m.path("tmp"))
 	if err != nil {
 		return
 	}
 	for _, de := range des {
 		if strings.HasPrefix(de.Name(), pre) {
-			os.Remove(m.path("tmp", de.Name()))
+			m.fs.Remove(m.path("tmp", de.Name()))
 		}
 	}
 }
@@ -422,9 +421,9 @@ func jobFinished(j *api.Job, registered []string) bool {
 // newestEntry is the latest mtime of dir's entries. Not of dir itself: a
 // refresh (Options.Fresh) bumps a directory's mtime on every read. The
 // NFS refresh's probe files (".r-...") do not count either.
-func newestEntry(dir string) time.Time {
+func (m *Dir) newestEntry(dir string) time.Time {
 	var newest time.Time
-	des, _ := os.ReadDir(dir)
+	des, _ := m.fs.ReadDir(dir)
 	for _, de := range des {
 		if strings.HasPrefix(de.Name(), ".r-") {
 			continue
@@ -439,11 +438,11 @@ func newestEntry(dir string) time.Time {
 // removeRacing is os.RemoveAll for a share directory others may still
 // write into (a status landing as a job is pruned): it tries again, and
 // what is left the next prune removes (see the orphan rule in PruneJobs).
-func removeRacing(dir string) error {
-	err := os.RemoveAll(dir)
+func (m *Dir) removeRacing(dir string) error {
+	err := m.fs.RemoveAll(dir)
 	if errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
 		time.Sleep(100 * time.Millisecond)
-		if err = os.RemoveAll(dir); errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
+		if err = m.fs.RemoveAll(dir); errors.Is(err, syscall.ENOTEMPTY) || errors.Is(err, syscall.EEXIST) {
 			return nil
 		}
 	}
@@ -451,7 +450,7 @@ func removeRacing(dir string) error {
 }
 
 func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
-	des, err := os.ReadDir(m.path("jobs"))
+	des, err := m.fs.ReadDir(m.path("jobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -471,18 +470,18 @@ func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	var errs []error
 	for _, de := range des {
 		dir := m.path("jobs", de.Name())
-		fi, err := os.Stat(filepath.Join(dir, "job.json"))
+		fi, err := m.fs.Stat(filepath.Join(dir, "job.json"))
 		if errors.Is(err, fs.ErrNotExist) {
 			// A folder without its record: half pruned (a status written
 			// as it went), or recreated by a late writer. Nobody reads it.
 			// One with nothing in it yet may be a job CreateJob is making:
 			// its own mtime tells.
-			newest := newestEntry(dir)
-			if fi, err := os.Stat(dir); err == nil && newest.IsZero() {
+			newest := m.newestEntry(dir)
+			if fi, err := m.fs.Stat(dir); err == nil && newest.IsZero() {
 				newest = fi.ModTime()
 			}
 			if validJobID(de.Name()) == nil && now.Sub(newest) > max(maxAge, minBlobAge) {
-				errs = append(errs, removeRacing(dir))
+				errs = append(errs, m.removeRacing(dir))
 			}
 			continue
 		}
@@ -495,7 +494,7 @@ func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 		}
 		j, err := m.GetJob(ctx, de.Name())
 		if errors.Is(err, errBadRecord) {
-			errs = append(errs, removeRacing(dir))
+			errs = append(errs, m.removeRacing(dir))
 			continue
 		}
 		if err != nil {
@@ -504,12 +503,12 @@ func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 		// A job nobody ever picked up has no statuses; give it a day.
 		if len(j.Participants) == 0 {
 			if age > unstartedJobAge {
-				errs = append(errs, removeRacing(dir))
+				errs = append(errs, m.removeRacing(dir))
 			}
 			continue
 		}
-		if jobFinished(j, registered) && now.Sub(newestEntry(filepath.Join(dir, "status"))) >= minFinishedAge {
-			errs = append(errs, removeRacing(dir))
+		if jobFinished(j, registered) && now.Sub(m.newestEntry(filepath.Join(dir, "status"))) >= minFinishedAge {
+			errs = append(errs, m.removeRacing(dir))
 		}
 	}
 	return errors.Join(errs...)

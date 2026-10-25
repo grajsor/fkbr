@@ -216,6 +216,22 @@ package tests; docs/testplan.md lists them.
   here. A crashed worker is replaced at once. A foreign token later: the
   later starter stops without leaving. The lock file says
   running/stopping; a new worker waits for a stopping one (2 min).
+- **The store never leaves the share** (`store/sharefs.go`, review
+  2026-10-25: a symlink in place of `reply/<node>` made prune delete a
+  home directory). Every file operation goes through it: frequent ones
+  with `openat2` `RESOLVE_BENEATH` (one lookup; `os.Root` opens each
+  folder, and on NFS each open is a GETATTR: a small-files copy was 8%
+  slower), the rest and kernels without openat2 (CentOS 7) through
+  `os.Root`. `mkdir`/`layout()` replace a symlink or file standing in for
+  a layout folder (also on prune and each heartbeat); `openUp` touches
+  only the layout, never through a link; `checkShareDir` refuses `/`,
+  `$HOME`, the binary's dir and a non-empty dir that is no share yet. A
+  new store operation must use `m.fs`, never `os.*` with a share path.
+- Chunks from the share are bounded (`bundle.MaxChunkBytes` 2 GiB stored
+  or unpacked, `MaxEntries` 16 M, the writer rolls before it, files 256
+  TiB, `chunk_size` ≤ 1 GiB); `meta.Bad` applies after the checksum. The
+  receive journal `bad` is JSON lines (a raw name with a newline read
+  back as two).
 - **Self-healing share:** `Mailbox.layout()` recreates tmp/, nodes/<self>,
   inbox/<self>/* and reply/<self> on ENOENT (never job dirs); own dirs
   only once registered (a CLI without a node creates none). Heartbeat

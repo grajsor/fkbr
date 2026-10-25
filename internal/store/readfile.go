@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 )
 
 // maxShareFile caps what is read whole from the share (requests, replies,
@@ -17,8 +16,8 @@ var errTooBig = errors.New("file on the share is too big")
 
 // readFile is os.ReadFile for files on the share, refusing ones over
 // maxShareFile.
-func readFile(p string) ([]byte, error) {
-	f, err := os.Open(p)
+func (m *Dir) readFile(p string) ([]byte, error) {
+	f, err := m.fs.Open(p)
 	if err != nil {
 		return nil, err
 	}

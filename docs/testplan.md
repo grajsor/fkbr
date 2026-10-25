@@ -365,6 +365,20 @@ build before.
 | A save's new file had one name per process (two saves of one file collided), a crash left it in the user's folder, the folder was not synced, and a save in place said nothing | Random name, noted in the node's state dir and removed at the next start if a crash left it; folder synced; a save in place says why and that a crash could leave it mixed | `TestWriteLeftoverSwept`, `TestWriteFileInPlace` |
 | Which parts of a sparse file were sent followed the disk layout, so a resumed source whose file was laid out differently (writeback, preallocation, a defrag) failed: "source changed since the interrupted run". Preallocated zeros were sent; btrfs/ZFS compressed files walked their extents for nothing | Zero blocks (64 KiB) are left out by content, the layout only spares reading holes; lab (Pi, ext4): an interrupted copy of a sparse file, zeros written into a hole meanwhile (content and mtime the same): the old build failed, the new one resumed, the copy equal | `TestSparseOutputFollowsContent`, `TestSparseExtents`, `TestSparseFileHolesNotSent` |
 
+## 16. Second review of the share's boundaries (2026-10-25)
+
+Another review of the code found what the 2026-10-22 audit had not
+looked at: the share's own folders. Four of its five findings are fixed,
+each with a test that fails on the build before; the fifth (staged bytes
+counted by listing every chunk, slow only with 1 MiB chunks) is left.
+
+| Found | Now | Test |
+|---|---|---|
+| The store worked on plain paths below the share, and took any entry for its folder: a share writer who put a symlink to a home directory in place of `reply/<node>` had that node's prune delete it, recursively; `tmp/` the same for old files, and opening up chmodded through links. Lab: the build before deleted every file in the test folder | Every file operation stays inside the share (`openat2` `RESOLVE_BENEATH`, or `os.Root` where the kernel has no openat2); a link in place of a layout folder is replaced by a real folder at the next prune or heartbeat. Lab: the test folder untouched, `reply/<node>` a folder again. Speed over the NAS the same as before (small files 5.56 s both, 1 GiB 19.2 s against 20.1 s; NFS calls 2,579 against 2,565) | `TestLayoutSymlinkStaysInside` (both ways), `TestLayoutSymlinkHealed` |
+| Every start opened up (0777/0644) everything the user owned in the share directory, whatever it was; `/` or the home directory was taken as a share (`cd /tmp && fkbr ~`) | Only fkbr's own entries are opened up, never through a link; `/`, the home directory, the binary's directory and a directory with other things in it that is no share yet are refused, naming the reason. Lab: both refused, nothing changed | `TestShareDirRefused`, `TestOpenUpOnlyLayout` |
+| A chunk from the share had no budget: a small zstd frame could unpack to terabytes, a chunk hold millions of empty entries, a file claim 4 EiB; the meta's list of files to drop applied before the checksum | At most 2 GiB stored or unpacked, 16 million entries (the writer starts a new chunk before), files 256 TiB, `chunk_size` at most 1 GiB; a meta claiming more fails at once; the drop list counts after the checksum | `TestChunkBudgets`, `TestChunkMetaOverBudget` |
+| The receive journal of files to leave out kept one raw name a line: a name with a newline came back as two names after a restart | JSON lines (an older journal still reads) | `TestBadJournalNames` |
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

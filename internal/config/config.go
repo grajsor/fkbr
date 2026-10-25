@@ -564,8 +564,8 @@ func (c *Config) Validate() error {
 		errs = append(errs, fmt.Errorf("sync.max_deletes must be -1 (no limit) or more"))
 	}
 	t := c.Transfer
-	if t.ChunkSize < 1<<20 {
-		errs = append(errs, fmt.Errorf("transfer.chunk_size must be at least 1MiB"))
+	if t.ChunkSize < 1<<20 || t.ChunkSize > 1<<30 {
+		errs = append(errs, fmt.Errorf("transfer.chunk_size must be from 1MiB to 1GiB"))
 	}
 	if t.JobQuota < t.ChunkSize || t.StagingQuota < t.JobQuota {
 		errs = append(errs, fmt.Errorf("transfer: need chunk_size <= job_quota <= staging_quota"))

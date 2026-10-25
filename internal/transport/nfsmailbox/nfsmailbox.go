@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -56,7 +55,7 @@ func newRefresher(root, self string) *refresher {
 
 // fresh makes other clients' changes in dir visible (see Options.Refresh).
 // The probe files are named ".r-<node>-<n>"; the store skips such names.
-func (r *refresher) fresh(dir string) {
+func (r *refresher) fresh(dir string, touch func(path string) error) {
 	now := time.Now()
 	r.mu.Lock()
 	if now.Sub(r.at[dir]) < refreshEvery {
@@ -66,16 +65,14 @@ func (r *refresher) fresh(dir string) {
 	r.at[dir] = now
 	r.mu.Unlock()
 	p := filepath.Join(dir, fmt.Sprintf(".r-%s-%d", r.self, r.seq.Add(1)))
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	err := touch(p)
 	if err == nil {
-		f.Close()
-		os.Remove(p)
 		return
 	}
 	// dir may exist on the server while this client still caches it as
 	// missing (looked up before another node created it). Refresh the
 	// parent so that cached "does not exist" is dropped.
 	if parent := filepath.Dir(dir); errors.Is(err, fs.ErrNotExist) && parent != dir && strings.HasPrefix(parent, r.root) {
-		r.fresh(parent)
+		r.fresh(parent, touch)
 	}
 }

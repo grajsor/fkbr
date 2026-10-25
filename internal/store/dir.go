@@ -36,7 +36,6 @@ import (
 	"time"
 
 	"fkbr/internal/api"
-	"fkbr/internal/atomicfile"
 	"fkbr/internal/config"
 	"fkbr/internal/product"
 	"fkbr/internal/transport"
@@ -53,8 +52,9 @@ type Options struct {
 	OfflineAfter time.Duration
 	// Fresh, if set, is called before reading a directory, or a file in
 	// it, that other nodes change, to make their changes visible (the NFS
-	// refresh trick, see nfsmailbox).
-	Fresh func(dir string)
+	// refresh trick, see nfsmailbox). touch creates and removes a file in
+	// the share.
+	Fresh func(dir string, touch func(path string) error)
 	// Private keeps the share to this user (directories 0700, files
 	// 0600): a share only one process reaches. Otherwise it is open to the
 	// users of other hosts (see modes.go).
@@ -69,6 +69,7 @@ type Options struct {
 
 type Dir struct {
 	root      string
+	fs        *shareFS // every file operation, confined to the share
 	self      string
 	opts      Options
 	recovered bool
@@ -101,7 +102,7 @@ func (m *Dir) measureOffset(before time.Time, server time.Time) {
 // fresh makes other nodes' changes in dir visible (see Options.Fresh).
 func (m *Dir) fresh(dir string) {
 	if m.opts.Fresh != nil {
-		m.opts.Fresh(dir)
+		m.opts.Fresh(dir, m.fs.touch)
 	}
 }
 
@@ -122,10 +123,18 @@ func Open(root, self string, opts Options) (*Dir, error) {
 	} else if !fi.IsDir() {
 		return nil, fmt.Errorf("store: share root %s is not a directory", root)
 	}
+	root = filepath.Clean(root)
+	if err := checkShareDir(root); err != nil {
+		return nil, err
+	}
+	sfs, err := openShareFS(root)
+	if err != nil {
+		return nil, fmt.Errorf("store: share root: %w", err)
+	}
 	// Nodes running as other users create top-level entries here too.
-	m := &Dir{root: root, self: self, opts: opts, claimed: map[string]int{}}
+	m := &Dir{root: root, fs: sfs, self: self, opts: opts, claimed: map[string]int{}}
 	if st, ok := fi.Sys().(*syscall.Stat_t); ok && st.Uid == uint32(os.Geteuid()) && fi.Mode().Perm() != m.dirMode() {
-		os.Chmod(root, m.dirMode())
+		m.fs.Chmod(root, m.dirMode())
 	}
 	if opts.Poll <= 0 {
 		opts.Poll = 200 * time.Millisecond
@@ -150,7 +159,7 @@ func Open(root, self string, opts Options) (*Dir, error) {
 func (m *Dir) checkProtocol() error {
 	p := filepath.Join(m.root, "protocol-version")
 	want := strconv.Itoa(api.ProtocolVersion)
-	data, err := readFile(p)
+	data, err := m.readFile(p)
 	if errors.Is(err, fs.ErrNotExist) {
 		if err := m.write(p, []byte(want+"\n")); err != nil {
 			return fmt.Errorf("store: %w", err)
@@ -198,9 +207,9 @@ func (m *Dir) path(parts ...string) string {
 }
 
 func (m *Dir) write(dest string, data []byte) error {
-	err := atomicfile.Write(m.path("tmp"), dest, data, m.fileMode())
+	err := m.fs.writeAtomic(m.path("tmp"), dest, data, m.fileMode())
 	if errors.Is(err, fs.ErrNotExist) && m.layout() == nil {
-		err = atomicfile.Write(m.path("tmp"), dest, data, m.fileMode())
+		err = m.fs.writeAtomic(m.path("tmp"), dest, data, m.fileMode())
 	}
 	return err
 }
@@ -229,10 +238,12 @@ func (m *Dir) Register(_ context.Context, info api.NodeInfo) error {
 }
 
 func (m *Dir) Heartbeat(_ context.Context, token string) (string, error) {
+	m.fs.check() // the share remounted or made again: open the new one
+	m.layout()   // a layout folder replaced (by a symlink): made again
 	p := m.path("nodes", m.self, "heartbeat")
 	var other string
 	m.freshFile(p)
-	if b, err := readFile(p); err == nil {
+	if b, err := m.readFile(p); err == nil {
 		// Older versions wrote a timestamp; only tokens count.
 		if t := strings.TrimSpace(string(b)); t != token && strings.HasPrefix(t, "w1 ") {
 			other = t
@@ -243,7 +254,7 @@ func (m *Dir) Heartbeat(_ context.Context, token string) (string, error) {
 	if err := m.write(p, []byte(token+"\n")); err != nil {
 		return other, err
 	}
-	if fi, err := os.Stat(p); err == nil {
+	if fi, err := m.fs.Stat(p); err == nil {
 		m.measureOffset(before, fi.ModTime())
 	}
 	// The entry may have been removed or damaged under us (readers skip an
@@ -255,7 +266,7 @@ func (m *Dir) Heartbeat(_ context.Context, token string) (string, error) {
 	}
 	if err == nil {
 		var info api.NodeInfo
-		if data, err := readFile(m.path("nodes", m.self, "info.json")); err == nil && (json.Unmarshal(data, &info) != nil || info.ID != m.self) {
+		if data, err := m.readFile(m.path("nodes", m.self, "info.json")); err == nil && (json.Unmarshal(data, &info) != nil || info.ID != m.self) {
 			return other, transport.ErrNotRegistered
 		}
 	}
@@ -270,14 +281,14 @@ func (m *Dir) StaleEntry(node string) (bool, time.Duration) {
 		return false, 0
 	}
 	m.fresh(m.path("nodes"))
-	if _, err := os.Stat(m.path("nodes", node)); err != nil {
+	if _, err := m.fs.Stat(m.path("nodes", node)); err != nil {
 		return false, 0
 	}
 	now, err := m.serverNow()
 	if err != nil {
 		return false, 0
 	}
-	if fi, err := os.Stat(m.path("nodes", node, "heartbeat")); err == nil {
+	if fi, err := m.fs.Stat(m.path("nodes", node, "heartbeat")); err == nil {
 		return true, now.Sub(fi.ModTime())
 	}
 	return true, -1
@@ -285,14 +296,14 @@ func (m *Dir) StaleEntry(node string) (bool, time.Duration) {
 
 // serverNow returns the current time according to the share's clock.
 func (m *Dir) serverNow() (time.Time, error) {
-	f, err := os.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
+	f, err := m.fs.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
 	if errors.Is(err, fs.ErrNotExist) && m.layout() == nil {
-		f, err = os.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
+		f, err = m.fs.CreateTemp(m.path("tmp"), ".probe-"+m.self+"-*")
 	}
 	if err != nil {
 		return time.Time{}, err
 	}
-	defer os.Remove(f.Name())
+	defer m.fs.Remove(f.Name())
 	defer f.Close()
 	if _, err := f.Write([]byte{'\n'}); err != nil {
 		return time.Time{}, err
@@ -310,7 +321,7 @@ func (m *Dir) Nodes(_ context.Context) ([]api.Node, error) {
 		return nil, fmt.Errorf("store: probe: %w", err)
 	}
 	m.fresh(m.path("nodes"))
-	des, err := os.ReadDir(m.path("nodes"))
+	des, err := m.fs.ReadDir(m.path("nodes"))
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +333,7 @@ func (m *Dir) Nodes(_ context.Context) ([]api.Node, error) {
 		m.fresh(m.path("nodes", de.Name()))
 		// An entry that cannot be read is left out, so one damaged or
 		// half-created entry does not make every node fail.
-		data, err := readFile(m.path("nodes", de.Name(), "info.json"))
+		data, err := m.readFile(m.path("nodes", de.Name(), "info.json"))
 		if err != nil {
 			continue // never registered, or unreadable
 		}
@@ -332,7 +343,7 @@ func (m *Dir) Nodes(_ context.Context) ([]api.Node, error) {
 		}
 		n.Self = n.ID == m.self
 		n.LastSeen = -1
-		if fi, err := os.Stat(m.path("nodes", de.Name(), "heartbeat")); err == nil {
+		if fi, err := m.fs.Stat(m.path("nodes", de.Name(), "heartbeat")); err == nil {
 			n.LastSeen = now.Sub(fi.ModTime())
 			// Small negative ages are attribute-cache noise; treat as fresh.
 			n.Online = n.LastSeen < m.opts.OfflineAfter
@@ -362,7 +373,7 @@ func (m *Dir) remove(node string) error {
 	// The registry entry goes first, so the node vanishes from listings
 	// even if removing its data takes a while.
 	for _, d := range []string{"nodes", "inbox", "reply", "data"} {
-		errs = append(errs, os.RemoveAll(m.path(d, node)))
+		errs = append(errs, m.fs.RemoveAll(m.path(d, node)))
 	}
 	return errors.Join(errs...)
 }
@@ -391,7 +402,7 @@ func (m *Dir) Send(_ context.Context, msg *transport.Message) error {
 		return err
 	}
 	if err := m.writeJSON(m.path(m.inbox(msg.To, "new"), msg.ID+".json"), msg); err != nil {
-		os.RemoveAll(m.path("reply", m.self, msg.ID))
+		m.fs.RemoveAll(m.path("reply", m.self, msg.ID))
 		return err
 	}
 	return nil
@@ -403,9 +414,9 @@ func (m *Dir) AwaitReplies(ctx context.Context, reqID string, fn func(*transport
 	}
 	dir := m.path("reply", m.self, reqID)
 	defer func() {
-		os.RemoveAll(dir)
+		m.fs.RemoveAll(dir)
 		if !m.registered.Load() {
-			os.Remove(filepath.Dir(dir)) // a visitor leaves nothing (only if empty)
+			m.fs.Remove(filepath.Dir(dir)) // a visitor leaves nothing (only if empty)
 		}
 	}()
 	t := time.NewTicker(m.opts.Poll)
@@ -454,7 +465,7 @@ func (m *Dir) Fetch(_ context.Context) ([]*transport.Message, error) {
 	var errs []error
 	// After a restart, requests claimed but never finished are redelivered.
 	if !m.recovered {
-		cur, err := listJSON(m.path(m.inbox(m.self, "cur")))
+		cur, err := m.listJSON(m.path(m.inbox(m.self, "cur")))
 		if err != nil {
 			errs = append(errs, err)
 		} else {
@@ -465,12 +476,12 @@ func (m *Dir) Fetch(_ context.Context) ([]*transport.Message, error) {
 		}
 	}
 	m.fresh(m.path(m.inbox(m.self, "new")))
-	fresh, err := listJSON(m.path(m.inbox(m.self, "new")))
+	fresh, err := m.listJSON(m.path(m.inbox(m.self, "new")))
 	if err != nil {
 		errs = append(errs, err)
 	}
 	for _, n := range fresh {
-		err := os.Rename(m.path(m.inbox(m.self, "new"), n), m.path(m.inbox(m.self, "cur"), n))
+		err := m.fs.Rename(m.path(m.inbox(m.self, "new"), n), m.path(m.inbox(m.self, "cur"), n))
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -488,14 +499,14 @@ func (m *Dir) Fetch(_ context.Context) ([]*transport.Message, error) {
 	var out []*transport.Message
 	for _, n := range names {
 		p := m.path(m.inbox(m.self, "cur"), n)
-		data, err := readFile(p)
+		data, err := m.readFile(p)
 		if errors.Is(err, fs.ErrNotExist) {
 			delete(m.claimed, n)
 			continue
 		}
 		if err != nil {
 			if m.claimed[n]++; m.claimed[n] >= maxReadTries {
-				os.Rename(p, m.path(m.inbox(m.self, "failed"), n))
+				m.fs.Rename(p, m.path(m.inbox(m.self, "failed"), n))
 				delete(m.claimed, n)
 			}
 			errs = append(errs, err)
@@ -508,7 +519,7 @@ func (m *Dir) Fetch(_ context.Context) ([]*transport.Message, error) {
 		if err := json.Unmarshal(data, &msg); err != nil || msg.ID+".json" != n ||
 			!config.ValidID(msg.ID) || !config.ValidID(msg.From) || !config.ValidID(msg.To) {
 			// Unreadable or renamed: park it where an operator can look.
-			os.Rename(p, m.path(m.inbox(m.self, "failed"), n))
+			m.fs.Rename(p, m.path(m.inbox(m.self, "failed"), n))
 			continue
 		}
 		out = append(out, &msg)
@@ -530,7 +541,7 @@ func (m *Dir) pruneOrphanData(cutoff time.Time) error {
 		}
 		return err
 	}
-	des, err := os.ReadDir(m.path("data", m.self))
+	des, err := m.fs.ReadDir(m.path("data", m.self))
 	if err != nil {
 		return nil
 	}
@@ -540,14 +551,14 @@ func (m *Dir) pruneOrphanData(cutoff time.Time) error {
 			continue
 		}
 		if fi, err := de.Info(); err == nil && fi.ModTime().Before(cutoff) {
-			errs = append(errs, os.RemoveAll(m.path("data", m.self, de.Name())))
+			errs = append(errs, m.fs.RemoveAll(m.path("data", m.self, de.Name())))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-func listJSON(dir string) ([]string, error) {
-	des, err := os.ReadDir(dir)
+func (m *Dir) listJSON(dir string) ([]string, error) {
+	des, err := m.fs.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
@@ -567,7 +578,7 @@ func (m *Dir) Reply(_ context.Context, req *transport.Message, r *transport.Repl
 	}
 	dir := m.path("reply", req.From, req.ID)
 	m.freshFile(dir)
-	if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+	if _, err := m.fs.Stat(dir); errors.Is(err, fs.ErrNotExist) {
 		return ErrRequesterGone
 	}
 	r.Protocol = api.ProtocolVersion
@@ -584,9 +595,9 @@ func (m *Dir) Finish(_ context.Context, msg *transport.Message, failed bool) err
 	}
 	cur := m.path(m.inbox(m.self, "cur"), msg.ID+".json")
 	if !failed {
-		return os.Remove(cur)
+		return m.fs.Remove(cur)
 	}
-	return os.Rename(cur, m.path(m.inbox(m.self, "failed"), msg.ID+".json"))
+	return m.fs.Rename(cur, m.path(m.inbox(m.self, "failed"), msg.ID+".json"))
 }
 
 // StaleTmp is how long a temp file on the share may go unmodified before
@@ -599,6 +610,7 @@ const StaleTmp = time.Hour
 // would otherwise delete other nodes' files that are still in use.
 
 func (m *Dir) Prune(_ context.Context, maxAge time.Duration) error {
+	m.layout()              // a layout folder replaced by a symlink: a real one first
 	m.openedUp.Do(m.openUp) // once per process: new entries get the right modes
 	now, err := m.serverNow()
 	if err != nil {
@@ -606,21 +618,21 @@ func (m *Dir) Prune(_ context.Context, maxAge time.Duration) error {
 	}
 	cutoff := now.Add(-maxAge)
 	var errs []error
-	if des, err := os.ReadDir(m.path("tmp")); err == nil {
+	if des, err := m.fs.ReadDir(m.path("tmp")); err == nil {
 		stale := now.Add(-StaleTmp)
 		for _, de := range des {
 			if fi, err := de.Info(); err == nil && fi.ModTime().Before(stale) {
-				errs = append(errs, os.Remove(m.path("tmp", de.Name())))
+				errs = append(errs, m.fs.Remove(m.path("tmp", de.Name())))
 			}
 		}
 	}
-	os.RemoveAll(m.path(m.inbox(m.self, "done"))) // used by older versions
+	m.fs.RemoveAll(m.path(m.inbox(m.self, "done"))) // used by older versions
 	errs = append(errs, m.pruneOrphanData(cutoff))
 	for _, d := range []string{
 		m.path(m.inbox(m.self, "failed")),
 		m.path("reply", m.self), // abandoned reply dirs (requester crashed)
 	} {
-		des, err := os.ReadDir(d)
+		des, err := m.fs.ReadDir(d)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue // not a registered node here (or not yet)
 		}
@@ -633,7 +645,7 @@ func (m *Dir) Prune(_ context.Context, maxAge time.Duration) error {
 			if err != nil || !fi.ModTime().Before(cutoff) {
 				continue
 			}
-			errs = append(errs, os.RemoveAll(filepath.Join(d, de.Name())))
+			errs = append(errs, m.fs.RemoveAll(filepath.Join(d, de.Name())))
 		}
 	}
 	return errors.Join(errs...)

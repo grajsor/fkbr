@@ -41,9 +41,11 @@ const (
 	// MaxNameLen bounds an entry's path inside a chunk. Paths longer than
 	// PATH_MAX (4096) are legal (made one directory at a time), so the
 	// bound is far above it; Writer.Add refuses longer ones per item.
-	MaxNameLen  = 64 << 10
-	maxLinkLen  = 4096
-	maxFileSize = 1 << 62
+	MaxNameLen = 64 << 10
+	maxLinkLen = 4096
+	// maxFileSize bounds a file's size in a chunk (256 TiB): a header
+	// claiming exabytes made a target create a file it could never scan.
+	maxFileSize = 1 << 48
 	kindEnd     = 0
 	kindDir     = 'D'
 	kindSymlink = 'L'
@@ -114,7 +116,10 @@ func readNative(r io.Reader, fn func(h *Header, data io.Reader) error) error {
 		return errors.New("not an fkbr chunk")
 	}
 	prev := ""
-	for {
+	for entries := int64(0); ; entries++ {
+		if entries > maxEntries {
+			return fmt.Errorf("chunk has more than %d entries", maxEntries)
+		}
 		kind, err := br.ReadByte()
 		if err != nil {
 			return fmt.Errorf("chunk truncated: %w", unexpected(err))

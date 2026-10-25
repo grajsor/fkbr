@@ -3,7 +3,6 @@ package store
 import (
 	"errors"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"slices"
 )
@@ -28,24 +27,15 @@ import (
 // entry in its parent, the parent is listed first and dir tried again.
 func (m *Dir) listNames(dir string) ([]string, error) {
 	m.fresh(dir)
-	names, err := readNames(dir)
+	names, err := m.fs.readNames(dir)
 	if errors.Is(err, fs.ErrNotExist) {
 		parent := filepath.Dir(dir)
 		m.fresh(parent)
-		if pn, perr := readNames(parent); perr == nil && slices.Contains(pn, filepath.Base(dir)) {
-			names, err = readNames(dir)
+		if pn, perr := m.fs.readNames(parent); perr == nil && slices.Contains(pn, filepath.Base(dir)) {
+			names, err = m.fs.readNames(dir)
 		}
 	}
 	return names, err
-}
-
-func readNames(dir string) ([]string, error) {
-	f, err := os.Open(dir)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return f.Readdirnames(-1)
 }
 
 // readListed reads dir/name once a fresh listing of dir shows it, and
@@ -58,7 +48,7 @@ func (m *Dir) readListed(dir, name string) ([]byte, error) {
 	if !ok {
 		return nil, &fs.PathError{Op: "open", Path: filepath.Join(dir, name), Err: fs.ErrNotExist}
 	}
-	return readFile(filepath.Join(dir, name))
+	return m.readFile(filepath.Join(dir, name))
 }
 
 // listed reports whether a fresh listing of dir shows name; a missing dir

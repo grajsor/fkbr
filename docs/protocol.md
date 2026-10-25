@@ -227,8 +227,12 @@ paths, nothing climbing above the bundle root, no NUL, at most 64 KiB:
 paths may be longer than PATH_MAX; the sender skips and reports longer
 ones), the shared prefix cannot be longer than the previous name, mode,
 IDs, sizes and offsets are range-checked, a segment must lie inside its
-file, link targets are at most 4096 bytes, and an unknown kind, missing
-data, a missing end byte or data after it is an error. The checksum in
+file, link targets are at most 4096 bytes, a file at most 256 TiB, and an
+unknown kind, missing data, a missing end byte or data after it is an
+error. Whoever wrote a chunk, it may not hold more than 2 GiB, stored or
+unpacked, nor more than 16 million entries (a writer starts a new chunk
+before that; `chunk_size` is at most 1 GiB); the meta's list of files to
+drop counts only once the chunk passed its checksum. The checksum in
 the meta (`xxh3`: xxh3-128, hex) covers the whole stored chunk. It
 guards against damage, not against forgery: the share is open by design.
 Before protocol 3 it was SHA-256, which costs about 2.8 s per GiB on each

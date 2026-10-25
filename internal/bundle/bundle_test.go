@@ -355,3 +355,69 @@ func TestSparseOutputFollowsContent(t *testing.T) {
 		}
 	}
 }
+
+// A chunk from the share is bounded, whoever wrote it: what it unpacks
+// to, its entries, and the size a file in it may claim (review
+// 2026-10-25: a small zstd frame or a header claiming exabytes could fill
+// a target from almost nothing).
+func TestChunkBudgets(t *testing.T) {
+	oldBytes, oldEntries := maxChunkBytes, maxEntries
+	t.Cleanup(func() { maxChunkBytes, maxEntries = oldBytes, oldEntries })
+	maxChunkBytes, maxEntries = 1<<20, 100
+
+	// 8 MiB of one file, compressed to almost nothing.
+	s := &memSink{}
+	w := NewWriter(s, 64<<20, true)
+	big := bytes.Repeat([]byte("ab"), 4<<20)
+	must(t, w.Add(fileItem("bomb", big)))
+	_, err := w.Close()
+	must(t, err)
+	if len(s.chunks[0]) > 64<<10 {
+		t.Fatalf("not a bomb: %d bytes", len(s.chunks[0]))
+	}
+	err = Read(bytes.NewReader(s.chunks[0]), true, func(h *Header, r io.Reader) error {
+		_, err := io.Copy(io.Discard, r)
+		return err
+	})
+	if err == nil || !strings.Contains(err.Error(), "unpacks to more than") {
+		t.Errorf("a chunk unpacking past the limit: %v", err)
+	}
+
+	// More entries than allowed: the writer starts a new chunk before,
+	// a chunk with more is refused.
+	s = &memSink{}
+	w = NewWriter(s, 64<<20, false)
+	for i := range 150 {
+		must(t, w.Add(fileItem(fmt.Sprintf("f%03d", i), nil)))
+	}
+	_, err = w.Close()
+	must(t, err)
+	if len(s.chunks) < 2 {
+		t.Errorf("150 empty files in %d chunk", len(s.chunks))
+	}
+	if files := readAll(t, s); len(files) != 150 {
+		t.Errorf("%d files read back", len(files))
+	}
+	maxEntries = 1000
+	s = &memSink{}
+	w = NewWriter(s, 64<<20, false)
+	for i := range 150 {
+		must(t, w.Add(fileItem(fmt.Sprintf("f%03d", i), nil)))
+	}
+	w.Close()
+	maxEntries = 100
+	err = Read(bytes.NewReader(s.chunks[0]), false, func(*Header, io.Reader) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "more than 100 entries") {
+		t.Errorf("150 entries: %v", err)
+	}
+
+	// A file claiming more than any disk holds.
+	var buf bytes.Buffer
+	ne, _ := newNativeEntries(&buf)
+	ne.header("huge", api.Entry{Type: api.TypeFile, Size: 1 << 50}, 1<<50, 0)
+	ne.close()
+	err = Read(bytes.NewReader(buf.Bytes()), false, func(*Header, io.Reader) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "size") {
+		t.Errorf("a file of 1 PiB: %v", err)
+	}
+}

@@ -169,10 +169,25 @@ func (r *Receiver) loadBad() error {
 	}
 	defer f.Close()
 	sc := bufio.NewScanner(f)
+	sc.Buffer(nil, 1<<20) // names up to bundle.MaxNameLen, encoded
 	for sc.Scan() {
-		r.bad[sc.Text()] = true
+		var n string
+		if json.Unmarshal(sc.Bytes(), &n) == nil {
+			n = api.DecodeName(n)
+		} else {
+			n = sc.Text() // a journal of an older version: one raw name a line
+		}
+		r.bad[n] = true
 	}
 	return sc.Err()
+}
+
+// badLine is a name as the bad journal keeps it: a JSON string, so a
+// name with a newline is one line (review 2026-10-25: it read back as
+// two names, and a 64 KiB one stopped the resume).
+func badLine(name string) []byte {
+	b, _ := json.Marshal(api.EncodeName(name))
+	return b
 }
 
 // appendLine appends to a journal file in the staging base directory.
@@ -197,7 +212,7 @@ func (r *Receiver) MarkBad(names []string) error {
 			continue
 		}
 		r.bad[n] = true
-		if err := r.appendLine("bad", []byte(n)); err != nil {
+		if err := r.appendLine("bad", badLine(n)); err != nil {
 			return err
 		}
 		if err := r.root.RemoveAll(path.Join(r.tree, n)); err != nil {
@@ -266,7 +281,7 @@ func isEntryError(err error) bool {
 func (r *Receiver) refuse(name string, cause error) error {
 	r.closeDir()
 	r.bad[name] = true
-	if err := r.appendLine("bad", []byte(name)); err != nil {
+	if err := r.appendLine("bad", badLine(name)); err != nil {
 		return err
 	}
 	line, _ := json.Marshal(refusal{name, cause.Error()})

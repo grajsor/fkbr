@@ -589,3 +589,40 @@ func TestRefusedNameRemovalFails(t *testing.T) {
 		t.Errorf("good2: %v; %+v", err, res)
 	}
 }
+
+// The bad journal keeps names whole: one with a newline, one of 64 KiB,
+// one not valid UTF-8 all read back as themselves after a restart, and no
+// other name is taken for bad (review 2026-10-25). An older journal of raw
+// names still reads.
+func TestBadJournalNames(t *testing.T) {
+	_, _, _, dst := setup(t)
+	long := strings.Repeat(strings.Repeat("x", 250)+"/", 260) + "f" // 64 KiB, folder by folder
+	names := []string{"a\nb", long, "caf\xe9", "plain"}
+	r, err := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.MarkBad(names); err != nil {
+		t.Fatal(err)
+	}
+	r2, err := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+	for _, n := range names {
+		if !r2.bad[n] {
+			t.Errorf("%.20q not bad after the resume", n)
+		}
+	}
+	if r2.bad["a"] || r2.bad["b"] || len(r2.bad) != len(names) {
+		t.Errorf("bad after the resume: %d names", len(r2.bad))
+	}
+	// A journal an older version wrote: one raw name a line.
+	p := filepath.Join(dst.Name(), StagingDir, "old", "bad")
+	os.MkdirAll(filepath.Dir(p), 0o700)
+	os.WriteFile(p, []byte("sub/x.txt\n"), 0o600)
+	r3, err := New(dst, "old", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil || !r3.bad["sub/x.txt"] {
+		t.Fatalf("old journal: %v %v", err, r3.bad)
+	}
+}

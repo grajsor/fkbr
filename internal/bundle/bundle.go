@@ -417,7 +417,9 @@ func (s *fileSegs) write(off int64, data []byte) error {
 }
 
 func (w *Writer) maybeRoll() error {
-	if w.cur != nil && w.cur.raw.n >= w.limit() {
+	// A chunk of many empty files reaches maxEntries before its size: a
+	// new chunk then, so Read takes every chunk this writes.
+	if w.cur != nil && (w.cur.raw.n >= w.limit() || int64(w.cur.meta.Entries) >= maxEntries-1) {
 		return w.closeChunk()
 	}
 	return nil
@@ -465,5 +467,37 @@ func Read(r io.Reader, compressed bool, fn func(h *Header, data io.Reader) error
 		defer zr.Close()
 		r = zr
 	}
-	return readNative(r, fn)
+	return readNative(&cappedReader{r: r, left: maxChunkBytes}, fn)
+}
+
+// What a chunk from the share may hold, whoever wrote it: no real one
+// comes near (chunk_size is at most MaxChunkSize, the first ones 4 MiB,
+// plus entry headers). A small zstd frame unpacking to terabytes, or
+// millions of empty entries, would otherwise fill a target's disk or
+// inodes from almost nothing (review 2026-10-25).
+const (
+	MaxChunkSize  = 1 << 30 // the largest chunk_size
+	MaxChunkBytes = 2 << 30 // a chunk stored or unpacked, headers included
+	MaxEntries    = 1 << 24
+)
+
+// The limits Read checks; tests lower them.
+var maxChunkBytes, maxEntries int64 = MaxChunkBytes, MaxEntries
+
+// cappedReader fails once more than left bytes were read.
+type cappedReader struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		return 0, fmt.Errorf("chunk unpacks to more than %d MiB", maxChunkBytes>>20)
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
 }

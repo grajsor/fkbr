@@ -3,8 +3,10 @@ package engine
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -107,4 +109,40 @@ func onDisk(t *testing.T, p string) int64 {
 		t.Fatal(err)
 	}
 	return fi.Sys().(*syscall.Stat_t).Blocks * 512
+}
+
+// bigMeta makes every chunk's meta claim 3 GiB, as a forged one could.
+type bigMeta struct{ transport.Store }
+
+func (b bigMeta) ChunkMeta(ctx context.Context, src, id string, seq int) ([]byte, error) {
+	raw, err := b.Store.ChunkMeta(ctx, src, id, seq)
+	if err != nil {
+		return raw, err
+	}
+	var m map[string]any
+	if json.Unmarshal(raw, &m) != nil {
+		return raw, nil
+	}
+	m["size"] = 3 << 30
+	return json.Marshal(m)
+}
+
+// A chunk meta claiming more than any chunk holds fails the target before
+// it reads anything (review 2026-10-25).
+func TestChunkMetaOverBudget(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	s1 := buildWrapped(t, nodeCfg(t, share, "s1"), func(st transport.Store) transport.Store { return bigMeta{st} })
+	makeTree(t, mroot, 2, 100<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, master, id, 30*time.Second)
+	st := ownStatus(j, "s1", api.RoleTarget)
+	if j.State != api.JobFailed || st == nil || !strings.Contains(st.Error, "no chunk holds over") {
+		t.Fatalf("job %s, target %+v", j.State, st)
+	}
 }

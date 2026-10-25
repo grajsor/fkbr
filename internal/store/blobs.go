@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -48,7 +47,7 @@ func (m *Dir) CreateBlob(_ context.Context, name string) (transport.ChunkWriter,
 	if err := m.mkdir(filepath.Dir(dest)); err != nil {
 		return nil, err
 	}
-	f, err := os.CreateTemp(m.path("tmp"), ".blob-*")
+	f, err := m.fs.CreateTemp(m.path("tmp"), ".blob-*")
 	if err != nil {
 		return nil, err
 	}
@@ -65,10 +64,10 @@ func (w *blobWriter) Commit([]byte) error {
 	if err := w.f.Close(); err != nil {
 		return err
 	}
-	if err := os.Chmod(w.f.Name(), w.m.fileMode()); err != nil {
+	if err := w.m.fs.Chmod(w.f.Name(), w.m.fileMode()); err != nil {
 		return err
 	}
-	if err := os.Rename(w.f.Name(), w.dest); err != nil {
+	if err := w.m.fs.Rename(w.f.Name(), w.dest); err != nil {
 		return err
 	}
 	w.done = true
@@ -78,7 +77,7 @@ func (w *blobWriter) Commit([]byte) error {
 func (w *blobWriter) Abort() {
 	if !w.done {
 		w.f.Close()
-		os.Remove(w.f.Name())
+		w.m.fs.Remove(w.f.Name())
 		w.done = true
 	}
 }
@@ -89,11 +88,11 @@ func (m *Dir) OpenBlob(_ context.Context, name string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	m.freshFile(p)
-	return os.Open(p)
+	return m.fs.Open(p)
 }
 
 func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
-	kinds, err := os.ReadDir(m.path("blobs"))
+	kinds, err := m.fs.ReadDir(m.path("blobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
@@ -124,12 +123,12 @@ func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	newest := map[string]time.Time{}
 	var dirs [][2]string // kind, id
 	for _, k := range kinds {
-		ids, err := os.ReadDir(m.path("blobs", k.Name()))
+		ids, err := m.fs.ReadDir(m.path("blobs", k.Name()))
 		if err != nil {
 			continue
 		}
 		for _, id := range ids {
-			if t := newestMtime(m.path("blobs", k.Name(), id.Name())); t.After(newest[id.Name()]) {
+			if t := m.newestMtime(m.path("blobs", k.Name(), id.Name())); t.After(newest[id.Name()]) {
 				newest[id.Name()] = t
 			}
 			dirs = append(dirs, [2]string{k.Name(), id.Name()})
@@ -138,19 +137,19 @@ func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	var errs []error
 	for _, d := range dirs {
 		if !inUse[d[1]] && newest[d[1]].Before(cutoff) {
-			errs = append(errs, removeRacing(m.path("blobs", d[0], d[1])))
+			errs = append(errs, m.removeRacing(m.path("blobs", d[0], d[1])))
 		}
 	}
 	return errors.Join(errs...)
 }
 
 // newestMtime is the latest mtime of dir and its direct entries.
-func newestMtime(dir string) time.Time {
+func (m *Dir) newestMtime(dir string) time.Time {
 	var newest time.Time
-	if fi, err := os.Stat(dir); err == nil {
+	if fi, err := m.fs.Stat(dir); err == nil {
 		newest = fi.ModTime()
 	}
-	des, _ := os.ReadDir(dir)
+	des, _ := m.fs.ReadDir(dir)
 	for _, de := range des {
 		if fi, err := de.Info(); err == nil && fi.ModTime().After(newest) {
 			newest = fi.ModTime()

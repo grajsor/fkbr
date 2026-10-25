@@ -53,7 +53,15 @@ func TestRefreshMissingDirRefreshesParent(t *testing.T) {
 	if err := os.Chtimes(parent, old, old); err != nil {
 		t.Fatal(err)
 	}
-	r.fresh(filepath.Join(parent, "job", "acks")) // neither job nor acks exists
+	touch := func(p string) error {
+		f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err != nil {
+			return err
+		}
+		f.Close()
+		return os.Remove(p)
+	}
+	r.fresh(filepath.Join(parent, "job", "acks"), touch) // neither job nor acks exists
 	fi, err := os.Stat(parent)
 	if err != nil {
 		t.Fatal(err)

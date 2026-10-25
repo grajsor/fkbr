@@ -267,11 +267,8 @@ var errChecksum = errors.New("checksum mismatch")
 // same chunk twice is harmless. A persistent mismatch fails the target,
 // and nothing from it is ever installed.
 func (e *Engine) applyChunk(ctx context.Context, src, id string, meta *bundle.ChunkMeta, rcv *receive.Receiver, status *statusWriter) error {
-	if err := rcv.MarkBad(meta.Bad); err != nil {
-		return err
-	}
-	for _, b := range meta.Bad {
-		status.problem("%s: changed or unreadable on the source, not copied", b)
+	if meta.Size <= 0 || meta.Size > bundle.MaxChunkBytes || meta.Raw > bundle.MaxChunkBytes {
+		return fmt.Errorf("chunk %d claims %d bytes (%d unpacked); no chunk holds over %d MiB", meta.Seq, meta.Size, meta.Raw, bundle.MaxChunkBytes>>20)
 	}
 	files, bytes := status.st.Files, status.st.Bytes
 	err := e.readChunk(ctx, src, id, meta, rcv, status)
@@ -280,7 +277,18 @@ func (e *Engine) applyChunk(ctx context.Context, src, id string, meta *bundle.Ch
 		status.st.Files, status.st.Bytes = files, bytes
 		err = e.readChunk(ctx, src, id, meta, rcv, status)
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	// Only a chunk that passed its checksum says which files to drop: a
+	// damaged meta must not drop good ones (review 2026-10-25).
+	if err := rcv.MarkBad(meta.Bad); err != nil {
+		return err
+	}
+	for _, b := range meta.Bad {
+		status.problem("%s: changed or unreadable on the source, not copied", b)
+	}
+	return nil
 }
 
 func (e *Engine) readChunk(ctx context.Context, src, id string, meta *bundle.ChunkMeta, rcv *receive.Receiver, status *statusWriter) error {
@@ -289,7 +297,7 @@ func (e *Engine) readChunk(ctx context.Context, src, id string, meta *bundle.Chu
 		return err
 	}
 	defer rc.Close()
-	ra := readAhead(rc)
+	ra := readAhead(io.LimitReader(rc, meta.Size+1)) // more than the meta says: no checksum match
 	defer ra.Close()
 	h := xxh3.New128()
 	cr := &countingReader{r: io.TeeReader(ra, h)}
