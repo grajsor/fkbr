@@ -293,6 +293,7 @@ Found by a code review of the whole ssh branch (2026-10-23):
 | A CLI attached to a daemon always said "using the running node X, which shares ...", because of root `local` | Root `local` is not compared | `TestSameRootsLeavesOutLocal` |
 | The TUI asked a node on a share for its links on every node list refresh | Asked once | `TestNotHomeAskedOnce` |
 | Two `firstLine` helpers that differed on long lines | One | (none) |
+| A pane listing a node's roots (`files`, `local`) put its cursor back on the top row at every node refresh, a few seconds apart (found by the owner, 2026-10-25) | The cursor stays on its row | `TestRootsRefreshKeepsCursor` |
 
 ## 13. Cloud test run (2026-10-24)
 

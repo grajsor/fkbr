@@ -503,6 +503,9 @@ func (m *model) syncNodePanes() {
 			p.setNodes(nodes, m.links)
 		case levelRoots:
 			if n, ok := m.nodes[p.node]; ok {
+				if r := p.current(); r != nil && p.want == "" {
+					p.want = r.name // keep the cursor where it is
+				}
 				p.setRoots(n)
 			}
 		}

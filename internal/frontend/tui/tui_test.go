@@ -277,6 +277,22 @@ func TestNavigation(t *testing.T) {
 	}
 }
 
+// A node refresh (every few seconds) rebuilds a pane listing a node's
+// roots; the cursor stayed on the top row and jumped back from any other.
+func TestRootsRefreshKeepsCursor(t *testing.T) {
+	h := newHarness(t)
+	p := h.m.panes[0]
+	p.cursorTo("s1")
+	h.key("enter", "down", "down")
+	if p.level != levelRoots || h.cursorName(0) != "logs" {
+		t.Fatalf("roots: level %d cursor %q", p.level, h.cursorName(0))
+	}
+	h.send(nodesMsg{nodes: h.m.sortedNodes()})
+	if h.cursorName(0) != "logs" {
+		t.Fatalf("after a node refresh the cursor is on %q, want logs", h.cursorName(0))
+	}
+}
+
 func TestCopySelectionToOtherPane(t *testing.T) {
 	h := newHarness(t)
 	h.open("master", "data")
