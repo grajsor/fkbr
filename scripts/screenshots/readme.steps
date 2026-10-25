@@ -1,11 +1,12 @@
 wait 3
 # main: web01's site on the left with two marked files, backup01's copy of
-# it on the right. Node lists start with this node (ops01), then by name.
-keys down down down down enter
+# it on the right. The panes start in folders: F2 goes to the node list,
+# which starts with this node (ops01), then by name.
+keys f2 home down down down down enter
 wait 1
 keys down down down enter
 wait 1
-keys tab down enter
+keys tab f2 home down enter
 wait 1
 keys down down enter
 wait 1
@@ -46,3 +47,9 @@ wait 1
 # scrolled a little way in: the percentage and the scrollbar show where
 keys down down down down down down down down down down down down
 shot fkbr-view
+# the settings dialog (F11), a few rows down: the demo's ~/.fkbr.conf
+keys esc f11
+wait 0.5
+keys down down down down
+shot fkbr-settings
+keys esc

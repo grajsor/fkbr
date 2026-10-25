@@ -13,6 +13,18 @@ f() { # path size date
 	touch -d "$3" "$1"
 }
 sparse() { mkdir -p "$(dirname "$1")"; truncate -s "$2" "$1"; touch -d "$3" "$1"; }
+# dump: big but cheap on disk, and not zeros (fkbr leaves those out), so a
+# copy of it takes long enough to be seen running: a byte every 64 KiB.
+dump() {
+	mkdir -p "$(dirname "$1")"
+	python3 -c 'import sys
+f = open(sys.argv[1], "wb")
+n = int(sys.argv[2])
+for off in range(0, n, 65536):
+    f.seek(off); f.write(b"\x01")
+f.truncate(n)' "$1" "$2"
+	touch -d "$3" "$1"
+}
 
 W=$D/web01
 f $W/site/index.html 18432 "2026-10-18 21:40"
@@ -34,9 +46,9 @@ chmod +x $W/deploy.sh
 ln -s releases/2026-10-18 $W/current
 
 B=$D/db01
-sparse $B/dumps/orders-2026-10-17.sql.zst 1288490188 "2026-10-17 02:05"
-sparse $B/dumps/orders-2026-10-18.sql.zst 1302000000 "2026-10-18 02:05"
-sparse $B/dumps/orders-2026-10-19.sql.zst 1311000000 "2026-10-19 02:05"
+dump $B/dumps/orders-2026-10-17.sql.zst 1288490188 "2026-10-17 02:05"
+dump $B/dumps/orders-2026-10-18.sql.zst 1302000000 "2026-10-18 02:05"
+dump $B/dumps/orders-2026-10-19.sql.zst 1311000000 "2026-10-19 02:05"
 f $B/conf/postgresql.conf 29696 "2026-07-30 15:44"
 f $B/conf/pg_hba.conf 5120 "2026-07-30 15:44"
 f $B/scripts/vacuum.sh 1536 "2026-05-12 09:30"

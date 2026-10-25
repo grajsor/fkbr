@@ -1,10 +1,10 @@
 wait 3
 # web01's site on the left, backup01's older copy of it on the right
-keys down down down down enter
+keys f2 home down down down down enter
 wait 1
 keys down down down enter
 wait 1
-keys tab down enter
+keys tab f2 home down enter
 wait 1
 keys down down enter
 wait 1
