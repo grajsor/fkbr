@@ -175,7 +175,9 @@ Every runtime use of the name comes from `internal/product`.
   remain; detached targets install nothing and `catchup` re-sends (to
   failed targets too). The
   *last* target is detached only when offline for `detach_after`; a
-  source with no active target is done.
+  source with no active target is done. A share full for `detach_after`
+  with nothing of the job left on it to free fails the job (`fullSince`
+  in send.go).
 - Cleanup: handled requests are deleted at once. Finished jobs, plans and
   failed requests are pruned after `keep_done` (1h) by a running node, at
   start and every half `keep_done`. Floors under any keep: a job stays
@@ -358,4 +360,3 @@ pty, answer `ESC]11;?` and `ESC[6n` or nothing draws for ~5 s.
 - Sparse files cross the share as real zeros; detecting holes on the
   source would help.
 - A job whose only problems are type clashes ends `done` with errors.
-- A single-target copy waits forever if the share stays full.

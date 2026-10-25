@@ -50,6 +50,8 @@ type sender struct {
 	gone       map[string]time.Time
 	tstate     map[string]api.JobState
 	lastNotify time.Time
+	// fullSince is when the share filled up with no chunk staged since.
+	fullSince time.Time
 
 	log     *slog.Logger
 	totals  totals
@@ -751,6 +753,17 @@ func (s *sender) waitAfterNoSpace(ctx context.Context, cause error) error {
 		// Over ssh chunks are staged here, in a private dir (in /tmp).
 		full = "no space left in " + c.NFSRoot
 	}
+	if s.fullSince.IsZero() {
+		s.fullSince = time.Now()
+	} else if d := time.Since(s.fullSince); d >= s.e.cfg.Transfer.DetachAfter {
+		// Waiting helps while targets have chunks of this job to consume
+		// (one is slow); with none left, only someone else could make
+		// room, and the job would hold its slot until then.
+		if staged, _, err := s.e.st.StagedBytes(ctx, s.job.ID); err == nil && staged == 0 {
+			return fmt.Errorf("%s for %s, with nothing of this job left there to free: make room and start the copy again (%w)",
+				full, d.Round(time.Second), cause)
+		}
+	}
 	s.status.st.Phase = full + ", waiting for targets to free space"
 	s.status.put(ctx, true)
 	s.e.log.Warn(full+"; retrying", "job", s.job.ID, "err", cause)
@@ -892,6 +905,7 @@ func (k *shareSink) Commit(meta bundle.ChunkMeta) error {
 		return err
 	}
 	k.cw = nil
+	s.fullSince = time.Time{} // room again
 	s.status.st.Chunks = meta.Seq + 1
 	s.status.st.Files, s.status.st.Bytes = k.w.Files, k.w.Bytes
 	s.status.put(k.ctx, true)

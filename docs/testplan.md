@@ -45,7 +45,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 |---|---|---|
 | Soft mount: EIO/ETIMEDOUT/ESTALE for less than 3 min | Transfer rides it out | auto, lab (seen 5 times) |
 | Share full (ENOSPC/EDQUOT) | Source waits for targets to free space and goes on; state shows "share full" | auto |
-| Share full for good, single target | Waits until cancelled (by design; visible) | auto |
+| Share full for good: nothing of the job left on it for its targets to free | The job fails after `detach_after` (10 min) and says so: "share full for 10m0s, with nothing of this job left there to free: make room and start the copy again" (it waited until cancelled) | auto (`TestShareFullForGoodFails`) |
 | NFS attribute caching (`actimeo=1800`), negative dentries | Refresh trick plus wait-by-listing; no stale reads | lab |
 | Host clocks skewed against the NFS server | Liveness and pruning use server mtimes | auto (pruning by code review) |
 | NAS restart during a transfer | Soft mount: errors, then resume within 3 min; hard mount: pause | **todo** (needs the NAS) |

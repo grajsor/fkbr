@@ -256,7 +256,9 @@ The last active target is not dropped for being slow or failing (a
 failure then fails the job), but it is once it has been offline for
 `transfer.detach_after`: the job ends `partial` and frees the source's
 job slot; `catchup` sends it later. A source with no active target left
-is done. A target that was forgotten (gone from the registry for
+is done. A share that stays full for `transfer.detach_after` while none
+of the job's chunks are left on it for its targets to free fails the
+job: only someone else could make room. A target that was forgotten (gone from the registry for
 `offline_after`) is dropped too; if it was the last one, the job fails. A
 target whose source was forgotten fails the same way. A target that has
 not started (no status yet) is sent its receive request again every

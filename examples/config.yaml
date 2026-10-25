@@ -77,4 +77,5 @@ roots:
 #                          # (on an ssh home node: also on every host it links)
 #   max_jobs: 2            # concurrent sending jobs, and receiving jobs
 #   allow_setid: false     # keep setuid/setgid bits on received files
-#   detach_after: 10m      # fan-out: drop a target stalled this long
+#   detach_after: 10m      # fan-out: drop a target stalled this long; a copy
+#                          # fails if the share stays full this long

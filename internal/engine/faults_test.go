@@ -50,6 +50,8 @@ type faultStore struct {
 	capacity int64
 	writing  int64 // in chunks not yet published
 	full     int
+	// others: what someone else's files take of capacity.
+	others int64
 }
 
 func (f *faultStore) FreeBytes() (int64, error) {
@@ -59,7 +61,7 @@ func (f *faultStore) FreeBytes() (int64, error) {
 	_, staged, err := f.Dir.StagedBytes(context.Background(), "")
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.capacity - staged - f.writing, err
+	return f.capacity - f.others - staged - f.writing, err
 }
 
 // capWriter fails a chunk write that would overfill the small disk, with
@@ -73,7 +75,7 @@ type capWriter struct {
 func (w *capWriter) Write(p []byte) (int, error) {
 	_, staged, _ := w.f.Dir.StagedBytes(context.Background(), "")
 	w.f.mu.Lock()
-	if staged+w.f.writing+int64(len(p)) > w.f.capacity {
+	if staged+w.f.writing+int64(len(p)) > w.f.capacity-w.f.others {
 		w.f.full++
 		w.f.mu.Unlock()
 		return 0, &os.PathError{Op: "write", Path: "chunk", Err: syscall.ENOSPC}
@@ -234,6 +236,50 @@ func TestShareFullRetries(t *testing.T) {
 		t.Fatal("fault never injected")
 	}
 	sameTree(t, filepath.Join(mcfg.Roots[0].Path, "tree"), filepath.Join(sroot, "tree"))
+}
+
+// A share that stays full, with nothing of the job left on it for its
+// targets to free, fails the job after detach_after; it waited forever.
+func TestShareFullForGoodFails(t *testing.T) {
+	oldWait := noSpaceWait
+	t.Cleanup(func() { noSpaceWait = oldWait })
+	noSpaceWait = 50 * time.Millisecond
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	mcfg.Transfer.JobQuota, mcfg.Transfer.StagingQuota = 64<<20, 64<<20 // the disk is the limit
+	mcfg.Transfer.DetachAfter = 2 * time.Second
+	master, fs := buildFaulty(t, mcfg)
+	fs.capacity = 1 << 20
+	scfg := nodeCfg(t, share, "s1")
+	s1, sfs := buildFaulty(t, scfg)
+	sfs.openDelay = 100 * time.Millisecond // a few chunks a second
+	makeTree(t, mcfg.Roots[0].Path, 10, 3<<20)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool {
+		j, _ := master.Job(context.Background(), id)
+		st := ownStatus(j, "s1", api.RoleTarget)
+		return st != nil && st.Chunks >= 2
+	}, "the target applying chunks")
+	fs.mu.Lock()
+	fs.others = fs.capacity // someone else fills the share, for good
+	fs.mu.Unlock()
+	start := time.Now()
+	j := waitJob(t, master, id, 30*time.Second)
+	src := ownStatus(j, "master", api.RoleSource)
+	if j.State != api.JobFailed || src == nil || !strings.Contains(src.Error, "share full for") {
+		t.Fatalf("job %s, source %+v", j.State, src)
+	}
+	if took := time.Since(start); took < mcfg.Transfer.DetachAfter {
+		t.Errorf("gave up after %s, before detach_after", took)
+	}
+	if _, err := os.Stat(filepath.Join(scfg.Roots[0].Path, "tree")); !os.IsNotExist(err) {
+		t.Error("a partial copy was installed")
+	}
 }
 
 func TestCorruptChunkFailsLoudly(t *testing.T) {
