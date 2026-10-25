@@ -141,7 +141,8 @@ Every runtime use of the name comes from `internal/product`.
   client can keep it forever. Replies, chunk metas, acks, COMPLETE/CANCEL,
   info.json all wait by listing.
 - **Soft mounts:** transfers retry EIO/ETIMEDOUT/ESTALE for up to
-  `transientBudget` (3 min) of consecutive errors (`engine/transient.go`).
+  `transientBudget` (3 min) of consecutive errors (`engine/transient.go`);
+  any store answer or progress in between ends the run (`ride.ok`).
   On hard mounts a host cut off from the NAS blocks and resumes.
 - Metadata order on receive is mode → mtime → chown → setuid re-chmod, so
   it works with only CAP_CHOWN. Directories are chowned only with
@@ -241,6 +242,9 @@ package tests; docs/testplan.md lists them.
   folder others may write to (`CheckSocketDir`; the CLI won't dial it).
   The ssh keepalive holds its verdict once after a late tick (`watch`):
   a stalled process is not a dead peer.
+  Over ssh a record call the home node doesn't answer within
+  `recordTimeout` is a link down (EIO), which transfers ride out; a
+  target whose ack folder is gone asks the job (cancelled, not failed).
 - A copy/move of a named source path that does not exist fails
   (`api.ErrNotFound` at Submit, `missingPaths` in send.go).
 - A node whose shared dir is deleted/moved/replaced stops and says so

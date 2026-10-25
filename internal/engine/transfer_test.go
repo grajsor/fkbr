@@ -9,11 +9,14 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"fkbr/internal/api"
 	"fkbr/internal/receive"
+	"fkbr/internal/transport"
 )
 
 // makeTree creates dir/tree with nfiles small files plus one big file.
@@ -206,6 +209,63 @@ func TestCancelWhileTargetDown(t *testing.T) {
 		_, err := os.Stat(filepath.Join(share, "data", "master", id))
 		return os.IsNotExist(err)
 	}, "staged data removed after cancel")
+}
+
+// ackGone is a target's store whose first ack lands after its source
+// removed the job's data: before it, cancel runs its course.
+type ackGone struct {
+	transport.Store
+	once   sync.Once
+	cancel func()
+}
+
+func (a *ackGone) SetAcked(ctx context.Context, src, id, node string, n int) error {
+	hit := false
+	a.once.Do(func() { hit = true })
+	if hit {
+		a.cancel()
+		return &fs.PathError{Op: "rename", Path: "data/" + src + "/" + id + "/acks/" + node, Err: syscall.ENOENT}
+	}
+	return a.Store.SetAcked(ctx, src, id, node, n)
+}
+
+// A cancel that removes the job's data while a target writes its ack ends
+// that target cancelled, not failed (torture v2 over ssh: "rename …
+// acks/<node>: no such file or directory").
+func TestCancelDuringAck(t *testing.T) {
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	makeTree(t, mroot, 5, 3<<20)
+	gone := &ackGone{}
+	slave := buildWrapped(t, nodeCfg(t, share, "slave1"), func(st transport.Store) transport.Store {
+		gone.Store = st
+		return gone
+	})
+	ids := make(chan string, 1)
+	gone.cancel = func() {
+		id := <-ids
+		if err := master.Cancel(context.Background(), id); err != nil {
+			t.Error(err)
+		}
+		waitUntil(t, func() bool {
+			j, _ := master.Job(context.Background(), id)
+			s := ownStatus(j, "master", api.RoleSource)
+			return s != nil && s.State == api.JobCancelled
+		}, "source cancelled")
+	}
+	runWorker(t, master)
+	runWorker(t, slave)
+	id, err := master.Submit(context.Background(), api.TransferRequest{
+		SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"slave1"}, DstRoot: "data", DstDir: "in",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids <- id
+	j := waitJob(t, master, id, 20*time.Second)
+	if s := ownStatus(j, "slave1", api.RoleTarget); j.State != api.JobCancelled || s == nil || s.State != api.JobCancelled {
+		t.Fatalf("job %s, target %+v; want both cancelled", j.State, s)
+	}
 }
 
 func TestReceiverRestartResumes(t *testing.T) {

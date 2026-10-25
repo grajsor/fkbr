@@ -169,11 +169,18 @@ func record(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), recordTimeout)
 }
 
-// rec makes a record call (see record).
+// rec makes a record call (see record). One the home node does not answer
+// in time is a link down (EIO), which transfers ride out: the keepalive
+// takes longer to say the link is gone than recordTimeout, and a bare
+// deadline failed an ssh copy whose source link was cut for 32 s.
 func (r *Remote) rec(ctx context.Context, method string, args, out any) error {
-	ctx, cancel := record(ctx)
+	rctx, cancel := record(ctx)
 	defer cancel()
-	return do(ctx, r.sess, method, args, out)
+	err := do(rctx, r.sess, method, args, out)
+	if errors.Is(err, context.DeadlineExceeded) && errors.Is(rctx.Err(), context.DeadlineExceeded) {
+		return linkDown(fmt.Errorf("%s: no answer from the home node within %s", method, recordTimeout))
+	}
+	return err
 }
 
 // Transport: everything goes to the home node.

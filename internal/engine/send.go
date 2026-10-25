@@ -189,11 +189,18 @@ func (s *sender) run(ctx context.Context) error {
 		defer cancel()
 		go s.count(cctx)
 	}
+	staged := 0 // chunks staged at the last error: more since then end its run
 	for produced := total > 0 && !rebuild; !produced; {
 		n, err := s.produce(ctx)
-		if err != nil && !isNoSpace(err) && ride.retry(ctx, err) {
-			s.resumeFrom = s.status.st.Chunks // regenerate, keep what is staged
-			continue
+		if err != nil && !isNoSpace(err) {
+			if s.status.st.Chunks > staged {
+				ride.ok()
+			}
+			staged = s.status.st.Chunks
+			if ride.retry(ctx, err) {
+				s.resumeFrom = s.status.st.Chunks // regenerate, keep what is staged
+				continue
+			}
 		}
 		if isNoSpace(err) {
 			// The share is smaller than the configured quotas. Wait for

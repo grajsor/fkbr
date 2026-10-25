@@ -312,11 +312,43 @@ data bug: every target matched its source.
 | Symlinks got the time they were made on the target | They keep the source's mtime, like `rsync -a` | `TestRoundTripMetadata` |
 | `cp /x @all` (no colon), or `cp /x hostb` with `hostb` a node, copied into a folder of that name here (found on the lab) | Refused for cp, mv and sync, naming `@all:/dir`; `/hostb` is still a folder here | `TestDestinationNamesNodes` |
 
+## 14. Torture v2 and edge tests (2026-10-24/25)
+
+The lab torture test was rebuilt to hunt rather than repeat. An NFS swarm
+and an ssh swarm run jobs at once, with small random limits (1-4 MiB
+chunks, quotas of a few chunks, `max_jobs` 1-2). Up to 3 faults overlap:
+
+- node, home node, ssh client and link kills and stops;
+- NAS and link cuts, netem;
+- clock jumps of up to 2 min, memory and CPU squeezes, a full target disk.
+
+Jobs change their source while it is read, have their target vandalised
+(deleted, swapped for a symlink out of the root, chmod 000), get cancelled,
+collide in one folder and move. After any trouble, one mirror sync with the
+faults off must make every target exact.
+
+Run 1 (12 rounds, 217 jobs, 172 faults), run 2 (21 rounds, 377 jobs, 314
+faults) and the edge tests: every target
+matched or converged, and nothing was written outside a root. Corrupted
+staged chunks were refused, never installed. Files made on a target after
+a plan survived applying it. A source folder swapped for a symlink to
+`/etc` mid-copy brought nothing from `/etc`. Paths past PATH_MAX and
+100,000 files in one folder (peak 58 MiB RSS) copied exact. 40 CLI calls
+at once were all answered, and 20 queued jobs into `max_jobs` 1 all ended
+exact.
+
+| Found | Now | Test |
+|---|---|---|
+| Over ssh, a link cut for 30-45 s failed the copy ("context deadline exceeded"): a record call timed out (30 s) before the keepalive called the link dead (45 s), and a bare deadline is not an error transfers ride out | A record call the home node does not answer in time is a link down (EIO), which transfers ride out; lab: cuts of 15-90 s, target on the home node or not, all done | `TestUnansweredRecordCallIsLinkDown` |
+| A cancel over ssh could end a target failed ("rename … acks/<node>: no such file or directory"): the source removed the job's data while the target wrote its ack | An ack whose folder is gone means the job's data was removed; the target then asks the job and ends cancelled; lab: 20 cancels over ssh, none failed | `TestCancelDuringAck` |
+| Torture run 2: a target over ssh gave up "after 3m0s" of I/O errors though the link had been back for minutes: the 3 min budget is for consecutive errors, but a successful "chunk not there yet" did not end the run, so two drops 3 min apart counted as one (the source had the same: only a finished walk ended it) | A store answer, or a chunk staged since the last error, ends a run of errors; an outage that lasts still gives up | `TestTargetBudgetIsForConsecutiveErrors`, `TestSourceBudgetIsForConsecutiveErrors`, `TestIOErrorsGiveUp` |
+| Torture run 3: `sync` exited 0 with nothing copied when its transfer could not be submitted (a target offline at the apply); the reason was in the plan but never shown, and the TUI said "0 transfer jobs submitted" | `sync` prints the problem and fails ("1 of 2 transfers not submitted"); the TUI shows it as an error | `TestSyncTransferNotSubmitted` (cli, tui) |
+
 ## How to run the lab tests
 
-- **Torture** (`torture/`): rounds of random copies and syncs
-  between five nodes, with kill -9, SIGSTOP and restarts, verified by
-  sha256 manifests. See its README.
+- **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked
+  faults with small limits, checked by sha256 manifests and convergence
+  (section 14); `edge.py` runs the targeted tests. See its README.
 - **Weird** (`weird/`): `weird.py [test...]` runs odd cases with
   several nodes on one machine; `nfscut.py target|source` cuts a lab node
   off the NAS mid-transfer; `fuzz_tui.py SECONDS SEED` (with pyte) throws

@@ -27,8 +27,11 @@ type fakeClient struct {
 	mkdirs  []api.MkdirRequest
 	syncs   []api.SyncRequest
 	applied []string
-	events  chan api.Event
-	read    []byte // what Read returns, if set
+	// unsent: ApplySync submits no transfer and says this (a target went
+	// offline since the plan).
+	unsent string
+	events chan api.Event
+	read   []byte // what Read returns, if set
 }
 
 func newFake() *fakeClient {
@@ -85,6 +88,9 @@ func (f *fakeClient) ApplySync(_ context.Context, id string, force bool) (*api.S
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applied = append(f.applied, fmt.Sprintf("%s force=%v", id, force))
+	if f.unsent != "" {
+		return &api.SyncPlan{ID: id, Applied: true, Groups: []api.SyncGroup{{Targets: []string{"s1"}}}, Problems: []string{f.unsent}}, nil
+	}
 	return &api.SyncPlan{ID: id, Applied: true, Jobs: []string{"j"}}, nil
 }
 
@@ -467,6 +473,21 @@ func TestSyncFromPanes(t *testing.T) {
 	h.key("y")
 	if len(h.f.applied) != 1 || h.f.applied[0] != "plan1 force=true" {
 		t.Fatalf("applied: %v", h.f.applied)
+	}
+}
+
+// A sync whose transfer could not be submitted says so, as an error; it
+// said "0 transfer jobs submitted" and nothing more.
+func TestSyncTransferNotSubmitted(t *testing.T) {
+	h := newHarness(t)
+	h.f.unsent = "transfer to s1: node offline: s1"
+	h.open("master", "data")
+	h.m.panes[0].cursorTo("proj")
+	h.key("enter", "tab")
+	h.open("s1", "data")
+	h.key("tab", "f4", "enter", "y")
+	if !strings.Contains(h.m.status, "1 not: transfer to s1: node offline") {
+		t.Fatalf("status: %q", h.m.status)
 	}
 }
 

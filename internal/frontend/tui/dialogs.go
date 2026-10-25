@@ -788,7 +788,7 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest, pr
 	}
 	c.onYes = func() tea.Cmd {
 		return func() tea.Msg {
-			jobs := 0
+			jobs, notSent, why := 0, 0, ""
 			var ts []target
 			var problems []string
 			for _, p := range plans {
@@ -801,6 +801,14 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest, pr
 				}
 				jobs += len(ap.Jobs)
 				problems = append(problems, ap.DeleteErrors...)
+				if n := len(ap.Groups) - len(ap.Jobs); n > 0 {
+					// Not submitted (a target went offline since the
+					// plan): ApplySync says why after the plan's own notes.
+					notSent += n
+					if extra := ap.Problems[min(len(p.Problems), len(ap.Problems)):]; len(extra) > 0 && why == "" {
+						why = extra[0]
+					}
+				}
 				for _, t := range ap.Targets {
 					ts = append(ts, target{t.Node, ap.Request.DstRoot})
 				}
@@ -812,6 +820,9 @@ func syncConfirm(m *model, plans []*api.SyncPlan, files *api.TransferRequest, pr
 				jobs++
 			}
 			text := fmt.Sprintf("sync: %d transfer jobs submitted", jobs)
+			if notSent > 0 {
+				return statusMsg{text: fmt.Sprintf("%s; %d not: %s", text, notSent, why), err: true}
+			}
 			if len(problems) > 0 {
 				return statusMsg{text: fmt.Sprintf("%s; %d deletions failed: %s", text, len(problems), problems[0]), err: true}
 			}

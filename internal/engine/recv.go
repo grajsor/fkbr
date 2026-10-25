@@ -151,6 +151,10 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 				}
 				return err
 			}
+			// The store answered: a run of errors is over, though the
+			// chunk is not there yet (the budget is for consecutive
+			// errors; two drops minutes apart are not one).
+			ride.ok()
 			total := "unknown yet"
 			if j.TotalChunks > 0 {
 				total = fmt.Sprint(j.TotalChunks)
@@ -224,7 +228,10 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 		}
 		for {
 			err := e.st.SetAcked(ctx, src, id, e.Self(), next)
-			if err == nil {
+			if err == nil || errors.Is(err, fs.ErrNotExist) {
+				// Not there: the source removed the job's data, as it does
+				// once the job is cancelled or over. The next chunk is
+				// missing too, and the job says which.
 				break
 			}
 			if !ride.retry(ctx, err) {

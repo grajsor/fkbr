@@ -72,6 +72,10 @@ func buildWrapped(t *testing.T, cfg *config.Config, wrap func(transport.Store) t
 	// Refresh on: exercises the NFS-compensation paths everywhere (on a
 	// local filesystem they change nothing observable).
 	opts := nfsmailbox.Options{Poll: cfg.Poll.Active, OfflineAfter: cfg.OfflineAfter, Refresh: true}
+	// Read again while the tests run: the go command keys its test cache
+	// only on variables read then, and linkTest is set before; an ssh run
+	// was handed the cached result of the NFS run.
+	_ = os.Getenv("FKBR_TEST_TRANSPORT")
 	if linkTest {
 		tr, st := linked(t, cfg, opts)
 		e := New(cfg, fsys, tr, wrap(st), Options{Version: "test"})

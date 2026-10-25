@@ -111,3 +111,30 @@ func TestServeWaitsForCalls(t *testing.T) {
 		t.Fatal("serve did not return after its last call")
 	}
 }
+
+// A record call the home node does not answer within recordTimeout is a
+// link down (EIO), which transfers ride out; the keepalive takes longer to
+// call the link dead. A bare deadline failed an ssh copy whose source link
+// was cut for 32 s (torture v2, lab).
+func TestUnansweredRecordCallIsLinkDown(t *testing.T) {
+	defer func(d time.Duration) { recordTimeout = d }(recordTimeout)
+	recordTimeout = 100 * time.Millisecond
+	cli, srv := sessionPair(t)
+	release := make(chan struct{})
+	defer close(release)
+	go serve(context.Background(), srv, map[string]handler{"status.put": func(context.Context, json.RawMessage, io.Reader, *answerWriter) (any, error) {
+		<-release // the link is cut: no answer
+		return nil, nil
+	}}, nil)
+	r := &Remote{sess: cli}
+	err := r.rec(context.Background(), "status.put", nil, nil)
+	if !errors.Is(err, syscall.EIO) || !errors.Is(err, ErrLinkDown) {
+		t.Fatalf("unanswered record call: %v, want a link down (EIO)", err)
+	}
+	// The caller's own end is not a link down.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := do(ctx, cli, "status.put", nil, nil); errors.Is(err, syscall.EIO) {
+		t.Fatalf("cancelled call: %v, want no EIO", err)
+	}
+}

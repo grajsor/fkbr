@@ -707,3 +707,103 @@ func TestSpaceBook(t *testing.T) {
 		t.Error("nothing staged or held: the write should find out, not wait")
 	}
 }
+
+// metaGap is a target's store: the meta of chunk 1 fails once with EIO,
+// then reads as not there yet for gap (the store answers: the source is
+// slow), then fails once more, then reads as it is.
+type metaGap struct {
+	transport.Store
+	gap  time.Duration
+	mu   sync.Mutex
+	t0   time.Time
+	hits int
+}
+
+func (m *metaGap) ChunkMeta(ctx context.Context, src, id string, seq int) ([]byte, error) {
+	if seq == 1 {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		switch {
+		case m.t0.IsZero():
+			m.t0, m.hits = time.Now(), 1
+			return nil, &os.PathError{Op: "read", Path: "meta", Err: syscall.EIO}
+		case time.Since(m.t0) < m.gap:
+			return nil, os.ErrNotExist
+		case m.hits == 1:
+			m.hits = 2
+			return nil, &os.PathError{Op: "read", Path: "meta", Err: syscall.EIO}
+		}
+	}
+	return m.Store.ChunkMeta(ctx, src, id, seq)
+}
+
+// Two short outages further apart than the budget are not one long one:
+// a target waiting for a chunk between them, with the store answering,
+// gave up "after 3m0s" over ssh (torture v2: two link drops 3 min apart).
+func TestTargetBudgetIsForConsecutiveErrors(t *testing.T) {
+	shortTransient(t, 300*time.Millisecond)
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	scfg := nodeCfg(t, share, "s1")
+	gap := &metaGap{gap: 700 * time.Millisecond}
+	s1 := buildWrapped(t, scfg, func(st transport.Store) transport.Store { gap.Store = st; return gap })
+	makeTree(t, mroot, 5, 300<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, _ := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if j := waitJob(t, master, id, 30*time.Second); j.State != api.JobDone {
+		t.Fatalf("state %s: %+v", j.State, j.Participants)
+	}
+	if gap.hits != 2 {
+		t.Fatalf("faults injected: %d", gap.hits)
+	}
+	sameTree(t, filepath.Join(mroot, "tree"), filepath.Join(scfg.Roots[0].Path, "tree"))
+}
+
+// createGap is a source's store: creating chunk 1 and chunk at fail once
+// each with EIO, and every chunk takes a while to create.
+type createGap struct {
+	transport.Store
+	at   int
+	slow time.Duration
+	mu   sync.Mutex
+	hit  map[int]bool
+}
+
+func (c *createGap) CreateChunk(ctx context.Context, id string, seq int) (transport.ChunkWriter, error) {
+	time.Sleep(c.slow)
+	c.mu.Lock()
+	fail := (seq == 1 || seq == c.at) && !c.hit[seq]
+	if fail {
+		c.hit[seq] = true
+	}
+	c.mu.Unlock()
+	if fail {
+		return nil, &os.PathError{Op: "create", Path: "chunk", Err: syscall.EIO}
+	}
+	return c.Store.CreateChunk(ctx, id, seq)
+}
+
+// The same for the source: chunks staged between two errors end the run.
+func TestSourceBudgetIsForConsecutiveErrors(t *testing.T) {
+	shortTransient(t, 300*time.Millisecond)
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	gap := &createGap{at: 9, slow: 80 * time.Millisecond, hit: map[int]bool{}}
+	master := buildWrapped(t, mcfg, func(st transport.Store) transport.Store { gap.Store = st; return gap })
+	s1, sroot := node(t, share, "s1")
+	makeTree(t, mcfg.Roots[0].Path, 10, 900<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if j := waitJob(t, master, id, 30*time.Second); j.State != api.JobDone {
+		t.Fatalf("state %s: %+v", j.State, j.Participants)
+	}
+	if !gap.hit[1] || !gap.hit[gap.at] {
+		t.Fatalf("faults injected: %v", gap.hit)
+	}
+	sameTree(t, filepath.Join(mcfg.Roots[0].Path, "tree"), filepath.Join(sroot, "tree"))
+}

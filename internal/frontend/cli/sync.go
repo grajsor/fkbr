@@ -124,13 +124,20 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 		fmt.Fprintln(out, "nothing to do")
 		return nil
 	}
+	shown := len(plan.Problems) // printPlan printed these
 	if plan, err = c.ApplySync(ctx, plan.ID, *force); err != nil {
 		return err
 	}
 	for _, e := range plan.DeleteErrors {
 		fmt.Fprintln(out, "delete error:", e)
 	}
+	for _, pr := range plan.Problems[min(shown, len(plan.Problems)):] {
+		fmt.Fprintln(out, "  problem:", pr)
+	}
 	var failed error
+	if n := len(plan.Groups) - len(plan.Jobs); n > 0 {
+		failed = fmt.Errorf("%d of %d transfers not submitted", n, len(plan.Groups))
+	}
 	for _, id := range plan.Jobs {
 		fmt.Fprintf(os.Stderr, "job %s\n", id)
 		if err := follow(ctx, c, id, out); err != nil {

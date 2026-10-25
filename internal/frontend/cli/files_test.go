@@ -126,3 +126,28 @@ func TestDestinationNamesNodes(t *testing.T) {
 		t.Errorf("folders here: %+v", c.submits)
 	}
 }
+
+// syncClient applies a plan whose transfer could not be submitted (its
+// target went offline between the plan and the apply).
+type syncClient struct{ filesClient }
+
+func (c *syncClient) SyncPlan(context.Context, string) (*api.SyncPlan, error) {
+	return &api.SyncPlan{ID: "p1", Groups: []api.SyncGroup{{Targets: []string{"b"}, Entries: 3}}}, nil
+}
+func (c *syncClient) ApplySync(context.Context, string, bool) (*api.SyncPlan, error) {
+	p, _ := c.SyncPlan(context.Background(), "p1")
+	p.Applied, p.Problems = true, []string{"transfer to b: node offline: b"}
+	return p, nil
+}
+
+// A sync whose transfers were not submitted fails and says why; it exited
+// 0 with nothing copied (torture v2, a target offline at the apply).
+func TestSyncTransferNotSubmitted(t *testing.T) {
+	out, err := run(t, &syncClient{}, "sync", "-plan", "p1")
+	if err == nil {
+		t.Fatalf("sync succeeded though no transfer was submitted:\n%s", out)
+	}
+	if !strings.Contains(out, "node offline") {
+		t.Errorf("the reason is not shown:\n%s", out)
+	}
+}
