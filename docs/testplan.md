@@ -6,7 +6,7 @@ Lab tests need several hosts on one NFS share; their scripts are kept
 outside the repo because they hold lab addresses.
 
 Status: **auto** = in `go test`, **lab** = run on the lab and passed,
-**todo** = not run yet.
+**todo** = not run yet. `stability.md` sums up the fault runs.
 
 ## 1. Data correctness
 
@@ -335,7 +335,8 @@ a plan survived applying it. A source folder swapped for a symlink to
 `/etc` mid-copy brought nothing from `/etc`. Paths past PATH_MAX and
 100,000 files in one folder (peak 58 MiB RSS) copied exact. 40 CLI calls
 at once were all answered, and 20 queued jobs into `max_jobs` 1 all ended
-exact.
+exact. Run 4, on e79d440 with the four fixes below (12 rounds, 216 jobs,
+178 faults): nothing found.
 
 | Found | Now | Test |
 |---|---|---|

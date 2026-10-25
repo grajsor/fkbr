@@ -37,7 +37,8 @@ a dual-pane TUI and a scriptable CLI.
   resumable jobs. Files are installed only after the whole transfer has
   arrived. Tested by killing, freezing and restarting nodes mid-transfer,
   cutting hosts off the NFS server, and deleting parts of the share under
-  running nodes (`docs/testplan.md`).
+  running nodes: over 10,000 copies checked, no file ever lost or
+  corrupted (`docs/stability.md`).
 
 ## Screenshots
 
@@ -126,6 +127,7 @@ the commit it was built from.
 - `docs/protocol.md`: the on-share protocol (mailboxes, chunks, fan-out,
   sync)
 - `docs/benchmarks.md`: measured performance
+- `docs/stability.md`: how fkbr is broken on purpose, and what held
 - `docs/testplan.md`: what could break, how it is tested, and the results
 - `examples/config.yaml`: every option, for those who prefer a config file
   to flags

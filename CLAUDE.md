@@ -11,7 +11,8 @@ used. The owner's private notes (test lab, deploys, history) are in
 
 User-facing docs: `README.md`, `docs/FAQ.md`, `docs/operations.md`,
 `docs/architecture.md` (layers, NFS and ssh, packages, with diagrams),
-`docs/protocol.md` (the design), `docs/benchmarks.md`, `docs/testplan.md`
+`docs/protocol.md` (the design), `docs/benchmarks.md`, `docs/stability.md`
+(the fault runs and their totals, for readers), `docs/testplan.md`
 (what could break, how it is tested, results). License: Apache 2.0,
 copyright "The Author".
 
