@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"fkbr/internal/api"
@@ -52,6 +53,31 @@ func (e *Engine) Read(ctx context.Context, req api.ReadRequest) (*api.ReadResult
 	}
 	var res api.ReadResult
 	if err := e.remoteCall(ctx, req.Node, transport.TypeRead, req, &res, 1); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (e *Engine) Write(ctx context.Context, req api.WriteRequest) (*api.WriteResult, error) {
+	if len(req.Data) > api.MaxWriteSize {
+		return nil, fmt.Errorf("%w: %d bytes, at most %d can be written", api.ErrNotAllowed, len(req.Data), api.MaxWriteSize)
+	}
+	if req.Node == "" || req.Node == e.Self() {
+		return e.writeLocal(req)
+	}
+	nodes, err := e.tr.Nodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, n := range nodes {
+		if n.ID == req.Node {
+			if err := needFeature(api.FeatureWrite, "saving edited files", n); err != nil {
+				return nil, err
+			}
+		}
+	}
+	var res api.WriteResult
+	if err := e.remoteCall(ctx, req.Node, transport.TypeWrite, req, &res, 1); err != nil {
 		return nil, err
 	}
 	return &res, nil
@@ -379,10 +405,136 @@ func (e *Engine) readLocal(req api.ReadRequest) (*api.ReadResult, error) {
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	return &api.ReadResult{Data: buf[:n], Size: fi.Size(), EOF: req.Offset+int64(n) >= fi.Size()}, nil
+	return &api.ReadResult{Data: buf[:n], Size: fi.Size(), EOF: req.Offset+int64(n) >= fi.Size(), ModTime: fi.ModTime()}, nil
 }
 
-// serveFileOp handles mkdir/remove/read requests from peers.
+// writeLocal replaces an existing file's content, like an editor saving
+// it. A file only this user's own link points to (one link, owned by
+// this user, or by anyone when root) gets a new file beside it, renamed
+// over it once written: a full disk or a crash leaves the old content.
+// Others (hard links, someone else's file, a symlink) are written in
+// place, so links, owner and mode stay as they are; the space is
+// reserved first where the filesystem can.
+func (e *Engine) writeLocal(req api.WriteRequest) (*api.WriteResult, error) {
+	p, err := e.writablePath(req.Root, req.Path)
+	if err != nil {
+		return nil, err
+	}
+	root, err := e.fs.WritableRoot(req.Root)
+	if err != nil {
+		return nil, err
+	}
+	fi, err := root.Stat(p)
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() {
+		return nil, fmt.Errorf("%w: %s is not a regular file", api.ErrBadPath, p)
+	}
+	if fi.Size() != req.Size || !req.ModTime.IsZero() && !fi.ModTime().Equal(req.ModTime) {
+		return nil, fmt.Errorf("%w: %s (now %d bytes, modified %s)", api.ErrChanged, p, fi.Size(), fi.ModTime().Format(time.DateTime))
+	}
+	if lfi, err := root.Lstat(p); err == nil && lfi.Mode().IsRegular() && replaceable(lfi) {
+		if err := replaceFile(root, p, lfi, req.Data); err == nil {
+			return written(root, p)
+		} else if !errors.Is(err, fs.ErrPermission) && !errors.Is(err, syscall.ENAMETOOLONG) { // no room beside it: in place
+			return nil, err
+		}
+	}
+	f, err := root.OpenFile(p, os.O_WRONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	if n := int64(len(req.Data)); n > fi.Size() {
+		if err := reserve(f, n); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := f.WriteAt(req.Data, 0); err != nil {
+		return nil, err
+	}
+	if err := f.Truncate(int64(len(req.Data))); err != nil {
+		return nil, err
+	}
+	if err := f.Sync(); err != nil {
+		return nil, err
+	}
+	if err := f.Close(); err != nil {
+		return nil, err
+	}
+	return written(root, p)
+}
+
+// replaceable reports whether a new file may take fi's place without
+// anyone noticing: one link, and ours (or we can give it back).
+func replaceable(fi fs.FileInfo) bool {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok || st.Nlink != 1 {
+		return false
+	}
+	euid := os.Geteuid()
+	return euid == 0 || st.Uid == uint32(euid)
+}
+
+// replaceFile writes data to a new file beside p with p's mode (and, as
+// root, its owner) and renames it over p.
+func replaceFile(root *os.Root, p string, fi fs.FileInfo, data []byte) error {
+	tmp := path.Join(path.Dir(p), fmt.Sprintf(".%s.%s-edit-%d", path.Base(p), product.Name, os.Getpid()))
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			f.Close()
+			root.Remove(tmp)
+		}
+	}()
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if st, isUnix := fi.Sys().(*syscall.Stat_t); isUnix && os.Geteuid() == 0 {
+		if err := f.Chown(int(st.Uid), int(st.Gid)); err != nil {
+			return err
+		}
+	}
+	if err := f.Chmod(fi.Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := root.Rename(tmp, p); err != nil {
+		return err
+	}
+	ok = true
+	return nil
+}
+
+// reserve allocates n bytes for f where the filesystem can (not NFS v3),
+// so a full disk fails before anything is overwritten.
+func reserve(f *os.File, n int64) error {
+	err := syscall.Fallocate(int(f.Fd()), 0, 0, n)
+	if errors.Is(err, syscall.EOPNOTSUPP) || errors.Is(err, syscall.ENOSYS) {
+		return nil
+	}
+	return err
+}
+
+func written(root *os.Root, p string) (*api.WriteResult, error) {
+	fi, err := root.Stat(p)
+	if err != nil {
+		return nil, err
+	}
+	return &api.WriteResult{Size: fi.Size(), ModTime: fi.ModTime()}, nil
+}
+
+// serveFileOp handles mkdir/remove/read/write requests from peers.
 func (e *Engine) serveFileOp(ctx context.Context, m *transport.Message) error {
 	var out any
 	switch m.Type {
@@ -422,6 +574,20 @@ func (e *Engine) serveFileOp(ctx context.Context, m *transport.Message) error {
 		if err != nil {
 			return err
 		}
+		out = res
+	case transport.TypeWrite:
+		var req api.WriteRequest
+		if err := json.Unmarshal(m.Body, &req); err != nil {
+			return err
+		}
+		if err := e.acceptWrite(ctx, m.From); err != nil {
+			return err
+		}
+		res, err := e.writeLocal(req)
+		if err != nil {
+			return err
+		}
+		e.log.Info("file saved for a peer", "from", m.From, "path", req.Root+"/"+req.Path, "bytes", res.Size)
 		out = res
 	}
 	var body []byte

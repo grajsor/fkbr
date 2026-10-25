@@ -32,6 +32,9 @@ type fakeClient struct {
 	unsent string
 	events chan api.Event
 	read   []byte // what Read returns, if set
+	writes []api.WriteRequest
+	// writeErr: Write fails with it.
+	writeErr error
 }
 
 func newFake() *fakeClient {
@@ -129,7 +132,20 @@ func (f *fakeClient) Remove(_ context.Context, r api.RemoveRequest) (*api.Remove
 	return &api.RemoveResult{Removed: len(r.Paths)}, nil
 }
 
+func (f *fakeClient) Write(_ context.Context, r api.WriteRequest) (*api.WriteResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	f.writes = append(f.writes, r)
+	f.read = r.Data
+	return &api.WriteResult{Size: int64(len(r.Data)), ModTime: time.Unix(int64(len(f.writes)), 0)}, nil
+}
+
 func (f *fakeClient) Read(_ context.Context, r api.ReadRequest) (*api.ReadResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.read != nil {
 		return &api.ReadResult{Data: f.read, Size: int64(len(f.read)), EOF: true}, nil
 	}
@@ -204,6 +220,16 @@ func (h *harness) key(keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyEsc}
 		case "ctrl+o":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlO}
+		case "ctrl+e":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlE}
+		case "ctrl+s":
+			msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+		case "end":
+			msg = tea.KeyMsg{Type: tea.KeyEnd}
+		case "left", "right":
+			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"left": tea.KeyLeft, "right": tea.KeyRight}[k]}
+		case "delete":
+			msg = tea.KeyMsg{Type: tea.KeyDelete}
 		case "f4":
 			msg = tea.KeyMsg{Type: tea.KeyF4}
 		case "f2", "f3", "f5", "f6", "f7", "f8", "f9":
@@ -1004,5 +1030,115 @@ func TestScanStatusShowsFolder(t *testing.T) {
 	h.m.applyEvent(api.Event{Type: api.EventScan, Scan: &api.ScanProgress{Node: "qb", Dir: "."}})
 	if !strings.HasSuffix(h.m.status, ", in /") {
 		t.Errorf("top folder: %q", h.m.status)
+	}
+}
+
+// viewFile opens master:data/a.txt in the viewer with content data.
+func (h *harness) viewFile(data string) *textDialog {
+	h.t.Helper()
+	h.f.mu.Lock()
+	h.f.read = []byte(data)
+	h.f.mu.Unlock()
+	h.open("master", "data")
+	h.m.panes[0].cursorTo("a.txt")
+	h.key("f3")
+	d, ok := h.m.dlg.(*textDialog)
+	if !ok {
+		h.t.Fatalf("no viewer: %T", h.m.dlg)
+	}
+	return d
+}
+
+func TestEditorSaves(t *testing.T) {
+	h := newHarness(t)
+	v := h.viewFile("one\ntwo\n")
+	h.key("ctrl+e")
+	e, ok := h.m.dlg.(*editDialog)
+	if !ok {
+		t.Fatalf("Ctrl+E opened %T", h.m.dlg)
+	}
+	h.key("X", "down", "end", "!", "down", "z", "enter", "ctrl+s")
+	if len(h.f.writes) != 1 {
+		t.Fatalf("writes: %d", len(h.f.writes))
+	}
+	w := h.f.writes[0]
+	if string(w.Data) != "Xone\ntwo!\nz\n" || w.Node != "master" || w.Root != "data" || w.Path != "a.txt" || w.Size != 8 {
+		t.Fatalf("write: %+v %q", w, w.Data)
+	}
+	if e.modified || h.m.dlg != e || !strings.Contains(e.note, "saved") {
+		t.Fatalf("after save: modified %v dialog %T note %q", e.modified, h.m.dlg, e.note)
+	}
+	// A second save sends what the first one wrote as the file's state.
+	h.key("left", "delete", "ctrl+s")
+	if len(h.f.writes) != 2 || h.f.writes[1].Size != 12 || string(h.f.writes[1].Data) != "Xone\ntwo!\nz" || !h.f.writes[1].ModTime.Equal(time.Unix(1, 0)) {
+		t.Fatalf("second write: %+v", h.f.writes)
+	}
+	h.key("esc")
+	if h.m.dlg != v || !strings.Contains(v.text, "two!") {
+		t.Fatalf("back to the view: %T %q", h.m.dlg, v.text)
+	}
+	h.key("esc")
+	if h.m.dlg != nil {
+		t.Fatal("viewer did not close")
+	}
+}
+
+func TestEditorAsksBeforeLeaving(t *testing.T) {
+	h := newHarness(t)
+	v := h.viewFile("a\n")
+	h.key("ctrl+e", "b", "esc")
+	e := h.m.dlg.(*editDialog)
+	if !e.asking || !strings.Contains(h.m.View(), "Save the changes?") {
+		t.Fatal("Esc with changes did not ask")
+	}
+	h.key("esc") // keep editing
+	if e.asking || h.m.dlg != e {
+		t.Fatal("Esc did not go back to editing")
+	}
+	h.key("esc", "n")
+	if h.m.dlg != v || len(h.f.writes) != 0 || v.text != "a\n" {
+		t.Fatalf("n: %T writes %d text %q", h.m.dlg, len(h.f.writes), v.text)
+	}
+	h.key("ctrl+e", "c", "esc", "y")
+	if h.m.dlg != v || len(h.f.writes) != 1 || string(h.f.writes[0].Data) != "ca\n" {
+		t.Fatalf("y: %T writes %+v", h.m.dlg, h.f.writes)
+	}
+}
+
+func TestEditorKeepsCRLF(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("a\r\nb\r\n")
+	h.key("ctrl+e", "down", "end", "!", "ctrl+s")
+	if len(h.f.writes) != 1 || string(h.f.writes[0].Data) != "a\r\nb!\r\n" {
+		t.Fatalf("writes: %+v", h.f.writes)
+	}
+}
+
+func TestEditorSaveFails(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("a\n")
+	h.f.writeErr = fmt.Errorf("%w: a.txt", api.ErrChanged)
+	h.key("ctrl+e", "b", "ctrl+s")
+	e := h.m.dlg.(*editDialog)
+	if !e.modified || !e.noteErr || !strings.Contains(h.m.View(), "not saved: changed since it was read") {
+		t.Fatalf("failed save: modified %v note %q", e.modified, e.note)
+	}
+}
+
+func TestEditorRefuses(t *testing.T) {
+	h := newHarness(t)
+	for _, data := range []string{"bin\x00ary", "caf\xe9"} {
+		v := h.viewFile(data)
+		h.key("ctrl+e")
+		if h.m.dlg != v || !h.m.statusErr || !strings.HasPrefix(h.m.status, "edit: ") {
+			t.Fatalf("%q: dialog %T status %q", data, h.m.dlg, h.m.status)
+		}
+		h.key("esc", "backspace")
+	}
+	// The help is no file.
+	h.m.dlg = newTextDialog("help", "text")
+	h.key("ctrl+e")
+	if _, ok := h.m.dlg.(*textDialog); !ok {
+		t.Fatalf("Ctrl+E in the help opened %T", h.m.dlg)
 	}
 }

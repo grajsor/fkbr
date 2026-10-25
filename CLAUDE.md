@@ -247,7 +247,8 @@ package tests; docs/testplan.md lists them.
   a stalled process is not a dead peer.
   Over ssh a record call the home node doesn't answer within
   `recordTimeout` is a link down (EIO), which transfers ride out; a
-  target whose ack folder is gone asks the job (cancelled, not failed).
+  target whose ack folder is gone, or (over a share) whose chunk is gone
+  after its meta, asks the job (cancelled, not failed).
 - A copy/move of a named source path that does not exist fails
   (`api.ErrNotFound` at Submit, `missingPaths` in send.go).
 - A node whose shared dir is deleted/moved/replaced stops and says so
@@ -300,7 +301,12 @@ own padding). Without colours, `styles.highlight` writes reverse video.
   · help", sections in capitals, one key per row, 15-column key field.
 - Job details (Enter in F9) update live; totals come from a background
   count on the source (`engine/count.go`).
-- `q` quits like F10. F3 highlights XML, JSON and shell (`.sh`, `.bash`, a shell `#!`). `-colors auto|true|256|16|none`.
+- `q` quits like F10. F3 highlights XML, JSON, YAML, shell and Python (by extension, `<?xml`,
+  a `#!`). Ctrl+E in the viewer opens a small editor (`editor.go`; hidden
+  for now: not in F1 or the user docs, the owner's wish). It saves through
+  `Write` (`api.FeatureWrite`), only over the file as it was read
+  (`ErrChanged`); `engine.writeLocal` renames a new file over one we own
+  with one link, else writes in place. `-colors auto|true|256|16|none`.
 - Mouse (`mouse.go`): click, double click = Enter, right click marks
   (drag marks every row passed), wheel, key bar cells, dialog hints and
   settings lines clickable. `-mouse=false` turns it off.

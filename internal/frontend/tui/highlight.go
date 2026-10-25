@@ -9,8 +9,8 @@ import (
 	"github.com/mattn/go-runewidth"
 )
 
-// Light syntax highlighting for the file viewer (F3): XML, JSON and shell
-// scripts, by file extension, an <?xml declaration or a shell's #! line.
+// Light syntax highlighting for the file viewer (F3): XML, JSON, YAML,
+// shell and Python, by file extension, an <?xml declaration or a #! line.
 // Colours are for the light dialog background.
 var (
 	cCodeTag     = lipgloss.CompleteColor{TrueColor: "#116a3e", ANSI256: "22", ANSI: "2"}  // XML tags, shell keywords
@@ -29,6 +29,10 @@ func language(name, text string) string {
 		return "json"
 	case ".sh", ".bash":
 		return "sh"
+	case ".py", ".pyw":
+		return "py"
+	case ".yaml", ".yml":
+		return "yaml"
 	}
 	if strings.HasPrefix(strings.TrimLeft(text, " \t\r\n\ufeff"), "<?xml") {
 		return "xml"
@@ -40,9 +44,11 @@ func language(name, text string) string {
 			f = f[1:]
 		}
 		if len(f) > 0 {
-			switch path.Base(f[0]) {
-			case "sh", "bash", "dash", "ksh", "zsh":
+			switch b := path.Base(f[0]); {
+			case b == "sh" || b == "bash" || b == "dash" || b == "ksh" || b == "zsh":
 				return "sh"
+			case strings.HasPrefix(b, "python"):
+				return "py"
 			}
 		}
 	}
@@ -85,6 +91,10 @@ func highlight(st *styles, lang, text string, width int) string {
 		lines = tokenizeJSON(strings.Split(text, "\n"))
 	case "sh":
 		lines = tokenizeShell(strings.Split(text, "\n"))
+	case "py":
+		lines = tokenizePython(strings.Split(text, "\n"))
+	case "yaml":
+		lines = tokenizeYAML(strings.Split(text, "\n"))
 	}
 	var out []string
 	for _, line := range lines {
@@ -415,4 +425,240 @@ func tokenizeShell(lines []string) [][]segment {
 		out[li] = segs
 	}
 	return out
+}
+
+// segments collects a line's pieces, joining neighbours of one class.
+type segments []segment
+
+func (s *segments) add(text string, c int) {
+	if text == "" {
+		return
+	}
+	if n := len(*s); n > 0 && (*s)[n-1].class == c {
+		(*s)[n-1].text += text
+		return
+	}
+	*s = append(*s, segment{text, c})
+}
+
+var pythonKeywords = map[string]int{
+	"and": clTag, "as": clTag, "assert": clTag, "async": clTag, "await": clTag,
+	"break": clTag, "class": clTag, "continue": clTag, "def": clTag, "del": clTag,
+	"elif": clTag, "else": clTag, "except": clTag, "finally": clTag, "for": clTag,
+	"from": clTag, "global": clTag, "if": clTag, "import": clTag, "in": clTag,
+	"is": clTag, "lambda": clTag, "nonlocal": clTag, "not": clTag, "or": clTag,
+	"pass": clTag, "raise": clTag, "return": clTag, "try": clTag, "while": clTag,
+	"with": clTag, "yield": clTag,
+	"True": clLiteral, "False": clLiteral, "None": clLiteral,
+}
+
+func isWordRune(r rune) bool { return r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r) }
+
+// tokenizePython classifies Python lightly: comments, strings (triple
+// quoted ones over several lines), keywords, numbers and decorators.
+func tokenizePython(lines []string) [][]segment {
+	triple := "" // the triple quote a string from an earlier line is in
+	out := make([][]segment, len(lines))
+	for li, line := range lines {
+		var segs segments
+		rs := []rune(line)
+		// str returns the end of a string whose quote q starts at i (or,
+		// for a triple quote, continues there), and whether it is closed.
+		str := func(i int, q string) (int, bool) {
+			for j := i; j < len(rs); j++ {
+				if rs[j] == '\\' {
+					j++
+					continue
+				}
+				if strings.HasPrefix(string(rs[j:]), q) {
+					return j + len([]rune(q)), true
+				}
+			}
+			return len(rs), false
+		}
+		i := 0
+		if triple != "" {
+			j, closed := str(0, triple)
+			segs.add(string(rs[:j]), clString)
+			if closed {
+				triple = ""
+			}
+			i = j
+		}
+		for i < len(rs) {
+			r := rs[i]
+			switch {
+			case r == '#':
+				segs.add(string(rs[i:]), clComment)
+				i = len(rs)
+			case r == '"' || r == '\'':
+				q := string(r)
+				if strings.HasPrefix(string(rs[i:]), q+q+q) {
+					q = q + q + q
+				}
+				j, closed := str(i+len([]rune(q)), q)
+				if !closed && len(q) == 3 {
+					triple = q
+				}
+				segs.add(string(rs[i:j]), clString)
+				i = j
+			case r == '@' && strings.TrimSpace(string(rs[:i])) == "":
+				j := i + 1
+				for j < len(rs) && (isWordRune(rs[j]) || rs[j] == '.') {
+					j++
+				}
+				segs.add(string(rs[i:j]), clKey)
+				i = j
+			case unicode.IsDigit(r):
+				j := i
+				for j < len(rs) && (isWordRune(rs[j]) || rs[j] == '.') {
+					j++
+				}
+				segs.add(string(rs[i:j]), clLiteral)
+				i = j
+			case isWordRune(r):
+				j := i
+				for j < len(rs) && isWordRune(rs[j]) {
+					j++
+				}
+				c, ok := pythonKeywords[string(rs[i:j])]
+				if !ok {
+					c = clPlain
+				}
+				segs.add(string(rs[i:j]), c)
+				i = j
+			default:
+				segs.add(string(r), clPlain)
+				i++
+			}
+		}
+		out[li] = segs
+	}
+	return out
+}
+
+// tokenizeYAML classifies YAML a line at a time: document markers, keys,
+// quoted strings, anchors, aliases and tags, values that are one literal
+// (a number, true, null, …) and comments.
+func tokenizeYAML(lines []string) [][]segment {
+	out := make([][]segment, len(lines))
+	for li, line := range lines {
+		var segs segments
+		rs := []rune(line)
+		if t := strings.TrimRight(line, " \t"); t == "---" || t == "..." {
+			segs.add(line, clTag)
+			out[li] = segs
+			continue
+		}
+		// The indent and any "- " in front of a sequence item.
+		i := 0
+		for {
+			for i < len(rs) && (rs[i] == ' ' || rs[i] == '\t') {
+				i++
+			}
+			if i < len(rs) && rs[i] == '-' && (i+1 == len(rs) || rs[i+1] == ' ') {
+				i++
+				continue
+			}
+			break
+		}
+		segs.add(string(rs[:i]), clPlain)
+		// A key: text up to ": " (or a ':' that ends the line), before
+		// any comment and not quoted or a flow collection.
+		if i < len(rs) && !strings.ContainsRune("#\"'[{&*!|>", rs[i]) {
+			for j := i; j < len(rs); j++ {
+				if rs[j] == '#' && (rs[j-1] == ' ' || rs[j-1] == '\t') {
+					break
+				}
+				if rs[j] == ':' && (j+1 == len(rs) || rs[j+1] == ' ' || rs[j+1] == '\t') {
+					segs.add(string(rs[i:j]), clKey)
+					segs.add(":", clPlain)
+					i = j + 1
+					break
+				}
+			}
+		}
+		yamlValue(&segs, rs[i:])
+		out[li] = segs
+	}
+	return out
+}
+
+// yamlValue classifies the rest of a YAML line after any key.
+func yamlValue(segs *segments, rs []rune) {
+	// Where a comment starts: a '#' at the start or after a blank, outside
+	// quotes.
+	end, quote := len(rs), rune(0)
+	for j, r := range rs {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		case r == '#' && (j == 0 || rs[j-1] == ' ' || rs[j-1] == '\t'):
+			end = j
+		}
+		if end < len(rs) {
+			break
+		}
+	}
+	core := string(rs[:end])
+	if t := strings.TrimSpace(core); yamlLiteral(t) {
+		lead := core[:strings.Index(core, t)]
+		segs.add(lead, clPlain)
+		segs.add(t, clLiteral)
+		segs.add(core[len(lead)+len(t):], clPlain)
+	} else {
+		v := []rune(core)
+		for i := 0; i < len(v); {
+			r := v[i]
+			switch {
+			case r == '"' || r == '\'':
+				j := i + 1
+				for j < len(v) && v[j] != r {
+					if r == '"' && v[j] == '\\' {
+						j++
+					}
+					j++
+				}
+				j = min(j+1, len(v))
+				segs.add(string(v[i:j]), clString)
+				i = j
+			case (r == '&' || r == '*' || r == '!') && (i == 0 || v[i-1] == ' '):
+				j := i + 1
+				for j < len(v) && v[j] != ' ' && v[j] != ',' && v[j] != ']' && v[j] != '}' {
+					j++
+				}
+				segs.add(string(v[i:j]), clTag)
+				i = j
+			default:
+				segs.add(string(r), clPlain)
+				i++
+			}
+		}
+	}
+	segs.add(string(rs[end:]), clComment)
+}
+
+// yamlLiteral reports whether a whole value is a number or a keyword.
+func yamlLiteral(t string) bool {
+	switch strings.ToLower(t) {
+	case "true", "false", "yes", "no", "on", "off", "null", "~":
+		return true
+	case "":
+		return false
+	}
+	digits := 0
+	for i, r := range t {
+		switch {
+		case unicode.IsDigit(r):
+			digits++
+		case (r == '-' || r == '+') && i == 0, r == '.', r == '_', r == 'e', r == 'E':
+		default:
+			return false
+		}
+	}
+	return digits > 0
 }

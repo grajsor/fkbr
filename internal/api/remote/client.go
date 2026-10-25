@@ -153,6 +153,14 @@ func (c *Client) Read(ctx context.Context, req api.ReadRequest) (*api.ReadResult
 	return &v, nil
 }
 
+func (c *Client) Write(ctx context.Context, req api.WriteRequest) (*api.WriteResult, error) {
+	var v api.WriteResult
+	if err := c.call(ctx, http.MethodPost, "/v1/write", req, &v); err != nil {
+		return nil, err
+	}
+	return &v, nil
+}
+
 func (c *Client) Submit(ctx context.Context, req api.TransferRequest) (string, error) {
 	var v struct{ ID string }
 	return v.ID, c.call(ctx, http.MethodPost, "/v1/jobs", req, &v)

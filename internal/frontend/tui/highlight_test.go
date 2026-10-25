@@ -22,14 +22,15 @@ func TestLanguage(t *testing.T) {
 	if language("n:files/build.conf", "\n  <?xml version=\"1.0\"?><a/>") != "xml" {
 		t.Error("<?xml declaration not detected")
 	}
-	for name, want := range map[string]string{"n:files/run.sh": "sh", "n:files/x.BASH": "sh"} {
+	for name, want := range map[string]string{"n:files/run.sh": "sh", "n:files/x.BASH": "sh",
+		"n:files/a.py": "py", "n:files/c.yaml": "yaml", "n:files/c.YML": "yaml"} {
 		if got := language(name, "plain"); got != want {
 			t.Errorf("%s: %q, want %q", name, got, want)
 		}
 	}
 	for text, want := range map[string]string{
 		"#!/bin/bash\necho": "sh", "#!/bin/sh -e\n": "sh", "#!/usr/bin/env bash\n": "sh",
-		"#! /bin/dash": "sh", "#!/usr/bin/python3\n": "", "# just a comment": "",
+		"#! /bin/dash": "sh", "#!/usr/bin/python3\n": "py", "#!/usr/bin/env python\n": "py", "# just a comment": "",
 	} {
 		if got := language("n:files/noext", text); got != want {
 			t.Errorf("%q: %q, want %q", text, got, want)
@@ -94,6 +95,56 @@ func TestTokenizeShell(t *testing.T) {
 		`p:x= str:'one`,
 		`str:two # not a comment' p: ;  tag:fi`,
 		`p:fiction done-x  tag:for`,
+	}, "\n")
+	if got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestTokenizePython(t *testing.T) {
+	got := classes(tokenizePython([]string{
+		`@dataclass`,
+		`def f(x=1.5, s='a#b'):  # note`,
+		`    """doc`,
+		`    still doc"""`,
+		`    return None if x else "y\"z"`,
+		`definitely = True`,
+	}))
+	want := strings.Join([]string{
+		`key:@dataclass`,
+		`tag:def p: f(x= lit:1.5 p:, s= str:'a#b' p:):   com:# note`,
+		`p:     str:"""doc`,
+		`str:    still doc"""`,
+		`p:     tag:return p:  lit:None p:  tag:if p: x  tag:else p:  str:"y\"z"`,
+		`p:definitely =  lit:True`,
+	}, "\n")
+	if got != want {
+		t.Errorf("\n got %s\nwant %s", got, want)
+	}
+}
+
+func TestTokenizeYAML(t *testing.T) {
+	got := classes(tokenizeYAML([]string{
+		`---`,
+		`# settings`,
+		`name: "fk#br"   # quoted`,
+		`  - port: 8080`,
+		`    url: http://x/#frag`,
+		`ok: true`,
+		`base: &b {a: 1}`,
+		`list: [one, 'two']`,
+		`plain text: no: colon`,
+	}))
+	want := strings.Join([]string{
+		`tag:---`,
+		`com:# settings`,
+		`key:name p::  str:"fk#br" p:    com:# quoted`,
+		`p:  -  key:port p::  lit:8080`,
+		`p:     key:url p:: http://x/#frag`,
+		`key:ok p::  lit:true`,
+		`key:base p::  tag:&b p: {a: 1}`,
+		`key:list p:: [one,  str:'two' p:]`,
+		`key:plain text p:: no: colon`,
 	}, "\n")
 	if got != want {
 		t.Errorf("\n got %s\nwant %s", got, want)

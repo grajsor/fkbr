@@ -210,6 +210,18 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 				status.st.Files, status.st.Bytes = files, bytes
 				continue
 			}
+			if errors.Is(err, fs.ErrNotExist) {
+				// Gone since its meta was read: the source removes a
+				// cancelled job's data, chunks before metas.
+				if j, jerr := e.st.GetJob(ctx, id); jerr == nil {
+					switch {
+					case j.Cancelled || roleState(j, api.RoleSource, "") == api.JobCancelled:
+						return errCancelled
+					case j.IsDetached(e.Self()):
+						return errDetached
+					}
+				}
+			}
 			if ride.retry(ctx, err) {
 				status.st.Files, status.st.Bytes = files, bytes // applied again from the start
 				continue

@@ -24,6 +24,7 @@ const (
 	TypeMkdir   = "mkdir"
 	TypeRemove  = "remove"
 	TypeRead    = "read"
+	TypeWrite   = "write"
 	// TypeScan asks a node to snapshot a directory for a sync plan.
 	TypeScan = "scan"
 )

@@ -174,7 +174,7 @@ type (
 	}
 	viewMsg struct {
 		title string
-		res   *api.ReadResult
+		file  *viewedFile
 		err   error
 	}
 	syncPlannedMsg struct {
@@ -401,12 +401,23 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setStatus("view: "+msg.err.Error(), true)
 			return m, nil
 		}
-		d := newTextDialog(msg.title, renderFile(msg.res))
-		if bytes.IndexByte(msg.res.Data, 0) < 0 { // not shown as hex
+		d := newTextDialog(msg.title, renderFile(msg.file.res))
+		if bytes.IndexByte(msg.file.res.Data, 0) < 0 { // not shown as hex
 			d.lang = language(msg.title, d.text)
 		}
+		d.file = msg.file
 		m.dlg = d
 		return m, nil
+
+	case editSavedMsg:
+		if m.dlg == msg.d {
+			m.dlg = msg.d.saved(msg)
+		}
+		if msg.err != nil {
+			return m, nil
+		}
+		f := msg.d.file
+		return m, m.refreshTargets([]target{{node: f.node, root: f.root}})
 	}
 	return m, nil
 }
@@ -936,7 +947,7 @@ func (m *model) view() tea.Cmd {
 	title := p.node + ":" + p.root + "/" + req.Path
 	return func() tea.Msg {
 		res, err := m.c.Read(m.ctx, req)
-		return viewMsg{title: title, res: res, err: err}
+		return viewMsg{title: title, file: &viewedFile{node: req.Node, root: req.Root, path: req.Path, res: res}, err: err}
 	}
 }
 

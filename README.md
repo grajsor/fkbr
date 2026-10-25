@@ -71,7 +71,7 @@ doing, updated live.
 
 ![Details of a running copy of three database dumps to four nodes](docs/screenshots/fkbr-progress.png)
 
-**View (F3).** Shows a file from any node, with XML, JSON and shell scripts highlighted.
+**View (F3).** Shows a file from any node, with XML, JSON, YAML, shell scripts and Python highlighted.
 
 ![The viewer showing a build configuration on build01](docs/screenshots/fkbr-view.png)
 

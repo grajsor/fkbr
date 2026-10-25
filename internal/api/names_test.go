@@ -39,4 +39,10 @@ func TestNamesSurviveJSON(t *testing.T) {
 	if err := json.Unmarshal(b, &e2); err != nil || e2 != e {
 		t.Fatalf("entry: %+v %v", e2, err)
 	}
+	w := WriteRequest{Root: "r", Path: "d/caf\xe9.sh", Data: []byte("x\n"), Size: 3}
+	b, _ = json.Marshal(w)
+	var w2 WriteRequest
+	if err := json.Unmarshal(b, &w2); err != nil || w2.Path != w.Path || string(w2.Data) != "x\n" || w2.Size != 3 {
+		t.Fatalf("write request: %+v %v", w2, err)
+	}
 }

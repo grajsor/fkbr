@@ -15,6 +15,7 @@ var errorCodes = []struct {
 	{ErrBadPath, "bad_path"},
 	{ErrUnknownJob, "unknown_job"},
 	{ErrReadOnly, "read_only"},
+	{ErrChanged, "changed"},
 	{ErrNotAllowed, "not_allowed"},
 	{ErrNotFound, "not_found"},
 }

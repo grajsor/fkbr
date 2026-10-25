@@ -108,7 +108,7 @@ func New(cfg *config.Config, fsys localfs.FS, tr transport.Transport, st transpo
 			AcceptWritesFrom: cfg.AcceptWritesFrom,
 			PID:              os.Getpid(),
 			BootID:           bootID(),
-			Features:         []string{api.FeatureExclude, api.FeatureMove, api.FeatureRecheck},
+			Features:         []string{api.FeatureExclude, api.FeatureMove, api.FeatureRecheck, api.FeatureWrite},
 		},
 	}
 }
@@ -601,7 +601,7 @@ func (e *Engine) dispatch(ctx context.Context, m *transport.Message) error {
 	switch m.Type {
 	case transport.TypeList:
 		return e.serveList(ctx, m)
-	case transport.TypeMkdir, transport.TypeRemove, transport.TypeRead:
+	case transport.TypeMkdir, transport.TypeRemove, transport.TypeRead, transport.TypeWrite:
 		return e.serveFileOp(ctx, m)
 	case transport.TypeScan:
 		return e.serveScan(ctx, m)

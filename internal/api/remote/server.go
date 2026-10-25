@@ -10,6 +10,7 @@
 //	POST /v1/mkdir                api.MkdirRequest
 //	POST /v1/remove               api.RemoveRequest -> api.RemoveResult
 //	POST /v1/read                 api.ReadRequest -> api.ReadResult
+//	POST /v1/write                api.WriteRequest -> api.WriteResult
 //	GET  /v1/jobs                 []api.Job
 //	POST /v1/jobs                 api.TransferRequest -> {"id": job}
 //	GET  /v1/jobs/{id}            api.Job
@@ -106,6 +107,14 @@ func Handler(svc api.Service) http.Handler {
 		v, err := svc.Read(r.Context(), req)
 		reply(w, v, err)
 	})
+	mux.HandleFunc("POST /v1/write", func(w http.ResponseWriter, r *http.Request) {
+		var req api.WriteRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		v, err := svc.Write(r.Context(), req)
+		reply(w, v, err)
+	})
 	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) {
 		v, err := svc.Jobs(r.Context())
 		reply(w, v, err)
@@ -192,7 +201,7 @@ func Handler(svc api.Service) http.Handler {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)) // a Write: 1 MiB as base64
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		w.Header().Set("Content-Type", "application/json")

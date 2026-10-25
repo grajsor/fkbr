@@ -24,6 +24,7 @@ var (
 	ErrReadOnly    = errors.New("root is read-only")
 	ErrNotAllowed  = errors.New("not allowed")
 	ErrNotFound    = errors.New("no such file or directory")
+	ErrChanged     = errors.New("changed since it was read")
 )
 
 // Root is a local directory a node exposes under a stable ID. Peers only
@@ -72,6 +73,9 @@ const FeatureExclude = "exclude"
 
 // FeatureMove: as a source, the node refuses a move onto its own sources.
 const FeatureMove = "move"
+
+// FeatureWrite: the node serves Write requests (the TUI's editor).
+const FeatureWrite = "write"
 
 // FeatureRecheck: a sync's deletions on the node keep what changed since
 // its scan (RemoveRequest.Plan).
@@ -404,9 +408,15 @@ type FileService interface {
 	Remove(ctx context.Context, req RemoveRequest) (*RemoveResult, error)
 	// Read returns up to Limit bytes (max MaxReadLimit) of a regular file.
 	Read(ctx context.Context, req ReadRequest) (*ReadResult, error)
+	// Write replaces the content of an existing regular file (at most
+	// MaxWriteSize), unless it changed since it was read.
+	Write(ctx context.Context, req WriteRequest) (*WriteResult, error)
 }
 
-const MaxReadLimit = 1 << 20
+const (
+	MaxReadLimit = 1 << 20
+	MaxWriteSize = 1 << 20
+)
 
 type MkdirRequest struct {
 	Node string `json:"node,omitempty"`
@@ -444,9 +454,29 @@ type ReadRequest struct {
 }
 
 type ReadResult struct {
-	Data []byte `json:"data"`
-	Size int64  `json:"size"` // whole file
-	EOF  bool   `json:"eof"`
+	Data    []byte    `json:"data"`
+	Size    int64     `json:"size"` // whole file
+	EOF     bool      `json:"eof"`
+	ModTime time.Time `json:"mtime,omitzero"`
+}
+
+// WriteRequest carries a file's new content. Size and ModTime are the
+// file as it was read: a file that differs now is left alone
+// (ErrChanged). A zero ModTime (from an older node's read) checks the size
+// only.
+type WriteRequest struct {
+	Node    string    `json:"node,omitempty"`
+	Root    string    `json:"root"`
+	Path    string    `json:"path"`
+	Data    []byte    `json:"data"`
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mtime,omitzero"`
+}
+
+// WriteResult is the file as written, for the next Write.
+type WriteResult struct {
+	Size    int64     `json:"size"`
+	ModTime time.Time `json:"mtime"`
 }
 
 // GroupAll is the built-in destination group: "@all" is every registered

@@ -309,6 +309,8 @@ type textDialog struct {
 	flow bool
 	// back is the dialog to return to on close (a list opened from it).
 	back dialog
+	// file is the file a viewer shows: Ctrl+E edits it (editor.go).
+	file *viewedFile
 	st   *styles
 }
 
@@ -345,6 +347,16 @@ func (d *textDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "q", "f3", "f10", "enter":
 		return true, nil
+	case "ctrl+e":
+		if d.file == nil {
+			return false, nil
+		}
+		if why := d.file.editable(); why != "" {
+			m.setStatus("edit: "+why, true)
+			return false, nil
+		}
+		m.dlg = newEditDialog(d)
+		return false, nil
 	}
 	var cmd tea.Cmd
 	d.vp, cmd = d.vp.Update(msg)
@@ -481,7 +493,7 @@ MOUSE
   Shift+drag     select text (-mouse=false: no Shift needed)
 
 FILES
-  F3             view (first 64 KiB; XML, JSON and shell coloured)
+  F3             view (64 KiB); XML, JSON, YAML, shell, Python coloured
   F5             copy the marked entries, or the one under the cursor
   F6             move: copy, then delete here once every copy succeeded
   F7             new folder

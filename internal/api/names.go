@@ -186,6 +186,24 @@ func (r *ReadRequest) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (r WriteRequest) MarshalJSON() ([]byte, error) {
+	type plain WriteRequest
+	p := plain(r)
+	p.Path = EncodeName(r.Path)
+	return json.Marshal(p)
+}
+
+func (r *WriteRequest) UnmarshalJSON(b []byte) error {
+	type plain WriteRequest
+	var p plain
+	if err := json.Unmarshal(b, &p); err != nil {
+		return err
+	}
+	p.Path = DecodeName(p.Path)
+	*r = WriteRequest(p)
+	return nil
+}
+
 func (r SyncRequest) MarshalJSON() ([]byte, error) {
 	type plain SyncRequest
 	p := plain(r)

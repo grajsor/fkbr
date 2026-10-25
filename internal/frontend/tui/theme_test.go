@@ -149,6 +149,18 @@ func paintsEveryCell(t *testing.T, p termenv.Profile) {
 			check("viewer " + f.name)
 			h.m.dlg = nil
 		}
+		v := newTextDialog("s1:data/a.sh", "x")
+		v.file = &viewedFile{node: "s1", root: "data", path: "a.sh",
+			res: &api.ReadResult{Data: []byte("if x; then\n\tlong line " + strings.Repeat("ü日", 80) + "\nfi\n"), EOF: true}}
+		e := newEditDialog(v)
+		h.m.dlg = e
+		check("editor")
+		e.row, e.col = 1, len(e.lines[1]) // scrolled sideways
+		e.modified, e.note, e.noteErr = true, "not saved: no", true
+		check("editor, error")
+		e.asking = true
+		check("editor, asking")
+		h.m.dlg = nil
 	}
 }
 

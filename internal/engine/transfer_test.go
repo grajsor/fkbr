@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -237,6 +238,67 @@ func TestCancelDuringAck(t *testing.T) {
 	master, mroot := node(t, share, "master")
 	makeTree(t, mroot, 5, 3<<20)
 	gone := &ackGone{}
+	slave := buildWrapped(t, nodeCfg(t, share, "slave1"), func(st transport.Store) transport.Store {
+		gone.Store = st
+		return gone
+	})
+	ids := make(chan string, 1)
+	gone.cancel = func() {
+		id := <-ids
+		if err := master.Cancel(context.Background(), id); err != nil {
+			t.Error(err)
+		}
+		waitUntil(t, func() bool {
+			j, _ := master.Job(context.Background(), id)
+			s := ownStatus(j, "master", api.RoleSource)
+			return s != nil && s.State == api.JobCancelled
+		}, "source cancelled")
+	}
+	runWorker(t, master)
+	runWorker(t, slave)
+	id, err := master.Submit(context.Background(), api.TransferRequest{
+		SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"slave1"}, DstRoot: "data", DstDir: "in",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids <- id
+	j := waitJob(t, master, id, 20*time.Second)
+	if s := ownStatus(j, "slave1", api.RoleTarget); j.State != api.JobCancelled || s == nil || s.State != api.JobCancelled {
+		t.Fatalf("job %s, target %+v; want both cancelled", j.State, s)
+	}
+}
+
+// chunkGone is a target's store whose second chunk is gone once its meta
+// was read: the source removed the job's data in between, chunk files
+// before metas.
+type chunkGone struct {
+	transport.Store
+	once   sync.Once
+	cancel func()
+}
+
+func (c *chunkGone) OpenChunk(ctx context.Context, src, id string, seq int) (io.ReadCloser, error) {
+	hit := false
+	if seq == 1 {
+		c.once.Do(func() { hit = true })
+	}
+	if hit {
+		c.cancel()
+		return nil, &fs.PathError{Op: "open", Path: fmt.Sprintf("data/%s/%s/%08d.chunk", src, id, seq), Err: syscall.ENOENT}
+	}
+	return c.Store.OpenChunk(ctx, src, id, seq)
+}
+
+// A cancel that removes a chunk after the target read its meta ends the
+// target cancelled, not failed ("chunk 1: open …: no such file or
+// directory", seen once in TestCancelDuringAck).
+func TestCancelBetweenMetaAndChunk(t *testing.T) {
+	nfsOnly(t) // over ssh a chunk gone after its meta is waited for (TestSSHChunkGoneAfterMeta)
+	share := t.TempDir()
+	master, mroot := node(t, share, "master")
+	makeTree(t, mroot, 5, 3<<20)
+	gone := &chunkGone{}
 	slave := buildWrapped(t, nodeCfg(t, share, "slave1"), func(st transport.Store) transport.Store {
 		gone.Store = st
 		return gone
