@@ -18,7 +18,7 @@ a test that fails without it.
 | Copied trees checked against their source | **over 10,000** |
 | Faults injected (kills, stops, cuts, full disks, …) | **over 1,000** |
 | Files lost or corrupted | **0** |
-| Bugs found by these runs, each fixed with a test | **47** |
+| Bugs found by these runs, each fixed with a test | **48** |
 | Tests in `go test ./...` (also run with nodes linked over ssh, and under `-race`) | **over 330** |
 | Random inputs fed to the chunk reader, the exclude matcher and the TUI | **over 9 million** |
 
@@ -114,7 +114,8 @@ After every round, with the faults off:
 | 2026-10-21/22 | **soak** | 7fad3d1 | **16 h** | **1,099** | **3,496** | 133 | 0 |
 | 2026-10-23 | ssh: links cut, home node frozen and killed, CentOS 7 as home | 1ef0a75 | | | | | **4** |
 | 2026-10-23 | ssh with `/tmp` in memory, a target stopped mid-copy | | | | | | **3** |
-| 2026-10-24 | one machine, over a share and over ssh, `-race` | 6a7fa44 | 4 h | | | | **6** |
+| 2026-10-23 | cloud: the test suites in a loop, over a share and over ssh, with and without `-race` | 80b4d2c | | 181 suite runs | | | **1** |
+| 2026-10-24 | cloud: copies, syncs, faults and edge cases over a share and over a real sshd, 3 times each; 329 rounds of the ssh tests under `-race` | 6a7fa44 | 3 h 34 min | over 160 | about 300 | 48 | **6** |
 | 2026-10-24/25 | torture v2, run 1 | 00bd754 | 1 h 44 min | 217 | 638 | 172 | **2** |
 | 2026-10-25 | torture v2, run 2 | + 2 fixes | 2 h 32 min | 377 | 1,030 | 314 | **1** |
 | 2026-10-25 | torture v2, soak | + 2 fixes | 1 h 14 min | 202 | 538 | 25 | 0 |
@@ -133,10 +134,44 @@ stayed at 42-91 MB of memory and 8-15 open files. In the night of
 2026-10-25 the clocks went back an hour (summer time ended) in the
 middle of run 2; nothing noticed.
 
+## The cloud runs
+
+Two runs on cloud machines without NFS, so the share was a plain
+directory there.
+
+**2026-10-23: the suites in a loop.** 181 runs of the engine tests,
+over a share and over ssh, with and without the race detector, to shake
+out what fails only now and then. It found three such failures. Two were tests that did not wait long enough. The third was
+a real bug: a prune could take a job folder that was just being made,
+so the copy failed with "no such file or directory". It was rare, and
+no data was damaged. With the fixes, the loops ran without a failure.
+
+**2026-10-24: the work itself, 3 times over,** on a 4-core Xeon VM
+with 15.7 GiB of RAM. ssh went through a real OpenSSH server on the same
+machine, with encryption but no network. Three data sets: one 1 GiB
+file, 200,000 small files, and a mix of 2.2 GB.
+
+| What | Over | Runs | Result |
+|---|---|---:|---|
+| `cp` to 1 and to 3 targets, plain and compressed | share | 36 | Every file on every target equal to the source |
+| `sync`: first sync, a re-plan with nothing changed, 400 changes with `-mirror`, `-checksum` | share | 18 | Trees equal; the re-plans had nothing to do |
+| `cp` from the home node to 1 and 3 targets, and between two linked hosts | ssh | 9 | Equal; no chunk ever on disk |
+| The same `sync` series | ssh | 3 series | Equal; no chunk ever on disk |
+| kill -9 of the source or a target, SIGSTOP of a target for 20 s | share | 18 | Done, equal |
+| kill -9 of either end's `fkbr link`, of the ssh client, of the home node; SIGSTOP of a link | ssh | 30 | Done, equal |
+| A file growing while it is sent; cancel; a target gone past `offline_after` then `catchup`; two jobs at once; `mv` of 20,000 files; odd names and modes | both | 36 | As expected: the changed file reported and left out, nothing installed after a cancel, catch-up complete, the move complete with its source removed |
+
+No staging was left on any target. Memory stayed within the quotas: at
+most 68 MiB per node over a share, and at most 367 MiB for a source over
+ssh, whose window is 512 MiB. In 329 rounds of the ssh tests under the
+race detector there was no data race. There were 3 failures, all a
+300 ms test timer that a starved CPU tripped; the test links now wait
+5 s.
+
 ## What the runs found
 
 Each of these is fixed and has a regression test (`testplan.md`
-sections 8, 13 and 14):
+sections 8, 11, 13 and 14):
 
 - **Jobs that gave up too soon.** A link cut of 30-45 s over ssh, or two
   short NAS drops 3 min apart, failed a copy that should have carried on.
@@ -147,6 +182,7 @@ sections 8, 13 and 14):
   was done.
 - **Left-overs:** half-received staging after a restart, temp chunks
   after a kill.
+- **A race:** a prune that took a job folder while it was being made.
 - **Odd file systems:** names FAT and exFAT change or refuse, mtimes XFS
   cannot store, folders on case-insensitive targets.
 - **One deletion bug:** on case-insensitive file systems a mirror could
