@@ -124,11 +124,13 @@ so file names sort by creation time.
 | `mkdir`   | `api.MkdirRequest`                       | one empty final part                            |
 | `remove`  | `api.RemoveRequest`                      | `api.RemoveResult`                              |
 | `read`    | `api.ReadRequest` (offset, limit)        | `api.ReadResult`                                |
+| `write`   | `api.WriteRequest` (a whole file of at most 64 KiB, and the checksum of what was read) | `api.WriteResult`; refused if the file changed since |
 | `scan`    | `{"plan_id", "root", "path", "checksum"}` | progress parts with scan stats; the snapshot itself goes to `blobs/scans/` (see Sync) |
 
 `notify` messages are fire-and-forget: no reply directory is created.
-`mkdir` and `remove` are refused unless the requester passes the target's
-write policy.
+`mkdir`, `remove` and `write` are refused unless the requester passes the
+target's write policy. `write` (the TUI's editor) needs the `write`
+feature; an older node refuses it with a clear message.
 
 ## Transfers
 

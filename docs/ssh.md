@@ -1,8 +1,9 @@
-# SSH (design)
+# SSH
 
-Status: built and tested without real ssh (`testplan.md`, section 10);
-real hosts, latency and cut links still to be tried on the lab. User
-docs: `operations.md`, "Over ssh".
+Status: built, and tested on the lab with real ssh: links cut both ways,
+the home node frozen and killed, CentOS 7 as the home node, `/tmp` in
+memory (`testplan.md`, sections 10 and 11; `stability.md`). Speed against
+rsync over ssh: `benchmarks.md`. User docs: `operations.md`, "Over ssh".
 
 ## Goal
 

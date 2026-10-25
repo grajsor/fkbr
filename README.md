@@ -1,8 +1,8 @@
 # fkbr
 
 fkbr copies and syncs files between Linux hosts that share only an NFS
-mount. The hosts never connect to each other: requests and data pass
-through a directory on the share. It ships as a single static binary with
+mount, or that one of them reaches with ssh. Over a share the hosts never
+connect to each other: requests and data pass through a directory on it. It ships as a single static binary with
 a dual-pane TUI and a scriptable CLI.
 
 ## Features
@@ -22,8 +22,8 @@ a dual-pane TUI and a scriptable CLI.
 - **Fan-out.** Data is staged on the share once and read by every target.
   Slow or offline targets are detached and can catch up later.
 - **Dual-pane TUI** in the style of Norton Commander. Either pane browses
-  any node; copy, move, sync, view, create and delete work on any node,
-  with live job progress.
+  any node; copy, move, sync, view, edit, create and delete work on any
+  node, with live job progress.
 - **Full mouse support.** Click to move, double-click to open, right-click
   to mark (or drag to mark several), and scroll with the wheel or drag
   the scrollbars. The function key bar and every dialog option are
@@ -31,8 +31,9 @@ a dual-pane TUI and a scriptable CLI.
 - **Sync** in one direction, incremental or mirror, over millions of files
   with flat memory use. Every sync is planned as a dry run you confirm.
   Excludes, keep-newer and a delete limit protect the target.
-- **Fast.** About as fast as tar through the same share, and faster when
-  copying to several hosts (`docs/benchmarks.md`).
+- **Fast.** Faster than tar, rsync and borg through the same share in
+  every lab test, most of all with many small files or several targets;
+  over ssh as fast as rsync or faster (`docs/benchmarks.md`).
 - **Crash-safe.** Atomic writes on the share, checksummed chunks and
   resumable jobs. Files are installed only after the whole transfer has
   arrived. Tested by killing, freezing and restarting nodes mid-transfer,
@@ -161,10 +162,11 @@ the commit it was built from.
 - `docs/benchmarks.md`: measured performance
 - `docs/stability.md`: how fkbr is broken on purpose, and what held
 - `docs/testplan.md`: what could break, how it is tested, and the results
-- `examples/config.yaml`: every option, for those who prefer a config file
+- `examples/fkbr.conf`: every option, for those who prefer a config file
   to flags
 - `docs/ssh.md`: how nodes work over ssh
-- `docs/local.md`: design for local file systems (not built yet)
+- `docs/local.md`: local file systems: `fkbr` without a share (built),
+  shares on other file systems (design)
 
 ## Development
 

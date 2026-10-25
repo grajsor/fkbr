@@ -172,7 +172,7 @@ if it is there, else `~/.fkbr.conf` if that is there. The TUI's settings
 dialog (F11) changes the common ones there: colours, mouse, what the copy
 dialogs start with (`tui:`), this node's name, share, roles, who may
 write to it, root `local`, and the transfer limits. See
-`examples/config.yaml` for every option, including tuning. Arguments and
+`examples/fkbr.conf` for every option, including tuning. Arguments and
 flags override the file (F11 says when one does); a share given on the
 command line wins over the file's `ssh:` hosts, and a file may not name
 both `nfs_root` and `ssh`.
@@ -372,7 +372,8 @@ all keys.
 
 **Editing a file.** In the viewer, Ctrl+E edits the file, on any node: a
 whole UTF-8 text file of up to 64 KiB. Keys as in nano: Ctrl+S (or
-Ctrl+O) saves, Ctrl+X or Esc closes and asks about changes not saved,
+Ctrl+O) saves, Ctrl+X or Esc closes and asks about changes not saved
+(answered with Ctrl+S or Ctrl+X, so typing on can't answer it),
 Ctrl+K cuts the line (again: the next one too), Ctrl+U pastes the cut
 lines above the cursor's line, Ctrl+Z and Ctrl+Y undo and redo (back to
 the file as it was opened), Ctrl+W finds; a click puts the cursor there.
