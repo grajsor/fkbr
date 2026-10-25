@@ -77,13 +77,33 @@ doing, updated live.
 
 **F1** lists every key.
 
+## Download
+
+One self-contained binary per architecture, for any Linux with kernel
+3.10 or newer (CentOS 7 and up). No libraries, nothing to install:
+
+- [fkbr-linux-amd64.zip](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-amd64.zip):
+  x86-64
+- [fkbr-linux-arm64.zip](https://github.com/grajsor/fkbr/releases/latest/download/fkbr-linux-arm64.zip):
+  ARM64, such as a Raspberry Pi 3, 4 or 5 with a 64-bit OS, and newer
+
+Checksums and older versions are on the
+[releases page](https://github.com/grajsor/fkbr/releases). Unpack it
+where it should live:
+
+```
+unzip fkbr-linux-amd64.zip    # fkbr, LICENSE, README.md
+```
+
+Or build it yourself with Go 1.26 or newer. `make` cross-compiles both
+architectures, `make release` also makes the zips:
+
+```
+make            # dist/fkbr-linux-amd64 and dist/fkbr-linux-arm64
+make release    # dist/fkbr-linux-amd64.zip and dist/fkbr-linux-arm64.zip
+```
+
 ## Quick start
-
-Build with Go 1.26 or newer. `make` cross-compiles both architectures:
-
-```
-make    # dist/fkbr-linux-amd64 and dist/fkbr-linux-arm64
-```
 
 Copy the binary to each host. On each host, change to the directory to
 share and start fkbr with a directory on the NFS mount:
