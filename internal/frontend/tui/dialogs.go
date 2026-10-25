@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"fkbr/internal/api"
@@ -312,14 +313,51 @@ type textDialog struct {
 	// file is the file a viewer shows: Ctrl+E edits it (editor.go).
 	file *viewedFile
 	st   *styles
+	// Ctrl+W finds text: finding is the prompt while open, plain the
+	// lines as shown (no colours), match the one found (-1: none).
+	finding  *textinput.Model
+	lastFind string
+	plain    []string
+	match    int
+	note     string
 }
 
 // setText replaces the text, keeping the scroll position.
 func (d *textDialog) setText(text string) {
 	d.text = text
 	if d.ready {
-		d.vp.SetContent(d.content(d.vp.Width))
+		d.setContent(d.vp.Width)
 	}
+}
+
+func (d *textDialog) setContent(w int) {
+	c := d.content(w)
+	d.vp.SetContent(c)
+	d.plain = strings.Split(ansi.Strip(c), "\n")
+}
+
+// find shows the next line with q after the one found last (or the top
+// of the view), from the top again past the end.
+func (d *textDialog) find(q string) {
+	match := matcher(q)
+	start := d.vp.YOffset
+	if d.match >= 0 {
+		start = d.match + 1
+	}
+	n := len(d.plain)
+	for k := range n {
+		i := (start + k) % n
+		if match(d.plain[i]) < 0 {
+			continue
+		}
+		d.match, d.note = i, ""
+		if start+k >= n {
+			d.note = "found from the top"
+		}
+		d.vp.SetYOffset(max(0, i-2))
+		return
+	}
+	d.match, d.note = -1, "not found: "+q
 }
 
 func (d *textDialog) content(w int) string {
@@ -333,7 +371,7 @@ func (d *textDialog) content(w int) string {
 }
 
 func newTextDialog(title, text string) *textDialog {
-	return &textDialog{title: safetext.Clean(title), text: safetext.Text(text)}
+	return &textDialog{title: safetext.Clean(title), text: safetext.Text(text), match: -1}
 }
 
 // newHelpDialog is a text dialog whose paragraphs flow with the window.
@@ -344,7 +382,32 @@ func newHelpDialog(title, text string) *textDialog {
 }
 
 func (d *textDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
+	if d.finding != nil {
+		switch msg.String() {
+		case "enter":
+			q := d.finding.Value()
+			if q == "" {
+				q = d.lastFind
+			}
+			d.finding = nil
+			if q != "" {
+				d.lastFind = q
+				d.find(q)
+			}
+		case "esc", "ctrl+w":
+			d.finding = nil
+		default:
+			var cmd tea.Cmd
+			*d.finding, cmd = d.finding.Update(msg)
+			return false, cmd
+		}
+		return false, nil
+	}
+	d.note = ""
 	switch msg.String() {
+	case "ctrl+w":
+		d.finding = newFindInput(d.lastFind)
+		return false, nil
 	case "esc", "q", "f3", "f10", "enter":
 		return true, nil
 	case "ctrl+e":
@@ -369,19 +432,44 @@ func (d *textDialog) view(st *styles, width, height int) string {
 	// The text leaves the last column to the scrollbar (scrollbar.go).
 	if !d.ready || d.vp.Width != w-1 || d.vp.Height != h {
 		d.vp = viewport.New(w-1, h)
-		d.vp.SetContent(d.content(w - 1))
+		d.setContent(w - 1)
 		d.ready = true
 	}
 	pct := int(d.vp.ScrollPercent() * 100)
 	lines := strings.Split(d.vp.View(), "\n")
 	bar := st.bar(len(lines), d.vp.TotalLineCount(), d.vp.YOffset)
 	for i, l := range lines {
+		if at := d.vp.YOffset + i; at == d.match && at < len(d.plain) {
+			l = st.highlight(st.inputCursor, fit(d.plain[at], w-1)) // the line found
+		}
 		if gap := w - 1 - lipgloss.Width(l); gap > 0 {
 			l += st.inputLabel.Render(strings.Repeat(" ", gap))
 		}
 		lines[i] = l + bar[i]
 	}
-	return st.dialogTitle.Render(fit(d.title, w-8)+fmt.Sprintf(" %5d%%", pct)) + "\n" + strings.Join(lines, "\n") + "\n" + fit("↑↓ PgUp PgDn scroll · Esc close", w)
+	foot := "↑↓ PgUp PgDn scroll · ^W find · Esc close"
+	if d.file != nil {
+		foot = "↑↓ PgUp PgDn scroll · ^W find · ^E edit · Esc close"
+	}
+	switch {
+	case d.finding != nil:
+		d.finding.Width = max(10, w-8)
+		st.styleInputs(0, d.finding)
+		foot = d.finding.View()
+	case d.note != "":
+		foot = d.note
+	}
+	if d.finding == nil {
+		foot = fit(foot, w)
+	} else {
+		foot = padTo(st, foot, w) // coloured: fit would count the escapes
+	}
+	return st.dialogTitle.Render(fit(d.title, w-8)+fmt.Sprintf(" %5d%%", pct)) + "\n" + strings.Join(lines, "\n") + "\n" + foot
+}
+
+// padTo pads a coloured line to w cells with the dialog's background.
+func padTo(st *styles, s string, w int) string {
+	return s + st.inputLabel.Render(strings.Repeat(" ", max(0, w-lipgloss.Width(s))))
 }
 
 // flowText word-wraps s to w cells for the help: a paragraph fills the
@@ -503,6 +591,19 @@ FILES
   Ctrl+A         to every node (@all)
   Ctrl+O         if a file exists: skip, overwrite if older, overwrite
   Ctrl+Z         compress on the way (zstd)
+
+VIEW AND EDIT (F3)
+  The viewer shows the first 64 KiB of a file from any node, in colour where it knows the language. Ctrl+E edits a whole text file up to 64 KiB there; a save checks first that nobody changed the file meanwhile.
+  Ctrl+W         find (Enter alone: the next); also in this help
+  Ctrl+E         edit the file
+  In the editor:
+  Ctrl+S, Ctrl+O save
+  Ctrl+X, Esc    close (asks if not saved)
+  Ctrl+K         cut the line; again: the next one too
+  Ctrl+U         paste the cut lines above this one
+  Ctrl+Z, Ctrl+Y undo, redo
+  Ctrl+W         find
+  click          put the cursor there
 
 SYNC (F4)
   Makes the other side match this pane. With nothing marked, the whole folder is synced; marked folders each go to a folder of the same name, marked files are copied. Incremental (the default) sends new and changed files and keeps extra ones; mirror (Ctrl+O) also deletes what the source does not have, but only inside what you sync. You always see a dry run first and confirm it.

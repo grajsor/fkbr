@@ -361,7 +361,7 @@ all keys.
 | Key | Action |
 |---|---|
 | Insert / Space, `+` `-` `*` | select; select all, none, invert. In the node list they mark nodes: the marked nodes are `@dest` |
-| F3 | view a file (first 64 KiB; XML, JSON, YAML, shell scripts and Python highlighted, binary files as hex) |
+| F3 | view a file (first 64 KiB; XML, JSON, YAML, shell scripts and Python highlighted, binary files as hex); Ctrl+W finds; Ctrl+E edits it (below) |
 | F4 | sync: make the other side match this pane (plan shown first). Nothing selected: the whole directory. Selected folders: each into a folder of the same name; selected files are copied. Mirror (Ctrl+O) deletes only inside what is synced |
 | F5 / F6 | copy / move the selection. The destination defaults to `@dest` while nodes are marked, else to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`). Marked nodes that are offline are detached, to catch up later, as with `@all` |
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
@@ -369,6 +369,19 @@ all keys.
 | F10, `q` | quit; if this TUI is the node and it has running jobs, it asks first (its part pauses and resumes the next time) |
 | F11, `o` | settings, kept in the config file: Enter or ← → changes one, `d` sets the default, Ctrl+S saves. The TUI's own apply at once, the node's when it starts again (`o` where the terminal takes F11 for full screen) |
 | F1, `?` | help: every key, how sync works, and this node's log file |
+
+**Editing a file.** In the viewer, Ctrl+E edits the file, on any node: a
+whole UTF-8 text file of up to 64 KiB. Keys as in nano: Ctrl+S (or
+Ctrl+O) saves, Ctrl+X or Esc closes and asks about changes not saved,
+Ctrl+K cuts the line (again: the next one too), Ctrl+U pastes the cut
+lines above the cursor's line, Ctrl+Z and Ctrl+Y undo and redo (back to
+the file as it was opened), Ctrl+W finds; a click puts the cursor there.
+A save goes to the node that has the file and is refused if the file
+changed since it was read (another host saved it, say). The node writes a
+new file and renames it over the old one, so a crash leaves the old
+content; a file with other hard links, or someone else's, is written in
+place and the editor says so. setuid and setgid bits are removed unless
+`allow_setid`, as on a copy, and a node's `accept_writes_from` applies.
 
 The colours fill the screen in dark green, like Norton Commander's blue.
 They need 256 colours or more; xterm-like terminals that report only 16

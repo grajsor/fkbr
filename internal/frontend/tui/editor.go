@@ -11,6 +11,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/charmbracelet/bubbles/textinput"
+
 	"fkbr/internal/api"
 	"fkbr/internal/safetext"
 )
@@ -66,9 +68,16 @@ type editDialog struct {
 	// step (lastEdit), until another key comes between. savedText is the
 	// text as last read or saved: the same text again is not modified.
 	undo, redo []editState
-	lastEdit   string
-	edits      int // counts changes, to tell whether a key made one
-	savedText  string
+	// finding is the Ctrl+W prompt while it is open; lastFind what it
+	// looked for last (Enter on an empty prompt looks again).
+	finding  *textinput.Model
+	lastFind string
+	// gutter and left are the line numbers' width and how far the cursor's
+	// line scrolled sideways at the last view, for clicks.
+	gutter, left int
+	lastEdit     string
+	edits        int // counts changes, to tell whether a key made one
+	savedText    string
 }
 
 type editState struct {
@@ -184,6 +193,27 @@ func (d *editDialog) saved(msg editSavedMsg) dialog {
 }
 
 func (d *editDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
+	if d.finding != nil {
+		switch msg.String() {
+		case "enter":
+			q := d.finding.Value()
+			if q == "" {
+				q = d.lastFind
+			}
+			d.finding = nil
+			if q != "" {
+				d.lastFind = q
+				d.find(q)
+			}
+		case "esc", "ctrl+w":
+			d.finding = nil
+		default:
+			var cmd tea.Cmd
+			*d.finding, cmd = d.finding.Update(msg)
+			return false, cmd
+		}
+		return false, nil
+	}
 	if d.asking {
 		switch msg.String() {
 		case "y", "Y":
@@ -247,12 +277,15 @@ func (d *editDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 		d.cutLine()
 	case "ctrl+u":
 		d.paste()
-	case "esc":
+	case "esc", "ctrl+x":
 		if !d.modified {
 			m.dlg = d.back
 			return false, nil
 		}
 		d.asking = true
+		return false, nil
+	case "ctrl+w":
+		d.finding = newFindInput(d.lastFind)
 		return false, nil
 	case "ctrl+s", "ctrl+o":
 		return false, d.save(m)
@@ -302,6 +335,87 @@ func (d *editDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 	d.row = max(0, min(d.row, len(d.lines)-1))
 	d.col = max(0, min(d.col, len(d.lines[d.row])))
 	return false, nil
+}
+
+// newFindInput is the Ctrl+W prompt; it names what Enter alone looks for
+// again.
+func newFindInput(last string) *textinput.Model {
+	ti := textinput.New()
+	ti.Prompt = "Find: "
+	if last != "" {
+		ti.Prompt = "Find [" + safetext.Clean(clip(last, 30)) + "]: "
+	}
+	ti.CharLimit = 1024
+	ti.Focus()
+	return &ti
+}
+
+// matcher finds q in a line: without capitals in q, case does not count
+// (as in less and vim's smartcase).
+func matcher(q string) func(line string) int {
+	if strings.ToLower(q) == q {
+		return func(line string) int { return strings.Index(strings.ToLower(line), q) }
+	}
+	return func(line string) int { return strings.Index(line, q) }
+}
+
+// find puts the cursor on the next match of q after it: on to the end,
+// then from the top (saying so) up to the cursor.
+func (d *editDialog) find(q string) {
+	match := matcher(q)
+	n := len(d.lines)
+	for k := 0; k <= n; k++ {
+		i := (d.row + k) % n
+		line := string(d.lines[i])
+		from := 0
+		if k == 0 { // the cursor's line: after the cursor
+			from = len(string(d.lines[i][:min(d.col+1, len(d.lines[i]))]))
+		}
+		at := match(line[from:])
+		if at < 0 {
+			continue
+		}
+		pos := utf8.RuneCountInString(line[:from+at])
+		if k == n && pos > d.col { // round to the cursor's line again: only before it
+			continue
+		}
+		d.note, d.noteErr = "", false
+		if d.row+k >= n {
+			d.note = "found from the top"
+		}
+		d.row, d.col = i, pos
+		if d.row < d.top || d.row >= d.top+d.height { // off screen: a third of the way down
+			d.top = max(0, d.row-d.height/3)
+		}
+		return
+	}
+	d.note, d.noteErr = "not found: "+q, true
+}
+
+// clickAt puts the cursor where a click in the text landed (row and col
+// in the dialog's lines: the title is row 0).
+func (d *editDialog) clickAt(row, col int) bool {
+	i := d.top + row - 1
+	if row < 1 || row > d.height || i >= len(d.lines) {
+		return false
+	}
+	x := col - d.gutter
+	if x < 0 {
+		x = 0
+	}
+	if i == d.row {
+		x += d.left
+	}
+	_, at := cells(d.lines[i])
+	d.row, d.col = i, len(at)-1
+	for j := 0; j+1 < len(at); j++ {
+		if x < at[j+1] {
+			d.col = j
+			break
+		}
+	}
+	d.cutRun, d.lastEdit = false, ""
+	return true
 }
 
 // insert types rs at the cursor; '\n' splits the line (a paste may bring
@@ -428,6 +542,7 @@ func (d *editDialog) view(st *styles, width, height int) string {
 	num := st.inputLabel.Foreground(cCodeComment)
 	// Line numbers down the left, as wide as the last one needs.
 	gutter := len(strconv.Itoa(len(d.lines))) + 1
+	d.gutter, d.left = gutter, 0
 	full := w
 	w = max(4, full-gutter)
 	var out []string
@@ -443,6 +558,7 @@ func (d *editDialog) view(st *styles, width, height int) string {
 		left := 0
 		if i == d.row && at[d.col] >= w {
 			left = at[d.col] - w + 1
+			d.left = left
 		}
 		var b strings.Builder
 		used := 0
@@ -475,16 +591,20 @@ func (d *editDialog) view(st *styles, width, height int) string {
 	}
 	pos := fmt.Sprintf(" %d:%d", d.row+1, d.col+1)
 	title := st.dialogTitle.Render(fit("edit "+d.title+mark, w-len(pos)) + pos)
-	hint := "Ctrl+S save · ^K cut line · ^U paste · ^Z undo · ^Y redo · Esc back to the view"
+	var foot string
 	switch {
+	case d.finding != nil:
+		d.finding.Width = max(10, w-8)
+		st.styleInputs(0, d.finding)
+		foot = padTo(st, d.finding.View(), w) // coloured: fit would count the escapes
 	case d.asking:
-		hint = "Save the changes? y = save · n = throw them away · Esc = keep editing"
+		foot = fit("Save the changes? y = save · n = throw them away · Esc = keep editing", w)
+	case d.note != "" && d.noteErr:
+		foot = st.dialogErr.Render(fit(d.note, w))
 	case d.note != "":
-		hint = d.note
-	}
-	foot := fit(hint, w)
-	if d.noteErr && !d.asking {
-		foot = st.dialogErr.Render(fit(hint, w))
+		foot = fit(d.note, w)
+	default:
+		foot = fit("^S save · ^X close · ^W find · ^K cut line · ^U paste · ^Z undo · ^Y redo", w)
 	}
 	return title + "\n" + strings.Join(out, "\n") + "\n" + foot
 }

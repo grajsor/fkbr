@@ -340,21 +340,23 @@ own padding). Without colours, `styles.highlight` writes reverse video.
 - Job details (Enter in F9) update live; totals come from a background
   count on the source (`engine/count.go`).
 - `q` quits like F10. F3 highlights XML, JSON, YAML, shell and Python (by extension, `<?xml`,
-  a `#!`). Ctrl+E in the viewer opens a small editor (`editor.go`: line
-  numbers, Ctrl+K cuts a line, Ctrl+Ks in a row gather, Ctrl+U pastes
-  them whole above the cursor's line (not at the cursor, as nano does),
-  Ctrl+Z/Ctrl+Y undo and redo (a run of typing, Backspace or Ctrl+K is
-  one step; always back to the file as opened: past 500 steps the oldest
-  after the first merge); hidden
-  for now: not in F1 or the user docs, the owner's wish). It saves through
-  `Write` (`api.FeatureWrite`, `engine/write.go`): the node opens the
-  file once (symlinks followed) and checks where it really is
-  (`/proc/self/fd`, then `writablePath`) and that it holds what was read
-  (`Sum`, xxh3 through that fd: an NFS stat can be 30 min old;
-  `ErrChanged`); setuid/setgid go unless `allow_setid`, as on a copy; a
-  file with one link that we own gets a new one renamed over it (random
-  name, noted in `<state>/edits` so a crash's leftover is swept at start,
-  folder fsynced), others are written in place and the result says so
+  a `#!`). Ctrl+W finds in every text dialog (viewer, help, job details;
+  the line found highlighted). Ctrl+E in the viewer opens a small editor
+  (`editor.go`, in F1 and the docs since 2026-10-25): line numbers, nano's
+  keys (Ctrl+S/Ctrl+O save, Ctrl+X/Esc close, Ctrl+K cuts a line, Ctrl+Ks
+  in a row gather, Ctrl+U pastes them whole above the cursor's line, not
+  at the cursor as nano does), Ctrl+Z/Ctrl+Y undo and redo (a run of
+  typing, Backspace or Ctrl+K is one step; always back to the file as
+  opened: past 500 steps the oldest after the first merge), Ctrl+W find,
+  a click places the cursor (`clickAt`). It saves through `Write`
+  (`api.FeatureWrite`, `engine/write.go`): the node opens the file once
+  (symlinks followed) and checks where it really is (`/proc/self/fd`,
+  then `writablePath`) and that it holds what was read (`Sum`, xxh3
+  through that fd: an NFS stat can be 30 min old; `ErrChanged`);
+  setuid/setgid go unless `allow_setid`, as on a copy; a file with one
+  link that we own gets a new one renamed over it (random name, noted in
+  `<state>/edits` so a crash's leftover is swept at start, folder
+  fsynced), others are written in place and the result says so
   (`WriteResult.Notes`). `-colors auto|true|256|16|none`.
 - Mouse (`mouse.go`): click, double click = Enter, right click marks
   (drag marks every row passed), wheel, key bar cells, dialog hints and

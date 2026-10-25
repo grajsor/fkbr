@@ -229,8 +229,8 @@ func (h *harness) key(keys ...string) {
 			msg = tea.KeyMsg{Type: tea.KeyCtrlK}
 		case "ctrl+end":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlEnd}
-		case "ctrl+z", "ctrl+y":
-			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"ctrl+z": tea.KeyCtrlZ, "ctrl+y": tea.KeyCtrlY}[k]}
+		case "ctrl+z", "ctrl+y", "ctrl+w", "ctrl+x":
+			msg = tea.KeyMsg{Type: map[string]tea.KeyType{"ctrl+z": tea.KeyCtrlZ, "ctrl+y": tea.KeyCtrlY, "ctrl+w": tea.KeyCtrlW, "ctrl+x": tea.KeyCtrlX}[k]}
 		case "ctrl+u":
 			msg = tea.KeyMsg{Type: tea.KeyCtrlU}
 		case "ctrl+s":
@@ -1484,5 +1484,109 @@ func TestEditorUndoToStart(t *testing.T) {
 	}
 	if got := string(e.text()); got != "start\n" || e.modified {
 		t.Fatalf("undone to %d bytes, modified %v", len(got), e.modified)
+	}
+}
+
+// Ctrl+W finds in the editor: the cursor goes to the next match, Enter on
+// an empty prompt looks again, past the end from the top; without
+// capitals case does not count.
+func TestEditorFind(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("alpha\nBeta one\ngamma\nbeta two\n")
+	h.key("ctrl+e", "ctrl+w", "beta", "enter")
+	e := h.m.dlg.(*editDialog)
+	if e.row != 1 || e.col != 0 {
+		t.Fatalf("first match at %d:%d", e.row, e.col)
+	}
+	h.key("ctrl+w", "enter") // again
+	if e.row != 3 || e.col != 0 {
+		t.Fatalf("second match at %d:%d", e.row, e.col)
+	}
+	h.key("ctrl+w", "enter") // past the end: from the top
+	if e.row != 1 || !strings.Contains(e.note, "from the top") {
+		t.Fatalf("wrapped to %d:%d, note %q", e.row, e.col, e.note)
+	}
+	h.key("ctrl+w", "Beta", "enter", "ctrl+w", "enter") // capitals: only Beta
+	if e.row != 1 {
+		t.Fatalf("Beta found at row %d", e.row)
+	}
+	h.key("ctrl+w", "nowhere", "enter")
+	if !strings.Contains(h.m.View(), "not found: nowhere") || e.row != 1 {
+		t.Fatalf("not found: note %q, row %d", e.note, e.row)
+	}
+	h.key("ctrl+w", "esc") // the prompt closes, nothing moves
+	if e.finding != nil || e.row != 1 {
+		t.Fatal("Esc did not close the prompt")
+	}
+}
+
+// Ctrl+X leaves like Esc, asking first about changes not saved.
+func TestEditorCtrlX(t *testing.T) {
+	h := newHarness(t)
+	v := h.viewFile("a\n")
+	h.key("ctrl+e", "ctrl+x")
+	if h.m.dlg != v {
+		t.Fatalf("Ctrl+X without changes: %T", h.m.dlg)
+	}
+	h.key("ctrl+e", "b", "ctrl+x")
+	if e, ok := h.m.dlg.(*editDialog); !ok || !e.asking {
+		t.Fatal("Ctrl+X with changes did not ask")
+	}
+}
+
+// A click in the text puts the cursor there.
+func TestEditorClick(t *testing.T) {
+	h := newHarness(t)
+	h.viewFile("first line\nsecond\tline\nthird\n")
+	h.key("ctrl+e")
+	e := h.m.dlg.(*editDialog)
+	h.m.View()
+	if !e.clickAt(2, e.gutter+3) || e.row != 1 || e.col != 3 {
+		t.Fatalf("click: %d:%d", e.row, e.col)
+	}
+	if !e.clickAt(2, e.gutter+8) || e.col != 7 { // past the tab (at 6, 4 wide... up to 8)
+		t.Fatalf("click past a tab: col %d", e.col)
+	}
+	if !e.clickAt(1, e.gutter+99) || e.row != 0 || e.col != len("first line") {
+		t.Fatalf("click past the end: %d:%d", e.row, e.col)
+	}
+	if e.clickAt(0, 5) { // the title
+		t.Error("a click on the title moved the cursor")
+	}
+}
+
+// Ctrl+W finds in the viewer and the help: the line found is shown and
+// highlighted; again goes on to the next.
+func TestViewerFind(t *testing.T) {
+	h := newHarness(t)
+	var b strings.Builder
+	for i := range 200 {
+		fmt.Fprintf(&b, "line %d\n", i)
+		if i == 120 || i == 170 {
+			b.WriteString("the needle\n")
+		}
+	}
+	v := h.viewFile(b.String())
+	h.m.View()
+	h.key("ctrl+w", "needle", "enter")
+	if v.match < 0 || !strings.Contains(v.plain[v.match], "needle") || v.vp.YOffset > v.match || v.match >= v.vp.YOffset+v.vp.Height {
+		t.Fatalf("match %d, view at %d", v.match, v.vp.YOffset)
+	}
+	first := v.match
+	h.key("ctrl+w", "enter")
+	if v.match <= first || !strings.Contains(v.plain[v.match], "needle") {
+		t.Fatalf("again: %d after %d", v.match, first)
+	}
+	h.key("ctrl+w", "zzz", "enter")
+	if !strings.Contains(h.m.View(), "not found: zzz") {
+		t.Error("not found not said")
+	}
+	h.key("esc")
+	h.key("f1")
+	help := h.m.dlg.(*textDialog)
+	h.m.View()
+	h.key("ctrl+w", "Backspace", "enter") // ("backspace" would be the key)
+	if help.match < 0 || !strings.Contains(help.plain[help.match], "Backspace") {
+		t.Fatalf("find in the help: %d", help.match)
 	}
 }

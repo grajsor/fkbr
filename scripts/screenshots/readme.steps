@@ -47,6 +47,14 @@ wait 1
 # scrolled a little way in: the percentage and the scrollbar show where
 keys down down down down down down down down down down down down
 shot fkbr-view
+# the editor (Ctrl+E): found <keep> with Ctrl+W, 14 changed to 30, not saved
+keys ctrle ctrlw
+type keep
+keys enter right right right right right del del
+type 30
+shot fkbr-edit
+keys esc n
+wait 0.5
 # the settings dialog (F11), a few rows down: the demo's ~/.fkbr.conf
 keys esc f11
 wait 0.5

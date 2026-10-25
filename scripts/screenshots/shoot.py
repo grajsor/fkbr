@@ -1,6 +1,7 @@
 """shoot.py OUTDIR STEPS CMD...: drive a TUI in a pty and save PNG screenshots.
 
-STEPS is a file of lines: "keys <name>..." sends keys, "wait <seconds>",
+STEPS is a file of lines: "keys <name>..." sends keys, "type <text>"
+types text, "wait <seconds>",
 "shot <name>" saves OUTDIR/<name>.png and prints the screen text.
 """
 import fcntl
@@ -21,6 +22,7 @@ KEYS = {
     "insert": b"\x1b[2~", "esc": b"\x1b", "bs": b"\x7f", "home": b"\x1b[H",
     "f1": b"\x1bOP", "f2": b"\x1bOQ", "f3": b"\x1bOR", "f4": b"\x1bOS", "f5": b"\x1b[15~",
     "f9": b"\x1b[20~", "f11": b"\x1b[23~", "ctrlc": b"\x03", "ctrla": b"\x01", "ctrlo": b"\x0f",
+    "ctrle": b"\x05", "ctrlw": b"\x17", "right": b"\x1b[C", "del": b"\x1b[3~", "n": b"n",
 }
 NAMED = {  # xterm defaults, for 16-colour output
     "black": (0, 0, 0), "red": (205, 0, 0), "green": (0, 205, 0), "brown": (205, 205, 0),
@@ -147,6 +149,9 @@ for line in open(steps_file):
         for k in parts[1:]:
             os.write(fd, KEYS[k])
             pump(0.35)
+    elif parts[0] == "type":  # type the rest of the line as text
+        os.write(fd, line.split(" ", 1)[1].rstrip("\n").encode())
+        pump(0.35)
     elif parts[0] == "wait":
         pump(float(parts[1]))
     elif parts[0] == "shot":

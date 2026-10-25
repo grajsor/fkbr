@@ -160,6 +160,17 @@ func paintsEveryCell(t *testing.T, p termenv.Profile) {
 		check("editor, error")
 		e.asking = true
 		check("editor, asking")
+		e.asking = false
+		e.finding = newFindInput("x")
+		check("editor, finding")
+		e.finding = nil
+		h.m.dlg = v
+		v.setText(strings.Repeat("abc\n", 50) + "the needle\n")
+		h.m.View()
+		v.find("needle")
+		check("viewer, a match")
+		v.finding = newFindInput("")
+		check("viewer, finding")
 		h.m.dlg = nil
 	}
 }

@@ -231,6 +231,9 @@ func (m *model) dialogClick(msg tea.MouseMsg) tea.Cmd {
 		m.textBarClick(d, row-1)
 		return nil
 	}
+	if c, ok := m.dlg.(interface{ clickAt(row, col int) bool }); ok && msg.Button == tea.MouseButtonLeft && c.clickAt(row, col) {
+		return nil // the editor's text: the cursor goes there
+	}
 	line := b.lines[row]
 	// Hints end every dialog (the last two lines): a list of the keys it
 	// takes, so names listed above them never count as keys.
@@ -250,6 +253,7 @@ var hintKeys = map[string]tea.KeyMsg{
 	"Enter": {Type: tea.KeyEnter}, "Tab": {Type: tea.KeyTab}, "Esc": {Type: tea.KeyEsc},
 	"^A": {Type: tea.KeyCtrlA}, "^O": {Type: tea.KeyCtrlO}, "^K": {Type: tea.KeyCtrlK}, "^Z": {Type: tea.KeyCtrlZ},
 	"^N": {Type: tea.KeyCtrlN}, "^S": {Type: tea.KeyCtrlS}, "^U": {Type: tea.KeyCtrlU},
+	"^X": {Type: tea.KeyCtrlX}, "^W": {Type: tea.KeyCtrlW}, "^E": {Type: tea.KeyCtrlE}, "^Y": {Type: tea.KeyCtrlY},
 	"d": {Type: tea.KeyRunes, Runes: []rune("d")}, "↑↓": {Type: tea.KeyDown},
 	"y": {Type: tea.KeyRunes, Runes: []rune("y")}, "n": {Type: tea.KeyRunes, Runes: []rune("n")},
 	"l": {Type: tea.KeyRunes, Runes: []rune("l")},

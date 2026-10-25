@@ -71,9 +71,13 @@ doing, updated live.
 
 ![Details of a running copy of three database dumps to four nodes](docs/screenshots/fkbr-progress.png)
 
-**View (F3).** Shows a file from any node, with XML, JSON, YAML, shell scripts and Python highlighted.
+**View and edit (F3).** Shows a file from any node, with XML, JSON, YAML,
+shell scripts and Python highlighted; Ctrl+W finds, and Ctrl+E edits it
+in place with nano's keys (save, cut and paste lines, undo, find).
 
 ![The viewer showing a build configuration on build01](docs/screenshots/fkbr-view.png)
+
+![The editor on the same file, a line changed](docs/screenshots/fkbr-edit.png)
 
 **Settings (F11).** Colours, mouse, what the copy dialogs start with,
 this node's name, share and limits, kept in `~/.fkbr.conf`; only what

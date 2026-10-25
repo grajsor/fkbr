@@ -9,6 +9,9 @@ Copy and sync files between machines that share an NFS mount. One file, nothing 
 **Where do I put it?**
 On each machine's own disk, not on the share: anyone who can write to the share could swap it. If you keep a config file beside it (`fkbr.conf`), that goes there too.
 
+**Can I edit a file on another machine?**
+Yes. Open it with F3, press Ctrl+E, change it, Ctrl+S saves. The keys are nano's. If someone changed the file since you opened it, fkbr says so and does not save.
+
 **How do I change its settings?**
 Press F11 in it: colours, mouse, what copies start with, the machine's name and share, limits. They are kept in `~/.fkbr.conf`; a `fkbr.conf` beside fkbr, if you make one, is used instead.
 
