@@ -14,12 +14,12 @@ a test that fails without it.
 
 | | |
 |---|---:|
-| Hours of fault runs | **over 35 h** |
-| Copied trees checked against their source | **over 11,000** |
-| Faults injected (kills, stops, cuts, full disks, …) | **over 1,400** |
+| Hours of fault runs | **over 39 h** |
+| Copied trees checked against their source | **over 12,000** |
+| Faults injected (kills, stops, cuts, full disks, …) | **over 1,700** |
 | Files lost or corrupted | **0** |
 | Bugs found by these runs, each fixed with a test | **48** |
-| Tests in `go test ./...` (also run with nodes linked over ssh, and under `-race`) | **over 330** |
+| Tests in `go test ./...` (also run with nodes linked over ssh, and under `-race`) | **over 380** |
 | Random inputs fed to the chunk reader, the exclude matcher and the TUI | **over 9 million** |
 
 The full list of cases, and every bug with its test, is in
@@ -121,16 +121,21 @@ After every round, with the faults off:
 | 2026-10-25 | torture v2, soak | + 2 fixes | 1 h 14 min | 202 | 538 | 25 | 0 |
 | 2026-10-25 | torture v2, run 3 | + 3 fixes | 1 h 37 min | 226 | 577 | 176 | **1** |
 | 2026-10-25 | torture v2, run 4 | e79d440 | 1 h 26 min | 216 | 579 | 178 | 0 |
-| 2026-10-25 | **torture v2, run 5** | **5b8e542** | 1 h 26 min | 206 | 569 | 182 | 0 |
+| 2026-10-25 | torture v2, run 5 | 5b8e542 | 1 h 26 min | 206 | 569 | 182 | 0 |
+| 2026-10-25 | torture v2, run 6 | 4bb8895 | 1 h 21 min | 212 | 514 | 162 | 0 |
+| 2026-10-25 | **torture v2, run 7** | **be23f46** | 1 h 15 min | 196 | 499 | 153 | 0 |
 
 "Trees checked" counts target folders compared file by file with their
 source after a job.
 
-The last run, on 5b8e542 with every fix and sparse files sent as their
-data only, found nothing: 206 jobs under 182 faults, every target exact
-or made exact by one sync, memory at most 81 MiB per node, open files at
-most 26. Its 64 MiB sparse test file was checked exact 70 times, over
-the share and over ssh.
+The last run, on be23f46 (the store confined to the share, the editor,
+the settings dialog), found nothing in fkbr: 196 jobs under 153 faults,
+every target exact or made exact by one sync, memory at most 122 MiB
+per process, open files at most 36. It raised two alarms, both the
+test's own: a target that an injected full disk had failed 4 s before
+its job was cancelled, and a status query sent to a node killed in that
+same second. The test now tells those apart. Run 5, on 5b8e542, checked
+its 64 MiB sparse test file exact 70 times, over the share and over ssh.
 
 The 16 h soak showed no leak: the longest-running process (7 h 18 min)
 stayed at 42-91 MB of memory and 8-15 open files. In the night of

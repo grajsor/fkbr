@@ -61,7 +61,7 @@ All the numbers: `docs/benchmarks.md`.
   resumable jobs. Files are installed only after the whole transfer has
   arrived. Tested by killing, freezing and restarting nodes mid-transfer,
   cutting hosts off the NFS server, and deleting parts of the share under
-  running nodes: over 11,000 copies checked, no file ever lost or
+  running nodes: over 12,000 copies checked, no file ever lost or
   corrupted (`docs/stability.md`).
 
 ## Screenshots
