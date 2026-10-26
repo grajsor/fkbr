@@ -391,6 +391,9 @@ pty, answer `ESC]11;?` and `ESC[6n` or nothing draws for ~5 s.
 - `/proc` files arrive empty (stat size 0, like tar/rsync).
 - A TUI attached to a TUI that quits keeps retrying the dead socket.
 - A copy to a node that just left says "destination: missing root".
+- Two different nodes applying one sync plan in the same instant can both
+  run it: the share has no exclusive create (one node applies it once,
+  `TestSyncPlanAppliesOnceAtATime`).
 - A job on root `local` cut off by a reboot fails: its own-job record
   (`own/`) is in the state dir in `/tmp`, and nowhere else is safe.
 - bubbletea v1's init queries the terminal (OSC 11 + DSR): 5 s where
