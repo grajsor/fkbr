@@ -260,11 +260,11 @@ func TestThemeWithoutColour(t *testing.T) {
 }
 
 func TestSetColors(t *testing.T) {
-	prev := lipgloss.ColorProfile()
-	defer lipgloss.SetColorProfile(prev)
+	prev, prevDetected := lipgloss.ColorProfile(), detected
+	defer func() { lipgloss.SetColorProfile(prev); detected = prevDetected }()
 	for _, tc := range []struct {
 		term, mode string
-		from, want termenv.Profile
+		from, want termenv.Profile // from: what the terminal gives
 	}{
 		{"xterm", "auto", termenv.ANSI, termenv.ANSI256}, // claims 16, can do 256
 		{"linux", "auto", termenv.ANSI, termenv.ANSI},    // the console really has 16
@@ -275,6 +275,7 @@ func TestSetColors(t *testing.T) {
 		{"xterm", "none", termenv.TrueColor, termenv.Ascii},
 	} {
 		t.Setenv("TERM", tc.term)
+		detected = func() termenv.Profile { return tc.from }
 		lipgloss.SetColorProfile(tc.from)
 		if err := checkColors(tc.mode); err != nil {
 			t.Errorf("%s refused: %v", tc.mode, err)
@@ -284,6 +285,19 @@ func TestSetColors(t *testing.T) {
 		}
 		if got := lipgloss.ColorProfile(); got != tc.want {
 			t.Errorf("TERM=%s %s from %s: %s, want %s", tc.term, tc.mode, tc.from.Name(), got.Name(), tc.want.Name())
+		}
+	}
+	// Auto after another depth goes back to what the terminal gives: it
+	// used to keep the depth set last (none stayed mono, true stayed 24-bit).
+	t.Setenv("TERM", "xterm-256color")
+	for _, env := range []termenv.Profile{termenv.ANSI256, termenv.TrueColor, termenv.Ascii} {
+		detected = func() termenv.Profile { return env }
+		for _, before := range []string{"none", "true", "16", "256"} {
+			setColors(before)
+			setColors("auto")
+			if got := lipgloss.ColorProfile(); got != env {
+				t.Errorf("auto after %s on a %s terminal: %s", before, env.Name(), got.Name())
+			}
 		}
 	}
 	if setColors("bright") == nil || CheckOptions(Options{Colors: "bright"}) == nil {

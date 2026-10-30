@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
@@ -185,16 +186,23 @@ func newStyles(theme string) *styles {
 	return st
 }
 
+// detected is the colour depth the terminal and environment give, read
+// once before any choice is applied: auto goes back to it, also after F11
+// set another depth (it used to keep whatever was set last).
+var detected = sync.OnceValue(lipgloss.ColorProfile)
+
 // setColors picks the colour depth: auto, true, 256, 16 or none. Auto
 // trusts the environment, except that xterm-like terminals that claim only
 // 16 colours get 256: nearly all of them support it (PuTTY, MobaXterm,
 // Windows Terminal, GNOME, iTerm), and it keeps the panels dark green.
 func setColors(mode string) error {
+	env := detected()
 	switch mode {
 	case "", "auto":
-		if lipgloss.ColorProfile() == termenv.ANSI && likely256(os.Getenv("TERM")) {
-			lipgloss.SetColorProfile(termenv.ANSI256)
+		if env == termenv.ANSI && likely256(os.Getenv("TERM")) {
+			env = termenv.ANSI256
 		}
+		lipgloss.SetColorProfile(env)
 	case "true", "truecolor", "24bit":
 		lipgloss.SetColorProfile(termenv.TrueColor)
 	case "256":
