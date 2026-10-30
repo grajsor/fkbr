@@ -381,7 +381,8 @@ checks it.
 `scripts/screenshots/take.sh` builds a five-node demo under
 `/tmp/fkbr-demo`, drives the TUI with pyte (`shoot.py`, 120x34) and writes
 `docs/screenshots/*.png` (needs pyte and pillow; uses `uv` when `PY` is
-unset). Retake only when the look changed. Demo data stays neutral. In a
+unset); `fkbr-themes.png` is the main screen in the four other themes
+(`theme.steps`, `themes.py`). Retake only when the look changed. Demo data stays neutral. In a
 pty, answer `ESC]11;?` and `ESC[6n` or nothing draws for ~5 s.
 
 ## Gotchas when editing

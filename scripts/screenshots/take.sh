@@ -32,10 +32,19 @@ stage() {
 }
 run() { # steps file; screens.txt shows the text of each shot
 	(cd /tmp/fkbr-demo/ops01 && export COLORTERM=truecolor TERM=xterm-256color &&
-		py "$H/shoot.py" "$OUT" "$1" env HOME=$DEMOHOME "$BIN" -node ops01 /tmp/fkbr-demo/share) > /tmp/fkbr-demo-screens.txt 2>&1
+		py "$H/shoot.py" "$OUT" "$1" env HOME=$DEMOHOME "$BIN" -node ops01 ${THEME:+-theme $THEME} /tmp/fkbr-demo/share) >> /tmp/fkbr-demo-screens.txt 2>&1
 }
+: > /tmp/fkbr-demo-screens.txt
 stage; run "$H/readme.steps"
 stage; run "$H/progress.steps"   # a fresh demo, so the copy is the only running job
 stage; run "$H/sync.steps"       # a fresh TUI: the header ticker starts after 30 s
+# The other themes: the main screen in each, in one grid.
+grid=()
+for t in blue red yellow black; do
+	stage; THEME=$t run "$H/theme.steps"
+	mv "$OUT/fkbr-theme.png" "/tmp/fkbr-demo-theme-$t.png"
+	grid+=("$t=/tmp/fkbr-demo-theme-$t.png")
+done
+py "$H/themes.py" "$OUT/fkbr-themes.png" "${grid[@]}"
 stop
 echo "screenshots in $OUT; screen text in /tmp/fkbr-demo-screens.txt"

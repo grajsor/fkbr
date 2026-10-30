@@ -53,7 +53,8 @@ type keep
 keys enter right right right right right del del
 type 30
 shot fkbr-edit
-keys esc n
+# Esc asks; ^X throws the change away (letters do not answer)
+keys esc ctrlx
 wait 0.5
 # the settings dialog (F11), a few rows down: the demo's ~/.fkbr.conf
 keys esc f11

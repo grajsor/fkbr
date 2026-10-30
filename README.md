@@ -109,6 +109,8 @@ and limits, kept in `~/.fkbr.conf`; only what you change is written.
 
 ![The settings dialog](docs/screenshots/fkbr-settings.png)
 
+![The main screen in the blue, red, yellow and black themes](docs/screenshots/fkbr-themes.png)
+
 **F1** lists every key.
 
 ## Download

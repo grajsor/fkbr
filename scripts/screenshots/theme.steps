@@ -1,0 +1,17 @@
+wait 3
+# The main screen of readme.steps, for the theme grid (take.sh runs it with -theme).
+keys f2 home down down down down enter
+wait 1
+keys down down down enter
+wait 1
+keys tab f2 home down enter
+wait 1
+keys down down enter
+wait 1
+keys down enter
+wait 1
+keys down enter
+wait 1
+keys tab down down down down insert insert
+wait 0.5
+shot fkbr-theme
