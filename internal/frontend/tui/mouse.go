@@ -244,6 +244,9 @@ func (m *model) dialogClick(msg tea.MouseMsg) tea.Cmd {
 	if f, ok := m.dlg.(interface{ focusLine(string) bool }); ok {
 		f.focusLine(line)
 	}
+	if d, ok := m.dlg.(*settingsDialog); ok {
+		return m.previewLook(d) // a second click changed a choice
+	}
 	return nil
 }
 

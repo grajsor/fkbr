@@ -6,8 +6,8 @@ data through a directory on the share. Go, single static binary.
 
 **This file is committed and public.** Keep it free of IP addresses, host
 names, user names, e-mail addresses and anything about where fkbr is
-used. The owner's private notes (test lab, deploys, history) are in
-`CLAUDE.local.md`, git-ignored, only on their machine.
+used. Private notes (test lab, deploys, history) are in
+`CLAUDE.local.md`, git-ignored, never committed.
 
 User-facing docs: `README.md`, `docs/FAQ.md`, `docs/operations.md`,
 `docs/architecture.md` (layers, NFS and ssh, packages, with diagrams),
@@ -16,7 +16,7 @@ User-facing docs: `README.md`, `docs/FAQ.md`, `docs/operations.md`,
 (what could break, how it is tested, results). License: Apache 2.0,
 copyright "The Author".
 
-## Hard requirements (from the owner, do not regress)
+## Hard requirements (do not regress)
 
 - **Nothing installed, ever.** No package, install script, systemd unit,
   system user, or files in `/etc`, `/var` or `$HOME`. Ship one binary;
@@ -25,7 +25,7 @@ copyright "The Author".
   in the config file's `ssh:` list (`config.WritePath`): `-config`,
   `$FKBR_CONFIG`, `fkbr.conf` beside the binary if it exists (`fkbr.yaml`,
   its older name, too), and only if
-  none of those exists, `~/.fkbr.conf` (the owner's call; the one file
+  none of those exists, `~/.fkbr.conf` (the one file
   fkbr may put in `$HOME`, written only when a host is linked or
   settings are saved with F11).
 - **Swarm, no master/slave.** `cd /dir && fkbr /mnt/nfs/somedir` registers
@@ -59,7 +59,7 @@ copyright "The Author".
 
 ## Build, test, version
 
-go.mod says `go 1.26.0`: the oldest toolchain the owner builds with.
+go.mod says `go 1.26.0`: the oldest toolchain fkbr is built with.
 bubbletea/lipgloss/bubbles v2 (charm.land) would be a port, not a bump.
 
 ```
@@ -318,9 +318,10 @@ own padding). Without colours, `styles.highlight` writes reverse video.
   common keys (`settingRows`: load/save per key); `config.SaveSettings`
   sets only the keys changed (yaml.Node, comments kept, a default value
   removes its key) and refuses what `CheckSettings` would not start
-  with. TUI keys (`tui:`) apply at once (`applyPrefs`), unless a flag
-  set them (`Options.Overridden`, shown in the row); the rest at the
-  next start. The key bar shows 11 keys where each gets 4 cells
+  with. Colours, theme and mouse (`live` rows) show while chosen
+  (`previewLook`; ^X puts `orig` back); TUI keys (`tui:`) apply when
+  saved (`applyPrefs`), unless a flag set them (`Options.Overridden`,
+  shown in the row); the rest at the next start. The key bar shows 11 keys where each gets 4 cells
   (`barKeys`).
 - Panes start in this host's shared dir and `local` (or another node).
   Backspace at the top of the shared dir goes on up into root `local` at
@@ -328,8 +329,8 @@ own padding). Without colours, `styles.highlight` writes reverse video.
   roots level is only reached from the node list.
 - Liveness: every 30 s the header name slides out, the version runs
   through as a ticker and slides back (`anim.go`); a yellow spinner
-  replaces a corner of the jobs panel (`withCorner`). The owner rejected a
-  pulsing or blinking cursor bar; don't bring it back.
+  replaces a corner of the jobs panel (`withCorner`). A pulsing or
+  blinking cursor bar was tried and dropped; don't bring it back.
 - `@dest`: Insert/`+`/`-`/`*` in a node list mark nodes in `model.dest`,
   shared by both panes. While any are marked, F5/F4 default to `@dest`;
   the dialog expands it to names and sets `detach_offline`. `dest` and
@@ -403,11 +404,11 @@ pty, answer `ESC]11;?` and `ESC[6n` or nothing draws for ~5 s.
   (`own/`) is in the state dir in `/tmp`, and nowhere else is safe.
 - bubbletea v1's init queries the terminal (OSC 11 + DSR): 5 s where
   nothing answers.
-- rsync gaps: metadata-only changes re-send whole files (owner chose not
-  to build it), hard links, ACLs/xattrs, one-file-system, bandwidth limit,
+- rsync gaps: metadata-only changes re-send whole files (not
+  planned), hard links, ACLs/xattrs, one-file-system, bandwidth limit,
   --backup.
 
-## Open ideas (not requested yet)
+## Open ideas (not built)
 
 - `-borders single` for terminals whose fonts mangle double lines.
 - Bidirectional sync with a baseline.

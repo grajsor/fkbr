@@ -160,7 +160,7 @@ A second, 90-minute run on the fixed build (da7f98f) checked the 17 again
 | A target restarted while it was being detached kept the job's staging for good | Swept at every prune | `TestStaleStagingSwept` |
 | A job whose source was forgotten stayed `running` though every target was done | Shown done (or failed) | `TestSourceGoneAfterTargetsFinished` |
 | A registry entry damaged between a worker's Register and its first heartbeat stopped the worker (found by `-race`) | Registers again, as the heartbeat loop does | `TestEntryLostAtStart` |
-| A copy of a source path that does not exist ended `done` with one error (seen in the regression pass; asked for) | Refused at submit on the source, or the source fails the job before sending | `TestMissingSourcePathFails` |
+| A copy of a source path that does not exist ended `done` with one error (seen in the regression pass) | Refused at submit on the source, or the source fails the job before sending | `TestMissingSourcePathFails` |
 
 ## 9. Security audit (2026-10-22)
 
@@ -261,7 +261,7 @@ ssh hosts linked from the TUI (`operations.md`, "Without a share").
 | A copy into the local root over an NFS share; with no share (ssh, on its own) | Refused on NFS (anyone could forge the chunks); done without a share | auto (`TestLocalRootWritesNeedPrivateShare`) |
 | A sync from or into the local root | Refused for now | auto (`TestLocalRootUnseenByPeers`) |
 | `check` with the local root `/` | Reads it, writes nothing there | manual (cloud session) |
-| Hosts kept in the config file: added twice, removed, the owner's comments and keys, a symlink in its place | Each host once; the rest of the file and its mode kept (a new file 0600); never written through the symlink | auto (`TestSavedHosts`) |
+| Hosts kept in the config file: added twice, removed, comments and other keys in the file, a symlink in its place | Each host once; the rest of the file and its mode kept (a new file 0600); never written through the symlink | auto (`TestSavedHosts`) |
 | Which config file: `-config`, `$FKBR_CONFIG`, `fkbr.conf` beside the binary (or `fkbr.yaml`, its older name), `~/.fkbr.conf` | Read and written in that order; `~/.fkbr.conf` only when none of the others is there | auto (`TestConfigPathOrder`) |
 | No share: a host linked while the node runs, saved, linked again at the next start, unlinked | Online, saved; back on restart; leaves and is forgotten | auto (`TestSSHHostsLinkedAtRuntime`) |
 | TUI: panes open in this directory and another node or the local root; a host not up yet shows with why; F7 links, F8 unlinks; on a share F7/F8 in the node list do nothing new | As stated | auto (`TestStartPanesAndLinkRows`, `TestLinkAndUnlinkFromTheNodeList`, `TestNoLinkKeysOnAShare`) |
@@ -287,17 +287,17 @@ Found by a code review of the whole ssh branch (2026-10-23):
 | `cd /usr && fkbr`, then `fkbr rm /local/x`: root `local` (`/`) took the path that meant `/usr/local/x` | A path that could mean either is refused; `files/local/x` names the folder | `TestResolveRoot` |
 | `fkbr ssh:web01` with a config file that sets `nfs_root`, then F7: the `ssh:` list written beside it made the file unreadable | Not saved there; the host is linked, with the reason | `TestSaveHostBesideShare` |
 | Once F7 had written `~/.fkbr.conf`, `$FKBR_SHARE` was ignored: fkbr became an ssh home node | `$FKBR_SHARE` wins over the file's `ssh:` list | `TestPickShare` |
-| With `socket_mode` open to others, anyone reaching the socket could make the node ssh anywhere with the owner's keys | Linking at runtime (F7, F8, the socket) is refused on such a node | `TestNoLinksOverAnOpenSocket` |
+| With `socket_mode` open to others, anyone reaching the socket could make the node ssh anywhere with the user's ssh keys | Linking at runtime (F7, F8, the socket) is refused on such a node | `TestNoLinksOverAnOpenSocket` |
 | A linked host's node was always named after its short hostname: two directories on one host, or two hosts of one short name, could not both link | `NAME=host[:path]` names the node | `TestParseHosts`, `TestSSHHostsLinkedAtRuntime` |
 | A remote that stayed up but never started `fkbr link` left the host "connecting" for good | The start is given up after 45 s and tried again | `TestSilentStartGivenUp` |
 | A linked node's 10 ms poll also paced its jobs' waits, each a round trip to the home node | Only asking for requests is that quick | `TestLinkPolls` |
 | A CLI attached to a daemon always said "using the running node X, which shares ...", because of root `local` | Root `local` is not compared | `TestSameRootsLeavesOutLocal` |
 | The TUI asked a node on a share for its links on every node list refresh | Asked once | `TestNotHomeAskedOnce` |
 | Two `firstLine` helpers that differed on long lines | One | (none) |
-| A pane listing a node's roots (`files`, `local`) put its cursor back on the top row at every node refresh, a few seconds apart (found by the owner, 2026-10-25) | The cursor stays on its row | `TestRootsRefreshKeepsCursor` |
-| Backspace at the top of this host's shared folder showed a list of two roots (asked by the owner: one tree) | It goes on up into root `local` at the folder above, and from `/` to the node list; a shared folder outside `local` keeps the roots list | `TestUpFromSharedIntoLocal` |
-| Editing a file (F3, Ctrl+E): nano's keys, cut and paste of whole lines, undo and redo, find, a click places the cursor; finding in the viewer and the help | Saves only over the file as it was read; undo always gets back to the file as opened; cut lines go back whole above the cursor's line (they split a line when pasted at the cursor, found by the owner) | `TestEditorSaves`, `TestEditorCutPaste`, `TestEditorPasteWholeLines`, `TestEditorUndo`, `TestEditorUndoToStart`, `TestEditorFind`, `TestEditorCtrlX`, `TestEditorClick`, `TestViewerFind`, `TestThemePaintsEveryCell` |
-| Settings (F11, asked by the owner): the config file kept by the TUI | Only the keys changed are written, comments, the ssh list and the mode kept; a default removes its key; a value or a file the node could not start with is refused and named; Esc with changes asks, answered with Ctrl keys only; the TUI's own apply at once, unless a flag set them; five themes, each painting every cell at every colour depth | `TestSaveSettings`, `TestSaveSettingsRefused`, `TestSettingsDialog`, `TestSettingsDialogAsks`, `TestSettingsClick`, `TestSettingsTheme`, `TestSettingsNumbers`, `TestThemesComplete`, `TestThemePaintsEveryCell` |
+| A pane listing a node's roots (`files`, `local`) put its cursor back on the top row at every node refresh, a few seconds apart | The cursor stays on its row | `TestRootsRefreshKeepsCursor` |
+| Backspace at the top of this host's shared folder showed a list of two roots instead of going on up one tree | It goes on up into root `local` at the folder above, and from `/` to the node list; a shared folder outside `local` keeps the roots list | `TestUpFromSharedIntoLocal` |
+| Editing a file (F3, Ctrl+E): nano's keys, cut and paste of whole lines, undo and redo, find, a click places the cursor; finding in the viewer and the help | Saves only over the file as it was read; undo always gets back to the file as opened; cut lines go back whole above the cursor's line (they split a line when pasted at the cursor) | `TestEditorSaves`, `TestEditorCutPaste`, `TestEditorPasteWholeLines`, `TestEditorUndo`, `TestEditorUndoToStart`, `TestEditorFind`, `TestEditorCtrlX`, `TestEditorClick`, `TestViewerFind`, `TestThemePaintsEveryCell` |
+| Settings (F11): the config file kept by the TUI | Only the keys changed are written, comments, the ssh list and the mode kept; a default removes its key; a value or a file the node could not start with is refused and named; Esc with changes asks, answered with Ctrl keys only; colours, theme and mouse show while chosen and ^X puts the old look back, the TUI's own apply when saved, unless a flag set them; five themes, each painting every cell at every colour depth | `TestSaveSettings`, `TestSaveSettingsRefused`, `TestSettingsDialog`, `TestSettingsDialogAsks`, `TestSettingsClick`, `TestSettingsTheme`, `TestSettingsNumbers`, `TestThemesComplete`, `TestThemePaintsEveryCell` |
 
 ## 13. Cloud test run (2026-10-24)
 
@@ -389,6 +389,7 @@ A read of the code with gopls's checks, when the themes were added.
 | The home node read an ssh session's stderr by lines of at most 1 MiB and stopped at a longer one; nothing read the pipe after that, so the remote node blocked on its next log line once it filled | Lines longer than 64 KiB are logged cut short and the rest read to the end | `TestStderrLongLine` |
 | The settings dialog's "save the changes?" took `y` and `n`: a letter typed on after Esc answered it (the editor's question had been changed for this) | Ctrl+S saves, Ctrl+X throws the changes away, Esc goes back; letters do nothing | `TestSettingsDialogAsks` |
 | A bad `-theme` or `-colors` was refused only after the node had started (and joined the share) | Refused before anything starts | `TestSetColors` |
+| The settings dialog said its appearance rows applied at once, but colours, theme and mouse changed only on save | They show as they are picked, Ctrl+X on leaving puts the old look back; the copy rows say "applies when saved" | `TestSettingsTheme` |
 | Settings: a number out of range said only "a number from 1", and `0` for the sync deletion limit "a number from -1" | The range is named; where `-1` is taken, so is that | `TestSettingsNumbers` |
 
 ## How to run the lab tests

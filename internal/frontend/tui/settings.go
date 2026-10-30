@@ -65,6 +65,7 @@ type settingRow struct {
 	def     string   // a text's default, in words
 	help    string   // shown while the row has the cursor
 	now     bool     // applies when saved (else when fkbr starts again)
+	live    bool     // shows while chosen, before it is saved (previewLook)
 	// load is the row's value in a config file ("": not set); save turns
 	// a value back into what goes in the file (nil: the key goes).
 	load func(c *config.Config) string
@@ -74,17 +75,17 @@ type settingRow struct {
 func settingRows() []settingRow {
 	str := func(get func(c *config.Config) string) func(*config.Config) string { return get }
 	return []settingRow{
-		{section: "APPEARANCE · applies at once", key: "tui.colors", label: "Colours", kind: choiceSetting,
-			choices: config.TUIColors, now: true,
+		{section: "APPEARANCE · shows at once", key: "tui.colors", label: "Colours", kind: choiceSetting,
+			choices: config.TUIColors, now: true, live: true,
 			help: "auto finds out what the terminal shows; none: no colour at all",
 			load: str(func(c *config.Config) string { return c.TUI.Colors }), save: choiceValue(config.TUIColors)},
-		{key: "tui.theme", label: "Theme", kind: choiceSetting, choices: config.TUIThemes, now: true,
+		{key: "tui.theme", label: "Theme", kind: choiceSetting, choices: config.TUIThemes, now: true, live: true,
 			help: "the panels in dark green, dark blue, dark red, gold or matte black",
 			load: str(func(c *config.Config) string { return c.TUI.Theme }), save: choiceValue(config.TUIThemes)},
-		{key: "tui.mouse", label: "Mouse", kind: choiceSetting, choices: []string{"on", "off"}, now: true,
+		{key: "tui.mouse", label: "Mouse", kind: choiceSetting, choices: []string{"on", "off"}, now: true, live: true,
 			help: "off leaves the mouse to the terminal: select text without holding Shift",
 			load: func(c *config.Config) string { return onOffPtr(c.TUI.Mouse) }, save: boolValue()},
-		{section: "COPY AND SYNC · applies at once", key: "tui.if_exists", label: "If a file exists", kind: choiceSetting,
+		{section: "COPY AND SYNC · applies when saved", key: "tui.if_exists", label: "If a file exists", kind: choiceSetting,
 			choices: config.TUIIfExists, now: true,
 			help: "what F5 and F6 start with when a file is already at the destination",
 			load: str(func(c *config.Config) string { return c.TUI.IfExists }), save: choiceValue(config.TUIIfExists)},
@@ -323,10 +324,18 @@ type settingsDialog struct {
 	asking bool // Esc with changes not saved
 	path   string
 	over   map[string]string
+	orig   look // the look when the dialog opened, back on ^X
+}
+
+// look is what the live rows change: shown while chosen, kept on save.
+type look struct {
+	colors, theme string
+	mouse         bool
 }
 
 func newSettingsDialog(m *model) *settingsDialog {
-	d := &settingsDialog{rows: settingRows(), path: m.prefs.configPath, over: m.prefs.overridden}
+	d := &settingsDialog{rows: settingRows(), path: m.prefs.configPath, over: m.prefs.overridden,
+		orig: look{m.prefs.colors, m.prefs.theme, m.prefs.mouse}}
 	c := &config.Config{}
 	if d.path != "" {
 		if got, err := config.Read(d.path); err == nil {
@@ -390,7 +399,7 @@ func (d *settingsDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 			d.asking = false
 			return d.saveAll(m)
 		case "ctrl+x":
-			return true, nil
+			return true, m.setLook(d.orig)
 		case "esc":
 			d.asking = false
 		}
@@ -439,7 +448,51 @@ func (d *settingsDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 			d.edit = &ti
 		}
 	}
-	return false, nil
+	return false, m.previewLook(d)
+}
+
+// previewLook shows the live rows as chosen: the look the dialog opened
+// with, with the rows changed since in place (a flag still wins).
+func (m *model) previewLook(d *settingsDialog) tea.Cmd {
+	l := d.orig
+	for i, r := range d.rows {
+		if !r.live || d.values[i] == d.loaded[i] || d.over[r.key] != "" {
+			continue
+		}
+		switch v := d.value(i); r.key {
+		case "tui.colors":
+			l.colors = v
+		case "tui.theme":
+			l.theme = v
+		case "tui.mouse":
+			l.mouse = v == "on"
+		}
+	}
+	return m.setLook(l)
+}
+
+// setLook repaints and turns the mouse on or off where l differs from
+// what the TUI shows now.
+func (m *model) setLook(l look) tea.Cmd {
+	p := &m.prefs
+	repaint := false
+	if l.colors != p.colors && setColors(l.colors) == nil {
+		p.colors, repaint = l.colors, true
+	}
+	if l.theme != p.theme {
+		p.theme, repaint = l.theme, true
+	}
+	if repaint {
+		m.st = newStyles(p.theme)
+	}
+	if l.mouse == p.mouse {
+		return nil
+	}
+	p.mouse = l.mouse
+	if l.mouse {
+		return tea.EnableMouseCellMotion
+	}
+	return tea.DisableMouse
 }
 
 // textOf is a saved value as the dialog shows it.
@@ -523,26 +576,17 @@ func (m *model) applyPrefs(d *settingsDialog) tea.Cmd {
 		return ""
 	}
 	p := &m.prefs
-	var cmd tea.Cmd
-	repaint := false
-	if c := get("tui.colors"); p.overridden["tui.colors"] == "" && c != p.colors {
-		if setColors(c) == nil {
-			p.colors, repaint = c, true
-		}
+	l := look{p.colors, p.theme, p.mouse}
+	if p.overridden["tui.colors"] == "" {
+		l.colors = get("tui.colors")
 	}
-	if t := get("tui.theme"); p.overridden["tui.theme"] == "" && t != p.theme {
-		p.theme, repaint = t, true
+	if p.overridden["tui.theme"] == "" {
+		l.theme = get("tui.theme")
 	}
-	if repaint {
-		m.st = newStyles(p.theme)
+	if p.overridden["tui.mouse"] == "" {
+		l.mouse = get("tui.mouse") == "on"
 	}
-	if on := get("tui.mouse") == "on"; p.overridden["tui.mouse"] == "" && on != p.mouse {
-		p.mouse = on
-		cmd = tea.DisableMouse
-		if on {
-			cmd = tea.EnableMouseCellMotion
-		}
-	}
+	cmd := m.setLook(l)
 	p.ifExists = max(0, slices.Index(conflictPolicies, api.ConflictPolicy(get("tui.if_exists"))))
 	p.compress = get("tui.compress") == "on"
 	if ex := get("tui.exclude"); ex != p.exclude {
@@ -624,8 +668,11 @@ func (d *settingsDialog) view(st *styles, width, height int) string {
 	title := st.dialogTitle.Render(fit("Settings · kept in "+where, w))
 	r := d.rows[d.focus]
 	when := "applies when the node starts again"
-	if r.now {
-		when = "applies at once"
+	switch {
+	case r.live:
+		when = "shows at once; ^S keeps it"
+	case r.now:
+		when = "applies when saved"
 	}
 	if r.kind == infoSetting {
 		when = "shown only"

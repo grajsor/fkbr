@@ -15,6 +15,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
+	"github.com/muesli/termenv"
 
 	"fkbr/internal/api"
 )
@@ -1299,16 +1300,43 @@ func TestSettingsDialog(t *testing.T) {
 	}
 }
 
-// The theme row repaints at once and is kept; a -theme flag wins this run.
+// The appearance rows show while chosen, before saving: ^X puts the old
+// look back, ^S keeps the new one; a -theme flag wins this run.
 func TestSettingsTheme(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	defer lipgloss.SetColorProfile(prev)
 	h := newHarness(t)
 	p := filepath.Join(t.TempDir(), "fkbr.conf")
 	h.m.prefs = prefs{configPath: p, mouse: true}
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	h.key("f11")
+	d := h.m.dlg.(*settingsDialog)
+	settingsAt(t, d, "tui.theme")
+	h.key("right") // green -> blue
+	if h.m.st.pal != themes["blue"] {
+		t.Error("the theme did not show before saving")
+	}
+	settingsAt(t, d, "tui.colors")
+	h.key("right", "right", "right", "right") // auto, true, 256, 16, none
+	if lipgloss.ColorProfile() != termenv.Ascii {
+		t.Errorf("colours none did not show before saving: %s", lipgloss.ColorProfile().Name())
+	}
+	settingsAt(t, d, "tui.mouse")
+	if _, cmd := h.m.Update(tea.KeyMsg{Type: tea.KeyRight}); cmd == nil || h.m.prefs.mouse {
+		t.Error("mouse off did not apply before saving")
+	}
+	h.key("esc", "ctrl+x") // thrown away: the look as it was
+	if h.m.dlg != nil || h.m.st.pal != themes["green"] || h.m.prefs.colors != "" || !h.m.prefs.mouse {
+		t.Errorf("^X kept the preview: theme %q colours %q mouse %v", h.m.prefs.theme, h.m.prefs.colors, h.m.prefs.mouse)
+	}
+	if _, err := os.Stat(p); err == nil {
+		t.Error("^X wrote the file")
+	}
 	h.key("f11")
 	settingsAt(t, h.m.dlg.(*settingsDialog), "tui.theme")
-	h.key("right", "ctrl+s") // green -> blue
+	h.key("right", "ctrl+s")
 	if h.m.st.pal != themes["blue"] {
-		t.Error("the theme did not change at once")
+		t.Error("the saved theme is not shown")
 	}
 	if b, _ := os.ReadFile(p); !strings.Contains(string(b), "theme: blue") {
 		t.Errorf("file:\n%s", b)
@@ -1316,7 +1344,11 @@ func TestSettingsTheme(t *testing.T) {
 	h.m.prefs.overridden = map[string]string{"tui.theme": "-theme"}
 	h.key("f11")
 	settingsAt(t, h.m.dlg.(*settingsDialog), "tui.theme")
-	h.key("right", "ctrl+s") // blue -> red, but the flag wins
+	h.key("right") // blue -> red, but the flag wins
+	if h.m.st.pal != themes["blue"] {
+		t.Error("a theme chosen beat the -theme flag")
+	}
+	h.key("ctrl+s")
 	if h.m.st.pal != themes["blue"] {
 		t.Error("a saved theme beat the -theme flag")
 	}
@@ -1449,7 +1481,7 @@ func TestEditorLineNumbers(t *testing.T) {
 }
 
 // Cut lines go back whole, above the cursor's line, wherever the cursor
-// is in it (the owner: moved into a line, they split it).
+// is in it (pasted into a line, they split it).
 func TestEditorPasteWholeLines(t *testing.T) {
 	h := newHarness(t)
 	h.viewFile("one\ntwo\nthree\nfour\nfive\n")

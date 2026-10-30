@@ -624,7 +624,7 @@ JOBS (F9)
 `) + jobs + m.sshHelp() + `
 
 SETTINGS (F11)
-  The settings people change most: colours and theme, mouse, what the copy dialogs start with, this node's name, share, roles and limits. Kept in ~/.{name}.conf, or in {name}.conf beside the binary if there is one; only what you change is written. The TUI's own settings apply at once, the node's when it starts again.
+  The settings people change most: colours and theme, mouse, what the copy dialogs start with, this node's name, share, roles and limits. Kept in ~/.{name}.conf, or in {name}.conf beside the binary if there is one; only what you change is written. Colours, theme and mouse show as you pick them (^X on leaving puts them back); the TUI's other settings apply when saved, the node's when it starts again.
   ↑ ↓            choose a setting
   Enter, ← →     change it: the next choice, or type a value
   d              back to the default

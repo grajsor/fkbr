@@ -24,7 +24,7 @@ func TestSavedHosts(t *testing.T) {
 	if fi, _ := os.Stat(p); fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode %v", fi.Mode().Perm())
 	}
-	// A comment and another key the owner added stay, and so does the
+	// A comment and another key added by hand stay, and so does the
 	// file's mode.
 	b, _ := os.ReadFile(p)
 	os.WriteFile(p, []byte("# mine\nnode_id: here\n"+string(b)), 0o640)

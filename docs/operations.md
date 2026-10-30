@@ -367,7 +367,7 @@ all keys.
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
 | F9 | jobs panel with progress and ETA: Enter for details (time elapsed, each node's state, time-stamped notes), `c` cancel, `u` catch up |
 | F10, `q` | quit; if this TUI is the node and it has running jobs, it asks first (its part pauses and resumes the next time) |
-| F11, `o` | settings, kept in the config file: Enter or ← → changes one, `d` sets the default, Ctrl+S saves. The TUI's own apply at once, the node's when it starts again (`o` where the terminal takes F11 for full screen) |
+| F11, `o` | settings, kept in the config file: Enter or ← → changes one, `d` sets the default, Ctrl+S saves. Colours, theme and mouse show as you pick them (Ctrl+X on leaving puts them back), the TUI's other settings apply when saved, the node's when it starts again (`o` where the terminal takes F11 for full screen) |
 | F1, `?` | help: every key, how sync works, and this node's log file |
 
 **Editing a file.** In the viewer, Ctrl+E edits the file, on any node: a
@@ -393,7 +393,7 @@ off (the cursor then shows in reverse video).
 
 `-theme` picks the colours: `green` (the default), `blue`, `red`,
 `yellow` (gold panels with dark text) or `black` (matte). F11 sets it
-too (`tui: theme:`) and the screen changes at once.
+too (`tui: theme:`): the screen changes as you pick one, and Ctrl+S keeps it.
 
 Every 30 seconds the name in the top-left corner slides out, the version
 (`v1.0 f0c0e0b`) scrolls through, and the name slides back in; a small
