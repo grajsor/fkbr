@@ -316,17 +316,14 @@ func (h *Home) session(ctx context.Context, host Host, o *SessionOptions) error 
 	logged := make(chan struct{})
 	go func() {
 		defer close(logged)
-		sc := bufio.NewScanner(stderr)
-		sc.Buffer(make([]byte, 64<<10), 1<<20)
-		for sc.Scan() {
-			line := sc.Text()
+		eachLine(stderr, func(line string) {
 			// The remote node's own log says how it ran, not why the
 			// session ended: that is ssh's last word, or the link's.
 			if !strings.HasPrefix(line, "time=") {
 				last.set(line)
 			}
 			h.log.Info("ssh "+name, "says", line)
-		}
+		})
 	}()
 	// Once the home node stops, the remote node gets StopWait to leave
 	// (see Run); then ssh is ended, which ends the session in any state.
@@ -361,6 +358,36 @@ func (h *Home) session(ctx context.Context, host Host, o *SessionOptions) error 
 		return errors.New(l)
 	}
 	return err
+}
+
+// stderrLine is the most of one stderr line that is logged.
+const stderrLine = 64 << 10
+
+// eachLine calls each for every line of r until it ends, a line longer
+// than stderrLine cut short. It reads r to the end whatever comes: a
+// reader that stopped would leave ssh's stderr full and the remote node
+// blocked on its next log line.
+func eachLine(r io.Reader, each func(string)) {
+	br := bufio.NewReaderSize(r, stderrLine)
+	skipping := false // the rest of a line already cut short
+	for {
+		b, err := br.ReadSlice('\n')
+		if !skipping && len(b) > 0 {
+			line := strings.TrimRight(string(b), "\r\n")
+			if errors.Is(err, bufio.ErrBufferFull) {
+				line += " …"
+			}
+			each(line)
+		}
+		switch {
+		case errors.Is(err, bufio.ErrBufferFull):
+			skipping = true
+		case err != nil:
+			return
+		default:
+			skipping = false
+		}
+	}
 }
 
 type lastLine struct {

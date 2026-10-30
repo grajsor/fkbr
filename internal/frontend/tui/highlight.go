@@ -11,9 +11,9 @@ import (
 
 // Light syntax highlighting for the file viewer (F3): XML, JSON, YAML,
 // shell and Python, by file extension, an <?xml declaration or a #! line.
-// Colours are for the light dialog background.
+// Colours are for the light dialog background; tags take the theme's
+// (palette.codeTag).
 var (
-	cCodeTag     = lipgloss.CompleteColor{TrueColor: "#116a3e", ANSI256: "22", ANSI: "2"}  // XML tags, shell keywords
 	cCodeKey     = lipgloss.CompleteColor{TrueColor: "#4a52b6", ANSI256: "61", ANSI: "4"}  // XML attributes, JSON keys, shell variables
 	cCodeString  = lipgloss.CompleteColor{TrueColor: "#a8321f", ANSI256: "124", ANSI: "1"} // quoted values
 	cCodeLiteral = lipgloss.CompleteColor{TrueColor: "#8a5a00", ANSI256: "94", ANSI: "5"}  // numbers, true/false/null
@@ -76,7 +76,7 @@ func highlight(st *styles, lang, text string, width int) string {
 	base := st.inputLabel
 	classes := map[int]lipgloss.Style{
 		clPlain:   base,
-		clTag:     base.Foreground(cCodeTag).Bold(true),
+		clTag:     base.Foreground(st.pal.codeTag).Bold(true),
 		clKey:     base.Foreground(cCodeKey),
 		clString:  base.Foreground(cCodeString),
 		clLiteral: base.Foreground(cCodeLiteral),

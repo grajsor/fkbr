@@ -270,7 +270,9 @@ package tests; docs/testplan.md lists them.
   rewritten, job end), not after `StaleTmp`. A node refuses a socket in a
   folder others may write to (`CheckSocketDir`; the CLI won't dial it).
   The ssh keepalive holds its verdict once after a late tick (`watch`):
-  a stalled process is not a dead peer.
+  a stalled process is not a dead peer. The home node reads ssh's stderr
+  to the end (`eachLine`, long lines cut short): a reader that stopped
+  would block the remote node on its next log line.
   Over ssh a record call the home node doesn't answer within
   `recordTimeout` is a link down (EIO), which transfers ride out; a
   target whose ack folder is gone, or (over a share) whose chunk is gone
@@ -305,8 +307,9 @@ package tests; docs/testplan.md lists them.
 ## TUI
 
 Filled Norton Commander look; colours in `theme.go`, each a
-`CompleteColor` with 256/16-colour fallbacks. `TestThemePaintsEveryCell`
-fails on any cell without a background, so every string drawn must carry
+`CompleteColor` with 256/16-colour fallbacks; green is the default
+theme. `TestThemePaintsEveryCell` fails on any cell without a
+background, so every string drawn must carry
 the panel or dialog background (pad with a styled fill, not lipgloss's
 own padding). Without colours, `styles.highlight` writes reverse video.
 
@@ -357,7 +360,9 @@ own padding). Without colours, `styles.highlight` writes reverse video.
   link that we own gets a new one renamed over it (random name, noted in
   `<state>/edits` so a crash's leftover is swept at start, folder
   fsynced), others are written in place and the result says so
-  (`WriteResult.Notes`). `-colors auto|true|256|16|none`.
+  (`WriteResult.Notes`). `-colors auto|true|256|16|none`; `-theme
+  green|blue|red|yellow|black` (`tui.theme`, `themes` in `theme.go`: one
+  `palette` per theme, every role set, `TestThemePaintsEveryCell` runs each).
 - Mouse (`mouse.go`): click, double click = Enter, right click marks
   (drag marks every row passed), wheel, key bar cells, dialog hints and
   settings lines clickable. `-mouse=false` turns it off.

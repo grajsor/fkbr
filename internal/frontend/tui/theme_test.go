@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/muesli/termenv"
 
 	"fkbr/internal/api"
+	"fkbr/internal/config"
 )
 
 // unpainted returns the column of the first visible cell in line drawn
@@ -83,21 +85,53 @@ func TestUnpaintedDetector(t *testing.T) {
 	}
 }
 
-// TestThemePaintsEveryCell renders each screen in true colour and checks
-// that every line fills the terminal exactly and every cell has a
-// background from the theme.
+// TestThemePaintsEveryCell renders each screen of each theme at each
+// colour depth and checks that every line fills the terminal exactly and
+// every cell has a background from the theme.
 func TestThemePaintsEveryCell(t *testing.T) {
-	for _, p := range []termenv.Profile{termenv.TrueColor, termenv.ANSI256, termenv.ANSI} {
-		t.Run(p.Name(), func(t *testing.T) { paintsEveryCell(t, p) })
+	for _, theme := range config.TUIThemes {
+		for _, p := range []termenv.Profile{termenv.TrueColor, termenv.ANSI256, termenv.ANSI} {
+			t.Run(theme+"/"+p.Name(), func(t *testing.T) { paintsEveryCell(t, theme, p) })
+		}
 	}
 }
 
-func paintsEveryCell(t *testing.T, p termenv.Profile) {
+// TestThemesComplete: every theme config takes exists and sets every
+// colour at every depth (a role left out would draw without a
+// background or in the terminal's own colour).
+func TestThemesComplete(t *testing.T) {
+	if len(themes) != len(config.TUIThemes) {
+		t.Errorf("%d themes, config takes %d", len(themes), len(config.TUIThemes))
+	}
+	for _, name := range config.TUIThemes {
+		p, err := themeNamed(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		v := reflect.ValueOf(p)
+		for i := range v.NumField() {
+			for _, depth := range []string{"TrueColor", "ANSI256", "ANSI"} {
+				if v.Field(i).FieldByName(depth).String() == "" {
+					t.Errorf("%s: %s has no %s colour", name, v.Type().Field(i).Name, depth)
+				}
+			}
+		}
+	}
+	if p, _ := themeNamed(""); p != themes["green"] {
+		t.Error("the default theme is not green")
+	}
+	if _, err := themeNamed("pink"); err == nil {
+		t.Error("theme pink accepted")
+	}
+}
+
+func paintsEveryCell(t *testing.T, theme string, p termenv.Profile) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(p)
 	defer lipgloss.SetColorProfile(prev)
 
 	h := newHarness(t)
+	h.m.st = newStyles(theme)
 	h.open("master", "data")
 	h.key("tab")
 	h.open("s1", "data")
@@ -211,6 +245,9 @@ func TestSetColors(t *testing.T) {
 	} {
 		t.Setenv("TERM", tc.term)
 		lipgloss.SetColorProfile(tc.from)
+		if err := checkColors(tc.mode); err != nil {
+			t.Errorf("%s refused: %v", tc.mode, err)
+		}
 		if err := setColors(tc.mode); err != nil {
 			t.Fatal(err)
 		}
@@ -218,7 +255,10 @@ func TestSetColors(t *testing.T) {
 			t.Errorf("TERM=%s %s from %s: %s, want %s", tc.term, tc.mode, tc.from.Name(), got.Name(), tc.want.Name())
 		}
 	}
-	if setColors("bright") == nil {
+	if setColors("bright") == nil || CheckOptions(Options{Colors: "bright"}) == nil {
 		t.Error("bad -colors value accepted")
+	}
+	if CheckOptions(Options{Theme: "pink"}) == nil {
+		t.Error("bad -theme value accepted")
 	}
 }

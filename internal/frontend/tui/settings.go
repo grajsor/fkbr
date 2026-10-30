@@ -33,6 +33,7 @@ type prefs struct {
 	configPath string
 	overridden map[string]string // config key -> the flag that sets it this run
 	colors     string
+	theme      string
 	mouse      bool
 	ifExists   int // index in conflictPolicies
 	compress   bool
@@ -40,7 +41,7 @@ type prefs struct {
 }
 
 func prefsFrom(o Options) prefs {
-	p := prefs{configPath: o.ConfigPath, overridden: o.Overridden, colors: o.Colors, mouse: !o.NoMouse,
+	p := prefs{configPath: o.ConfigPath, overridden: o.Overridden, colors: o.Colors, theme: o.Theme, mouse: !o.NoMouse,
 		compress: o.Compress, exclude: o.Exclude}
 	p.ifExists = max(0, slices.Index(conflictPolicies, api.ConflictPolicy(o.IfExists)))
 	return p
@@ -77,16 +78,19 @@ func settingRows() []settingRow {
 			choices: config.TUIColors, now: true,
 			help: "auto finds out what the terminal shows; none: no colour at all",
 			load: str(func(c *config.Config) string { return c.TUI.Colors }), save: choiceValue(config.TUIColors)},
+		{key: "tui.theme", label: "Theme", kind: choiceSetting, choices: config.TUIThemes, now: true,
+			help: "the panels in dark green, dark blue, dark red, gold or matte black",
+			load: str(func(c *config.Config) string { return c.TUI.Theme }), save: choiceValue(config.TUIThemes)},
 		{key: "tui.mouse", label: "Mouse", kind: choiceSetting, choices: []string{"on", "off"}, now: true,
 			help: "off leaves the mouse to the terminal: select text without holding Shift",
-			load: func(c *config.Config) string { return onOffPtr(c.TUI.Mouse) }, save: boolValue(true)},
+			load: func(c *config.Config) string { return onOffPtr(c.TUI.Mouse) }, save: boolValue()},
 		{section: "COPY AND SYNC · applies at once", key: "tui.if_exists", label: "If a file exists", kind: choiceSetting,
 			choices: config.TUIIfExists, now: true,
 			help: "what F5 and F6 start with when a file is already at the destination",
 			load: str(func(c *config.Config) string { return c.TUI.IfExists }), save: choiceValue(config.TUIIfExists)},
 		{key: "tui.compress", label: "Compress (zstd)", kind: choiceSetting, choices: []string{"off", "on"}, now: true,
 			help: "F5, F6 and F4 start with zstd on: less to move, more CPU",
-			load: func(c *config.Config) string { return onIf(c.TUI.Compress) }, save: boolValue(false)},
+			load: func(c *config.Config) string { return onIf(c.TUI.Compress) }, save: boolValue()},
 		{key: "tui.exclude", label: "Exclude", kind: textSetting, def: "nothing", now: true,
 			help: "what the exclude field starts with, separated by spaces: .git *.tmp cache/",
 			load: str(func(c *config.Config) string { return c.TUI.Exclude }), save: func(v string) (any, error) {
@@ -156,7 +160,7 @@ func settingRows() []settingRow {
 			}},
 		{key: "transfer.allow_setid", label: "Keep setuid/setgid", kind: choiceSetting, choices: []string{"off", "on"},
 			help: "keep these bits on files copied or saved here (off: removed, so no peer can plant one)",
-			load: func(c *config.Config) string { return onIf(c.Transfer.AllowSetID) }, save: boolValue(false)},
+			load: func(c *config.Config) string { return onIf(c.Transfer.AllowSetID) }, save: boolValue()},
 		{key: "keep_done", label: "Keep finished jobs", kind: textSetting, def: "1h",
 			help: "how long finished jobs and sync plans stay listed (30m, 1h, 1d)",
 			load: durLoad(func(c *config.Config) time.Duration { return c.KeepDone }), save: durValue(time.Minute)},
@@ -223,7 +227,7 @@ func choiceValue(choices []string) func(string) (any, error) {
 	}
 }
 
-func boolValue(def bool) func(string) (any, error) {
+func boolValue() func(string) (any, error) {
 	return func(v string) (any, error) { return v == "on", nil }
 }
 
@@ -240,7 +244,10 @@ func intValue(lo, hi int) func(string) (any, error) {
 	return func(v string) (any, error) {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < lo || n > hi || n == 0 {
-			return nil, fmt.Errorf("a number from %d", lo)
+			if lo < 0 { // 0 is the default, set with d
+				return nil, fmt.Errorf("%d, or a number from 1 to %d", lo, hi)
+			}
+			return nil, fmt.Errorf("a number from %d to %d", lo, hi)
 		}
 		return n, nil
 	}
@@ -358,11 +365,11 @@ func (d *settingsDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 			r := d.rows[d.focus]
 			v := strings.TrimSpace(d.edit.Value())
 			if v != "" {
-				if _, err := r.save(v); err != nil {
+				saved, err := r.save(v)
+				if err != nil {
 					d.err = r.label + ": " + err.Error()
 					return false, nil
 				}
-				saved, _ := r.save(v)
 				v = textOf(saved)
 			}
 			d.values[d.focus], d.edit, d.err = v, nil, ""
@@ -376,11 +383,13 @@ func (d *settingsDialog) update(m *model, msg tea.KeyMsg) (bool, tea.Cmd) {
 		return false, nil
 	}
 	if d.asking {
+		// Answered with Ctrl keys only, as in the editor: a letter typed
+		// on after Esc must not save or throw the changes away.
 		switch msg.String() {
-		case "y", "Y":
+		case "ctrl+s":
 			d.asking = false
 			return d.saveAll(m)
-		case "n", "N":
+		case "ctrl+x":
 			return true, nil
 		case "esc":
 			d.asking = false
@@ -515,10 +524,17 @@ func (m *model) applyPrefs(d *settingsDialog) tea.Cmd {
 	}
 	p := &m.prefs
 	var cmd tea.Cmd
+	repaint := false
 	if c := get("tui.colors"); p.overridden["tui.colors"] == "" && c != p.colors {
 		if setColors(c) == nil {
-			p.colors, m.st = c, newStyles()
+			p.colors, repaint = c, true
 		}
+	}
+	if t := get("tui.theme"); p.overridden["tui.theme"] == "" && t != p.theme {
+		p.theme, repaint = t, true
+	}
+	if repaint {
+		m.st = newStyles(p.theme)
 	}
 	if on := get("tui.mouse") == "on"; p.overridden["tui.mouse"] == "" && on != p.mouse {
 		p.mouse = on
@@ -618,7 +634,7 @@ func (d *settingsDialog) view(st *styles, width, height int) string {
 	foot := []string{}
 	switch {
 	case d.asking:
-		foot = append(foot, "Save the changes? y = save · n = throw them away · Esc = back")
+		foot = append(foot, "Not saved.  ^S save · ^X throw the changes away · Esc back")
 	case d.err != "":
 		foot = append(foot, st.dialogErr.Render(fit("! "+d.err, w)))
 	default:

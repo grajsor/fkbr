@@ -33,6 +33,8 @@ type Options struct {
 	RunsNode bool
 	// Colors: auto (default), true, 256, 16 or none.
 	Colors string
+	// Theme: green (default), blue, red, yellow or black.
+	Theme string
 	// LogPath is where this node logs, shown in the help.
 	LogPath string
 	// Version scrolls through the header now and then (anim.go).
@@ -58,11 +60,13 @@ type Options struct {
 
 // Run starts the TUI and blocks until the user quits.
 func Run(ctx context.Context, c api.Client, opts Options) error {
-	if err := setColors(opts.Colors); err != nil {
+	if err := CheckOptions(opts); err != nil {
 		return err
 	}
+	setColors(opts.Colors)
 	m := newModel(ctx, c)
 	m.prefs = prefsFrom(opts)
+	m.st = newStyles(m.prefs.theme)
 	m.lastExclude = m.prefs.exclude
 	m.runsNode = opts.RunsNode
 	m.startPanes = opts.StartInDirs
@@ -151,7 +155,7 @@ type model struct {
 
 func newModel(ctx context.Context, c api.Client) *model {
 	return &model{
-		ctx: ctx, c: c, st: newStyles(),
+		ctx: ctx, c: c, st: newStyles(""),
 		panes: [2]*pane{newPane(), newPane()},
 		nodes: map[string]api.Node{}, jobs: map[string]api.Job{},
 		moves: map[string]moveInfo{}, dest: map[string]bool{},
@@ -1309,7 +1313,7 @@ func (m *model) View() string {
 			cx: x + d.GetBorderLeftSize() + d.GetPaddingLeft(), cy: 1 + y + d.GetBorderTopSize() + d.GetPaddingTop(),
 			lines: strings.Split(ansi.Strip(content), "\n")}
 		out = append(out, lipgloss.Place(m.width, area, lipgloss.Center, lipgloss.Center, framed,
-			lipgloss.WithWhitespaceBackground(cPanel)))
+			lipgloss.WithWhitespaceBackground(m.st.pal.panel)))
 	} else {
 		out = append(out, m.renderPanes(ph))
 	}

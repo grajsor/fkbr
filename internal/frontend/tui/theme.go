@@ -8,42 +8,121 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+
+	"fkbr/internal/config"
 )
 
-// The palette is built around a dark green, which fills the
-// panels the way blue did in Norton Commander. Colours are named by role,
-// since the 16-colour fallback is a different scheme: that palette has no
-// dark green (the terminal's "green" is often glaring), so there the
-// panels are black with green text, like a green phosphor screen.
-var (
-	cPanel        = lipgloss.CompleteColor{TrueColor: "#116a3e", ANSI256: "22", ANSI: "0"}
-	cFile         = lipgloss.CompleteColor{TrueColor: "#e7f0e9", ANSI256: "255", ANSI: "2"}
-	cDir          = lipgloss.CompleteColor{TrueColor: "#ffffff", ANSI256: "231", ANSI: "10"}
-	cDim          = lipgloss.CompleteColor{TrueColor: "#88b49f", ANSI256: "109", ANSI: "8"}
-	cMarked       = lipgloss.CompleteColor{TrueColor: "#ffbe10", ANSI256: "214", ANSI: "11"}
-	cErr          = lipgloss.CompleteColor{TrueColor: "#e48a8a", ANSI256: "174", ANSI: "9"}
-	cBorder       = lipgloss.CompleteColor{TrueColor: "#77ad82", ANSI256: "108", ANSI: "2"}
-	cBorderActive = lipgloss.CompleteColor{TrueColor: "#ffffff", ANSI256: "231", ANSI: "10"}
-	cTitle        = lipgloss.CompleteColor{TrueColor: "#e7f0e9", ANSI256: "255", ANSI: "10"}
-	cBar          = lipgloss.CompleteColor{TrueColor: "#afcfb5", ANSI256: "151", ANSI: "2"} // cursor, key labels
-	cBarText      = lipgloss.CompleteColor{TrueColor: "#1b1e23", ANSI256: "234", ANSI: "0"}
-	cBarTitle     = lipgloss.CompleteColor{TrueColor: "#116a3e", ANSI256: "22", ANSI: "0"} // active title on cBar
-	cHeader       = lipgloss.CompleteColor{TrueColor: "#35805b", ANSI256: "65", ANSI: "2"}
-	cHeaderText   = lipgloss.CompleteColor{TrueColor: "#e7f0e9", ANSI256: "255", ANSI: "0"}
-	cHeaderName   = lipgloss.CompleteColor{TrueColor: "#ffffff", ANSI256: "231", ANSI: "0"}
-	cInk          = lipgloss.CompleteColor{TrueColor: "#1b1e23", ANSI256: "234", ANSI: "0"} // status and key-number bar
-	cInkText      = lipgloss.CompleteColor{TrueColor: "#ffffff", ANSI256: "231", ANSI: "15"}
-	cSurface      = lipgloss.CompleteColor{TrueColor: "#dbe9e2", ANSI256: "254", ANSI: "7"} // dialogs
-	cSurfaceText  = lipgloss.CompleteColor{TrueColor: "#1b1e23", ANSI256: "234", ANSI: "0"}
-	cSurfaceTitle = lipgloss.CompleteColor{TrueColor: "#116a3e", ANSI256: "22", ANSI: "0"}
-	cSurfaceErr   = lipgloss.CompleteColor{TrueColor: "#ca1515", ANSI256: "160", ANSI: "1"}
-	cAccent       = lipgloss.CompleteColor{TrueColor: "#4a52b6", ANSI256: "61", ANSI: "4"} // focused input
-	cAccentText   = lipgloss.CompleteColor{TrueColor: "#ffffff", ANSI256: "231", ANSI: "15"}
-)
+// A palette names its colours by role. The default is built around a dark
+// green, which fills the panels the way blue did in Norton Commander. The
+// 16-colour fallback is a different scheme: that palette has no dark green
+// (the terminal's "green" is often glaring), so there the panels are black
+// with green text, like a green phosphor screen. The other themes keep the
+// same roles: the panels, a light cursor bar, light dialogs.
+type palette struct {
+	panel, file, dir, dim, marked, err, border, borderActive, title lipgloss.CompleteColor
+	bar, barText, barTitle                                          lipgloss.CompleteColor // cursor and key labels; an active title on bar
+	markedText                                                      lipgloss.CompleteColor // the cursor on a marked row
+	header, headerText, headerName                                  lipgloss.CompleteColor
+	ink, inkText, statusText, statusErr                             lipgloss.CompleteColor // status and key-number bar
+	surface, surfaceText, surfaceTitle, surfaceErr                  lipgloss.CompleteColor // dialogs
+	accent, accentText                                              lipgloss.CompleteColor // focused input
+	codeTag                                                         lipgloss.CompleteColor // XML tags, shell keywords in the viewer
+}
+
+func cc(tc, c256, c16 string) lipgloss.CompleteColor {
+	return lipgloss.CompleteColor{TrueColor: tc, ANSI256: c256, ANSI: c16}
+}
+
+// themes are what -theme and tui.theme take; config.TUIThemes lists the
+// names, the first the default.
+var themes = map[string]palette{
+	"green": {
+		panel: cc("#116a3e", "22", "0"), file: cc("#e7f0e9", "255", "2"), dir: cc("#ffffff", "231", "10"),
+		dim: cc("#88b49f", "109", "8"), marked: cc("#ffbe10", "214", "11"), err: cc("#e48a8a", "174", "9"),
+		border: cc("#77ad82", "108", "2"), borderActive: cc("#ffffff", "231", "10"), title: cc("#e7f0e9", "255", "10"),
+		bar: cc("#afcfb5", "151", "2"), barText: cc("#1b1e23", "234", "0"), barTitle: cc("#116a3e", "22", "0"),
+		markedText: cc("#1b1e23", "234", "0"),
+		header:     cc("#35805b", "65", "2"), headerText: cc("#e7f0e9", "255", "0"), headerName: cc("#ffffff", "231", "0"),
+		ink: cc("#1b1e23", "234", "0"), inkText: cc("#ffffff", "231", "15"), statusText: cc("#ffbe10", "214", "11"), statusErr: cc("#e48a8a", "174", "9"),
+		surface: cc("#dbe9e2", "254", "7"), surfaceText: cc("#1b1e23", "234", "0"),
+		surfaceTitle: cc("#116a3e", "22", "0"), surfaceErr: cc("#ca1515", "160", "1"),
+		accent: cc("#4a52b6", "61", "4"), accentText: cc("#ffffff", "231", "15"),
+		codeTag: cc("#116a3e", "22", "2"),
+	},
+	// Dark blue; with 16 colours the terminal's blue, as Norton Commander.
+	"blue": {
+		panel: cc("#0f2a5c", "17", "4"), file: cc("#e2e9f5", "255", "7"), dir: cc("#ffffff", "231", "15"),
+		dim: cc("#8ea3c8", "110", "6"), marked: cc("#ffbe10", "214", "11"), err: cc("#ff9a9a", "210", "9"),
+		border: cc("#6f8fc4", "68", "6"), borderActive: cc("#ffffff", "231", "15"), title: cc("#e2e9f5", "255", "15"),
+		bar: cc("#a9c1e8", "146", "6"), barText: cc("#10151d", "233", "0"), barTitle: cc("#0f2a5c", "17", "4"),
+		markedText: cc("#10151d", "233", "0"),
+		header:     cc("#2b4c86", "25", "6"), headerText: cc("#e2e9f5", "255", "0"), headerName: cc("#ffffff", "231", "0"),
+		ink: cc("#10151d", "233", "0"), inkText: cc("#ffffff", "231", "15"), statusText: cc("#ffbe10", "214", "11"), statusErr: cc("#ff9a9a", "210", "9"),
+		surface: cc("#dde5f2", "254", "7"), surfaceText: cc("#10151d", "233", "0"),
+		surfaceTitle: cc("#0f2a5c", "17", "4"), surfaceErr: cc("#ca1515", "160", "1"),
+		accent: cc("#1d7a62", "29", "2"), accentText: cc("#ffffff", "231", "15"),
+		codeTag: cc("#0f2a5c", "17", "4"),
+	},
+	// Dark red; errors on the panels in orange, as red would not show.
+	"red": {
+		panel: cc("#6e1414", "52", "1"), file: cc("#f4e3e3", "254", "7"), dir: cc("#ffffff", "231", "15"),
+		dim: cc("#c99494", "174", "0"), marked: cc("#ffbe10", "214", "11"), err: cc("#ffb080", "216", "14"),
+		border: cc("#b87676", "138", "7"), borderActive: cc("#ffffff", "231", "15"), title: cc("#f4e3e3", "254", "15"),
+		bar: cc("#e6b3b3", "181", "7"), barText: cc("#1e1919", "234", "0"), barTitle: cc("#6e1414", "52", "1"),
+		markedText: cc("#1e1919", "234", "0"),
+		header:     cc("#8f3333", "88", "9"), headerText: cc("#f4e3e3", "254", "0"), headerName: cc("#ffffff", "231", "0"),
+		ink: cc("#1e1919", "234", "0"), inkText: cc("#ffffff", "231", "15"), statusText: cc("#ffbe10", "214", "11"), statusErr: cc("#ffb080", "216", "9"),
+		surface: cc("#f2e0e0", "254", "7"), surfaceText: cc("#1e1919", "234", "0"),
+		surfaceTitle: cc("#6e1414", "52", "1"), surfaceErr: cc("#b80000", "124", "9"),
+		accent: cc("#2f5e9e", "25", "4"), accentText: cc("#ffffff", "231", "15"),
+		codeTag: cc("#6e1414", "52", "1"),
+	},
+	// Gold panels with dark text: the one light theme, so marked rows are
+	// blue instead of yellow.
+	"yellow": {
+		panel: cc("#d4a017", "178", "3"), file: cc("#1f1a0a", "234", "0"), dir: cc("#000000", "16", "0"),
+		dim: cc("#5c4810", "58", "8"), marked: cc("#1d3f9e", "18", "4"), err: cc("#8a0e0e", "88", "1"),
+		border: cc("#5c4810", "58", "8"), borderActive: cc("#000000", "16", "0"), title: cc("#1f1a0a", "234", "0"),
+		bar: cc("#fff4cc", "230", "7"), barText: cc("#1f1a0a", "234", "0"), barTitle: cc("#7a5c00", "94", "4"),
+		markedText: cc("#ffffff", "231", "15"),
+		header:     cc("#b08410", "136", "11"), headerText: cc("#1f1a0a", "234", "0"), headerName: cc("#000000", "16", "0"),
+		ink: cc("#1f1a0a", "234", "0"), inkText: cc("#ffffff", "231", "15"), statusText: cc("#ffd75e", "221", "11"), statusErr: cc("#ff8a7a", "210", "9"),
+		surface: cc("#fbf3d9", "230", "7"), surfaceText: cc("#1f1a0a", "234", "0"),
+		surfaceTitle: cc("#7a5c00", "94", "4"), surfaceErr: cc("#ca1515", "160", "1"),
+		accent: cc("#1d3f9e", "18", "4"), accentText: cc("#ffffff", "231", "15"),
+		codeTag: cc("#7a5c00", "94", "4"),
+	},
+	// Matte black, greys and one amber for what is marked.
+	"black": {
+		panel: cc("#1c1c1c", "234", "0"), file: cc("#d4d4d4", "188", "7"), dir: cc("#ffffff", "231", "15"),
+		dim: cc("#808080", "244", "8"), marked: cc("#ffbe10", "214", "11"), err: cc("#e48a8a", "174", "9"),
+		border: cc("#666666", "241", "8"), borderActive: cc("#e8e8e8", "255", "15"), title: cc("#d4d4d4", "188", "15"),
+		bar: cc("#bdbdbd", "250", "7"), barText: cc("#121212", "233", "0"), barTitle: cc("#1c1c1c", "234", "0"),
+		markedText: cc("#121212", "233", "0"),
+		header:     cc("#303030", "236", "8"), headerText: cc("#d4d4d4", "188", "15"), headerName: cc("#ffffff", "231", "15"),
+		ink: cc("#0e0e0e", "232", "0"), inkText: cc("#ffffff", "231", "15"), statusText: cc("#ffbe10", "214", "11"), statusErr: cc("#e48a8a", "174", "9"),
+		surface: cc("#d6d6d6", "188", "7"), surfaceText: cc("#121212", "233", "0"),
+		surfaceTitle: cc("#262626", "235", "0"), surfaceErr: cc("#b31212", "124", "1"),
+		accent: cc("#4f5b66", "240", "4"), accentText: cc("#ffffff", "231", "15"),
+		codeTag: cc("#262626", "235", "0"),
+	},
+}
+
+// themeNamed returns the palette called name ("": the default).
+func themeNamed(name string) (palette, error) {
+	if name == "" {
+		name = config.TUIThemes[0]
+	}
+	if p, ok := themes[name]; ok {
+		return p, nil
+	}
+	return palette{}, fmt.Errorf("theme %q: want %s", name, strings.Join(config.TUIThemes, ", "))
+}
 
 type styles struct {
 	// ascii: no colours (NO_COLOR, dumb terminal); see highlight.
 	ascii bool
+	pal   palette
 	// On the panels.
 	panel, file, dir, marked, dim, warn, err lipgloss.Style
 	cursor, cursorMarked                     lipgloss.Style
@@ -57,43 +136,50 @@ type styles struct {
 	dialogBar                                                           lipgloss.Style
 }
 
-func newStyles() *styles {
+// newStyles paints with the theme called theme, the default if there is
+// none such (Run checks the name first).
+func newStyles(theme string) *styles {
+	p, err := themeNamed(theme)
+	if err != nil {
+		p, _ = themeNamed("")
+	}
 	on := func(bg lipgloss.TerminalColor) lipgloss.Style { return lipgloss.NewStyle().Background(bg) }
 	st := &styles{
-		panel:        on(cPanel).Foreground(cFile),
-		file:         on(cPanel).Foreground(cFile),
-		dir:          on(cPanel).Foreground(cDir).Bold(true),
-		marked:       on(cPanel).Foreground(cMarked).Bold(true),
-		dim:          on(cPanel).Foreground(cDim),
-		warn:         on(cPanel).Foreground(cMarked),
-		err:          on(cPanel).Foreground(cErr),
-		cursor:       on(cBar).Foreground(cBarText),
-		cursorMarked: on(cMarked).Foreground(cBarText).Bold(true),
-		rule:         on(cPanel).Foreground(cBorder),
-		title:        on(cPanel).Foreground(cTitle).Bold(true),
-		titleActive:  on(cBar).Foreground(cBarTitle).Bold(true),
+		pal:          p,
+		panel:        on(p.panel).Foreground(p.file),
+		file:         on(p.panel).Foreground(p.file),
+		dir:          on(p.panel).Foreground(p.dir).Bold(true),
+		marked:       on(p.panel).Foreground(p.marked).Bold(true),
+		dim:          on(p.panel).Foreground(p.dim),
+		warn:         on(p.panel).Foreground(p.marked),
+		err:          on(p.panel).Foreground(p.err),
+		cursor:       on(p.bar).Foreground(p.barText),
+		cursorMarked: on(p.marked).Foreground(p.markedText).Bold(true),
+		rule:         on(p.panel).Foreground(p.border),
+		title:        on(p.panel).Foreground(p.title).Bold(true),
+		titleActive:  on(p.bar).Foreground(p.barTitle).Bold(true),
 		border:       lipgloss.NormalBorder(),
 		borderActive: lipgloss.DoubleBorder(),
 
-		borderFg:       cBorder,
-		borderActiveFg: cBorderActive,
+		borderFg:       p.border,
+		borderActiveFg: p.borderActive,
 
-		header:     on(cHeader).Foreground(cHeaderText),
-		headerName: on(cHeader).Foreground(cHeaderName).Bold(true),
-		keyNum:     on(cInk).Foreground(cInkText),
-		keyLabel:   on(cBar).Foreground(cBarText),
-		status:     on(cInk).Foreground(cMarked),
-		statusErr:  on(cInk).Foreground(cErr),
-		spinner:    on(cPanel).Foreground(cMarked).Bold(true),
+		header:     on(p.header).Foreground(p.headerText),
+		headerName: on(p.header).Foreground(p.headerName).Bold(true),
+		keyNum:     on(p.ink).Foreground(p.inkText),
+		keyLabel:   on(p.bar).Foreground(p.barText),
+		status:     on(p.ink).Foreground(p.statusText),
+		statusErr:  on(p.ink).Foreground(p.statusErr),
+		spinner:    on(p.panel).Foreground(p.marked).Bold(true),
 
-		dialog: on(cSurface).Foreground(cSurfaceText).Padding(0, 1).
-			Border(lipgloss.DoubleBorder()).BorderForeground(cSurfaceTitle).BorderBackground(cSurface),
-		dialogTitle: on(cSurface).Foreground(cSurfaceTitle).Bold(true),
-		dialogErr:   on(cSurface).Foreground(cSurfaceErr).Bold(true),
-		inputLabel:  on(cSurface).Foreground(cSurfaceText),
-		dialogBar:   on(cSurface).Foreground(cSurfaceTitle),
-		inputFocus:  on(cAccent).Foreground(cAccentText).Bold(true),
-		inputCursor: on(cAccent).Foreground(cAccentText),
+		dialog: on(p.surface).Foreground(p.surfaceText).Padding(0, 1).
+			Border(lipgloss.DoubleBorder()).BorderForeground(p.surfaceTitle).BorderBackground(p.surface),
+		dialogTitle: on(p.surface).Foreground(p.surfaceTitle).Bold(true),
+		dialogErr:   on(p.surface).Foreground(p.surfaceErr).Bold(true),
+		inputLabel:  on(p.surface).Foreground(p.surfaceText),
+		dialogBar:   on(p.surface).Foreground(p.surfaceTitle),
+		inputFocus:  on(p.accent).Foreground(p.accentText).Bold(true),
+		inputCursor: on(p.accent).Foreground(p.accentText),
 	}
 	st.ascii = lipgloss.ColorProfile() == termenv.Ascii
 	return st
@@ -118,9 +204,28 @@ func setColors(mode string) error {
 	case "none":
 		lipgloss.SetColorProfile(termenv.Ascii)
 	default:
-		return fmt.Errorf("colors %q: want auto, true, 256, 16 or none", mode)
+		return checkColors(mode)
 	}
 	return nil
+}
+
+// checkColors refuses a colour depth setColors does not know.
+func checkColors(mode string) error {
+	switch mode {
+	case "", "auto", "true", "truecolor", "24bit", "256", "16", "none":
+		return nil
+	}
+	return fmt.Errorf("colors %q: want auto, true, 256, 16 or none", mode)
+}
+
+// CheckOptions refuses colours or a theme the TUI does not know, before a
+// node starts (and joins a share) for it.
+func CheckOptions(o Options) error {
+	if err := checkColors(o.Colors); err != nil {
+		return err
+	}
+	_, err := themeNamed(o.Theme)
+	return err
 }
 
 func likely256(term string) bool {
@@ -150,7 +255,7 @@ func (st *styles) frame(active bool, title, content string, inner int) string {
 	if active {
 		b, fg, ts = st.borderActive, st.borderActiveFg, st.titleActive
 	}
-	line := lipgloss.NewStyle().Foreground(fg).Background(cPanel)
+	line := lipgloss.NewStyle().Foreground(fg).Background(st.pal.panel)
 	t := " " + fitLeft(title, max(1, inner-4)) + " "
 	if active {
 		t = st.highlight(ts, t)
@@ -160,7 +265,7 @@ func (st *styles) frame(active bool, title, content string, inner int) string {
 	fill := max(0, inner-1-lipgloss.Width(t))
 	top := line.Render(b.TopLeft+b.Top) + t + line.Render(strings.Repeat(b.Top, fill)+b.TopRight)
 	body := st.panel.Border(b, false, true, true, true).
-		BorderForeground(fg).BorderBackground(cPanel).Width(inner).Render(content)
+		BorderForeground(fg).BorderBackground(st.pal.panel).Width(inner).Render(content)
 	return top + "\n" + body
 }
 

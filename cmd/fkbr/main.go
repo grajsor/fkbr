@@ -149,6 +149,7 @@ func run() error {
 	stagingQuota := flag.String("staging-quota", "", "most bytes staged for all jobs (default 4G; over ssh a quarter of the RAM, at most 512M; a home node passes its own to its ssh hosts)")
 	verbose := flag.Bool("v", false, "debug logging")
 	colors := flag.String("colors", "auto", "TUI colours: auto, true, 256, 16 or none")
+	theme := flag.String("theme", "", "TUI theme: "+strings.Join(config.TUIThemes, ", ")+" (default green)")
 	mouse := flag.Bool("mouse", true, "TUI: clicks, right-click marks, wheel (-mouse=false leaves the mouse to the terminal)")
 	flag.Usage = usage
 	flag.Parse()
@@ -293,14 +294,20 @@ func run() error {
 	case "check":
 		return runCheck(ctx, cfg)
 	case "tui":
-		opts := tui.Options{Colors: *colors, Version: version, NoMouse: !*mouse, StartInDirs: true,
+		opts := tui.Options{Colors: *colors, Theme: *theme, Version: version, NoMouse: !*mouse, StartInDirs: true,
 			ConfigPath: cfg.ConfigPath, Overridden: overridden(shareArg != "" || *share != ""),
 			IfExists: cfg.TUI.IfExists, Compress: cfg.TUI.Compress, Exclude: cfg.TUI.Exclude}
 		if opts.Overridden["tui.colors"] == "" && cfg.TUI.Colors != "" {
 			opts.Colors = cfg.TUI.Colors
 		}
+		if opts.Overridden["tui.theme"] == "" && cfg.TUI.Theme != "" {
+			opts.Theme = cfg.TUI.Theme
+		}
 		if opts.Overridden["tui.mouse"] == "" && cfg.TUI.Mouse != nil {
 			opts.NoMouse = !*cfg.TUI.Mouse
+		}
+		if err := tui.CheckOptions(opts); err != nil {
+			return err
 		}
 		return runTUI(ctx, cfg, *forceLocal, opts, level)
 	}
@@ -358,7 +365,7 @@ func overridden(shareGiven bool) map[string]string {
 	keys := map[string]string{
 		"node": "node_id", "ssh-bin": "ssh_bin", "local-root": "local_root", "roles": "roles",
 		"keep": "keep_done", "chunk-size": "transfer.chunk_size", "job-quota": "transfer.job_quota",
-		"staging-quota": "transfer.staging_quota", "colors": "tui.colors", "mouse": "tui.mouse",
+		"staging-quota": "transfer.staging_quota", "colors": "tui.colors", "theme": "tui.theme", "mouse": "tui.mouse",
 	}
 	out := map[string]string{}
 	flag.Visit(func(f *flag.Flag) {

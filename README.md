@@ -103,9 +103,9 @@ in place with nano's keys (save, cut and paste lines, undo, find).
 
 ![The editor on the same file, a line changed](docs/screenshots/fkbr-edit.png)
 
-**Settings (F11).** Colours, mouse, what the copy dialogs start with,
-this node's name, share and limits, kept in `~/.fkbr.conf`; only what
-you change is written.
+**Settings (F11).** Colours and five themes (green, blue, red, yellow,
+black), mouse, what the copy dialogs start with, this node's name, share
+and limits, kept in `~/.fkbr.conf`; only what you change is written.
 
 ![The settings dialog](docs/screenshots/fkbr-settings.png)
 

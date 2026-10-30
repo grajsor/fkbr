@@ -297,7 +297,7 @@ Found by a code review of the whole ssh branch (2026-10-23):
 | A pane listing a node's roots (`files`, `local`) put its cursor back on the top row at every node refresh, a few seconds apart (found by the owner, 2026-10-25) | The cursor stays on its row | `TestRootsRefreshKeepsCursor` |
 | Backspace at the top of this host's shared folder showed a list of two roots (asked by the owner: one tree) | It goes on up into root `local` at the folder above, and from `/` to the node list; a shared folder outside `local` keeps the roots list | `TestUpFromSharedIntoLocal` |
 | Editing a file (F3, Ctrl+E): nano's keys, cut and paste of whole lines, undo and redo, find, a click places the cursor; finding in the viewer and the help | Saves only over the file as it was read; undo always gets back to the file as opened; cut lines go back whole above the cursor's line (they split a line when pasted at the cursor, found by the owner) | `TestEditorSaves`, `TestEditorCutPaste`, `TestEditorPasteWholeLines`, `TestEditorUndo`, `TestEditorUndoToStart`, `TestEditorFind`, `TestEditorCtrlX`, `TestEditorClick`, `TestViewerFind`, `TestThemePaintsEveryCell` |
-| Settings (F11, asked by the owner): the config file kept by the TUI | Only the keys changed are written, comments, the ssh list and the mode kept; a default removes its key; a value or a file the node could not start with is refused and named; Esc with changes asks; the TUI's own apply at once, unless a flag set them | `TestSaveSettings`, `TestSaveSettingsRefused`, `TestSettingsDialog`, `TestSettingsDialogAsks`, `TestSettingsClick`, `TestThemePaintsEveryCell` |
+| Settings (F11, asked by the owner): the config file kept by the TUI | Only the keys changed are written, comments, the ssh list and the mode kept; a default removes its key; a value or a file the node could not start with is refused and named; Esc with changes asks, answered with Ctrl keys only; the TUI's own apply at once, unless a flag set them; five themes, each painting every cell at every colour depth | `TestSaveSettings`, `TestSaveSettingsRefused`, `TestSettingsDialog`, `TestSettingsDialogAsks`, `TestSettingsClick`, `TestSettingsTheme`, `TestSettingsNumbers`, `TestThemesComplete`, `TestThemePaintsEveryCell` |
 
 ## 13. Cloud test run (2026-10-24)
 
@@ -379,6 +379,17 @@ counted by listing every chunk, slow only with 1 MiB chunks) is left.
 | Every start opened up (0777/0644) everything the user owned in the share directory, whatever it was; `/` or the home directory was taken as a share (`cd /tmp && fkbr ~`) | Only fkbr's own entries are opened up, never through a link; `/`, the home directory, the binary's directory and a directory with other things in it that is no share yet are refused, naming the reason. Lab: both refused, nothing changed | `TestShareDirRefused`, `TestOpenUpOnlyLayout` |
 | A chunk from the share had no budget: a small zstd frame could unpack to terabytes, a chunk hold millions of empty entries, a file claim 4 EiB; the meta's list of files to drop applied before the checksum | At most 2 GiB stored or unpacked, 16 million entries (the writer starts a new chunk before), files 256 TiB, `chunk_size` at most 1 GiB; a meta claiming more fails at once; the drop list counts after the checksum | `TestChunkBudgets`, `TestChunkMetaOverBudget` |
 | The receive journal of files to leave out kept one raw name a line: a name with a newline came back as two names after a restart | JSON lines (an older journal still reads) | `TestBadJournalNames` |
+
+## 17. Once-over (2026-10-30)
+
+A read of the code with gopls's checks, when the themes were added.
+
+| Found | Now | Test |
+|---|---|---|
+| The home node read an ssh session's stderr by lines of at most 1 MiB and stopped at a longer one; nothing read the pipe after that, so the remote node blocked on its next log line once it filled | Lines longer than 64 KiB are logged cut short and the rest read to the end | `TestStderrLongLine` |
+| The settings dialog's "save the changes?" took `y` and `n`: a letter typed on after Esc answered it (the editor's question had been changed for this) | Ctrl+S saves, Ctrl+X throws the changes away, Esc goes back; letters do nothing | `TestSettingsDialogAsks` |
+| A bad `-theme` or `-colors` was refused only after the node had started (and joined the share) | Refused before anything starts | `TestSetColors` |
+| Settings: a number out of range said only "a number from 1", and `0` for the sync deletion limit "a number from -1" | The range is named; where `-1` is taken, so is that | `TestSettingsNumbers` |
 
 ## How to run the lab tests
 

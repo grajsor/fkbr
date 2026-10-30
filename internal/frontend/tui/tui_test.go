@@ -1299,7 +1299,31 @@ func TestSettingsDialog(t *testing.T) {
 	}
 }
 
-// Esc with changes asks; n leaves the file as it was. A file with a
+// The theme row repaints at once and is kept; a -theme flag wins this run.
+func TestSettingsTheme(t *testing.T) {
+	h := newHarness(t)
+	p := filepath.Join(t.TempDir(), "fkbr.conf")
+	h.m.prefs = prefs{configPath: p, mouse: true}
+	h.key("f11")
+	settingsAt(t, h.m.dlg.(*settingsDialog), "tui.theme")
+	h.key("right", "ctrl+s") // green -> blue
+	if h.m.st.pal != themes["blue"] {
+		t.Error("the theme did not change at once")
+	}
+	if b, _ := os.ReadFile(p); !strings.Contains(string(b), "theme: blue") {
+		t.Errorf("file:\n%s", b)
+	}
+	h.m.prefs.overridden = map[string]string{"tui.theme": "-theme"}
+	h.key("f11")
+	settingsAt(t, h.m.dlg.(*settingsDialog), "tui.theme")
+	h.key("right", "ctrl+s") // blue -> red, but the flag wins
+	if h.m.st.pal != themes["blue"] {
+		t.Error("a saved theme beat the -theme flag")
+	}
+}
+
+// Esc with changes asks, answered with Ctrl keys only (a letter typed on
+// does nothing); ^X leaves the file as it was, ^S saves. A file with a
 // mistake is named, and nothing is written.
 func TestSettingsDialogAsks(t *testing.T) {
 	h := newHarness(t)
@@ -1309,16 +1333,31 @@ func TestSettingsDialogAsks(t *testing.T) {
 	d := h.m.dlg.(*settingsDialog)
 	settingsAt(t, d, "tui.mouse")
 	h.key("enter", "esc")
-	if !d.asking || !strings.Contains(h.m.View(), "Save the changes?") {
+	if !d.asking || !strings.Contains(h.m.View(), "Not saved.") {
 		t.Fatal("Esc with a change did not ask")
 	}
-	h.key("n")
+	h.key("y", "n")
+	if h.m.dlg != d || !d.asking {
+		t.Fatal("a plain letter answered the question")
+	}
+	h.key("ctrl+x")
 	if h.m.dlg != nil {
-		t.Fatal("n did not close")
+		t.Fatal("^X did not close")
 	}
 	if _, err := os.Stat(p); !os.IsNotExist(err) {
 		t.Fatal("a file was made without saving")
 	}
+	h.key("f11")
+	d = h.m.dlg.(*settingsDialog)
+	settingsAt(t, d, "tui.mouse")
+	h.key("enter", "esc", "ctrl+s")
+	if h.m.dlg != nil {
+		t.Fatalf("^S did not save and close: %q", d.err)
+	}
+	if b, _ := os.ReadFile(p); !strings.Contains(string(b), "mouse: false") {
+		t.Fatalf("file:\n%s", b)
+	}
+	os.Remove(p)
 	// Saving the share with ssh hosts in the file is refused.
 	os.WriteFile(p, []byte("ssh: [web01]\n"), 0o600)
 	share := t.TempDir()
@@ -1608,5 +1647,27 @@ func TestHintKey(t *testing.T) {
 	var k tea.KeyMsg
 	if hintKey("progress · counting the total", 3, &k) {
 		t.Errorf("a part naming no key pressed %v", k)
+	}
+}
+
+// A number out of range names the range; where 0 is not taken but -1 is,
+// it says so.
+func TestSettingsNumbers(t *testing.T) {
+	for _, tc := range []struct {
+		lo, hi int
+		in     string
+		ok     bool
+		want   string
+	}{
+		{1, 64, "4", true, ""},
+		{1, 64, "100", false, "a number from 1 to 64"},
+		{1, 64, "0", false, "a number from 1 to 64"},
+		{-1, 1 << 30, "-1", true, ""},
+		{-1, 1 << 30, "0", false, "-1, or a number from 1 to"},
+	} {
+		_, err := intValue(tc.lo, tc.hi)(tc.in)
+		if (err == nil) != tc.ok || (err != nil && !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%d..%d %q: %v", tc.lo, tc.hi, tc.in, err)
+		}
 	}
 }

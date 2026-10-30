@@ -155,7 +155,7 @@ func TestHighlightWrapsAndPaints(t *testing.T) {
 	prev := lipgloss.ColorProfile()
 	lipgloss.SetColorProfile(termenv.TrueColor)
 	defer lipgloss.SetColorProfile(prev)
-	st := newStyles()
+	st := newStyles("")
 	text := `<config>` + "\n\t" + `<name attr="` + strings.Repeat("v", 50) + `">välkommen</name>` + "\n</config>"
 	out := highlight(st, "xml", text, 20)
 	var plain []string

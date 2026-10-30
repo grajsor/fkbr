@@ -105,6 +105,8 @@ type Config struct {
 type TUI struct {
 	// Colors: auto (default), true, 256, 16 or none (-colors).
 	Colors string `yaml:"colors"`
+	// Theme: green (default), blue, red, yellow or black (-theme).
+	Theme string `yaml:"theme"`
 	// Mouse: on unless false (-mouse).
 	Mouse *bool `yaml:"mouse"`
 	// IfExists is what F5/F6 start with for a file already at the
@@ -117,9 +119,11 @@ type TUI struct {
 	Exclude string `yaml:"exclude"`
 }
 
-// TUIColors and TUIIfExists are what tui.colors and tui.if_exists take.
+// TUIColors, TUIThemes and TUIIfExists are what tui.colors, tui.theme and
+// tui.if_exists take; the first is the default.
 var (
 	TUIColors   = []string{"auto", "true", "256", "16", "none"}
+	TUIThemes   = []string{"green", "blue", "red", "yellow", "black"}
 	TUIIfExists = []string{"skip", "overwrite-if-older", "overwrite"}
 )
 
@@ -553,6 +557,9 @@ func (c *Config) Validate() error {
 	}
 	if v := c.TUI.Colors; v != "" && !slices.Contains(TUIColors, v) {
 		errs = append(errs, fmt.Errorf("tui.colors %q: want one of %s", v, strings.Join(TUIColors, ", ")))
+	}
+	if v := c.TUI.Theme; v != "" && !slices.Contains(TUIThemes, v) {
+		errs = append(errs, fmt.Errorf("tui.theme %q: want one of %s", v, strings.Join(TUIThemes, ", ")))
 	}
 	if v := c.TUI.IfExists; v != "" && !slices.Contains(TUIIfExists, v) {
 		errs = append(errs, fmt.Errorf("tui.if_exists %q: want one of %s", v, strings.Join(TUIIfExists, ", ")))

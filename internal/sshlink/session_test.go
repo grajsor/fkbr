@@ -2,6 +2,7 @@ package sshlink
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -171,5 +172,33 @@ func TestSessionEndNotALogLine(t *testing.T) {
 	err := h.session(context.Background(), Host{Dest: "h"}, &o)
 	if err == nil || strings.Contains(err.Error(), "chunk applied") {
 		t.Errorf("session end: %v", err)
+	}
+}
+
+// A stderr line too long to log is cut short and the rest still read:
+// a reader that stopped there left ssh's stderr full and the remote node
+// blocked on its next log line.
+func TestStderrLongLine(t *testing.T) {
+	r, w := io.Pipe()
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := io.WriteString(w, "first\n"+strings.Repeat("x", 3<<20)+"\nlast\r\ntail")
+		w.Close()
+		wrote <- err
+	}()
+	var got []string
+	eachLine(r, func(l string) { got = append(got, l) })
+	if err := <-wrote; err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 || got[0] != "first" || got[2] != "last" || got[3] != "tail" ||
+		len(got[1]) > stderrLine+8 || !strings.HasSuffix(got[1], " …") {
+		short := got
+		for i := range short {
+			if len(short[i]) > 20 {
+				short[i] = short[i][:20] + "..."
+			}
+		}
+		t.Errorf("lines: %q", short)
 	}
 }

@@ -169,7 +169,7 @@ cleanly, like quitting.
 **Config file (optional).** The same settings can live in a YAML file:
 `-config FILE`, else `$FKBR_CONFIG`, else `fkbr.conf` next to the binary
 if it is there, else `~/.fkbr.conf` if that is there. The TUI's settings
-dialog (F11) changes the common ones there: colours, mouse, what the copy
+dialog (F11) changes the common ones there: colours, theme, mouse, what the copy
 dialogs start with (`tui:`), this node's name, share, roles, who may
 write to it, root `local`, and the transfer limits. See
 `examples/fkbr.conf` for every option, including tuning. Arguments and
@@ -390,6 +390,10 @@ They need 256 colours or more; xterm-like terminals that report only 16
 With only 16 colours the panels turn black with green text. `-colors
 true|256|16|none` overrides the detection, and `NO_COLOR=1` turns colours
 off (the cursor then shows in reverse video).
+
+`-theme` picks the colours: `green` (the default), `blue`, `red`,
+`yellow` (gold panels with dark text) or `black` (matte). F11 sets it
+too (`tui: theme:`) and the screen changes at once.
 
 Every 30 seconds the name in the top-left corner slides out, the version
 (`v1.0 f0c0e0b`) scrolls through, and the name slides back in; a small

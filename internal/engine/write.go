@@ -85,7 +85,7 @@ func (e *Engine) writeLocal(req api.WriteRequest) (*api.WriteResult, error) {
 			}
 			return res, err
 		case errors.Is(err, fs.ErrPermission):
-			why = "no room for a new file in its folder"
+			why = "no new file may be made in its folder"
 		case errors.Is(err, syscall.ENAMETOOLONG):
 			why = "its name is too long for a new file beside it"
 		default:

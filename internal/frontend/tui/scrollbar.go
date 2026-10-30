@@ -42,7 +42,7 @@ func (st *styles) withScrollbar(box string, active bool, from, start, size int) 
 	if active {
 		b, fg = st.borderActive, st.borderActiveFg
 	}
-	thumb := lipgloss.NewStyle().Foreground(fg).Background(cPanel).Render(thumbChar)
+	thumb := lipgloss.NewStyle().Foreground(fg).Background(st.pal.panel).Render(thumbChar)
 	lines := strings.Split(box, "\n")
 	for y := from + start; y < from+start+size && y < len(lines); y++ {
 		if i := strings.LastIndex(lines[y], b.Right); i >= 0 {

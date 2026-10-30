@@ -29,7 +29,7 @@ Start it on one machine with the others listed: `./fkbr ssh:web01:/srv/www,db01:
 `./fkbr` alone opens the TUI here: this folder on the left, `/` on the right. Nobody else sees `/`.
 
 **How do I change its settings?**
-Press F11 in it: colours, mouse, what copies start with, the machine's name and share, limits. They are kept in `~/.fkbr.conf`; a `fkbr.conf` beside fkbr, if you make one, is used instead.
+Press F11 in it: colours (green, blue, red, yellow or black), mouse, what copies start with, the machine's name and share, limits. They are kept in `~/.fkbr.conf`; a `fkbr.conf` beside fkbr, if you make one, is used instead.
 
 ## Copying and syncing
 
