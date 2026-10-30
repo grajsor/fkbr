@@ -1332,7 +1332,7 @@ func (m *model) View() string {
 	out = append(out, m.keyBar())
 	// Text from elsewhere is cleaned where it is drawn; this is the net
 	// for anything missed: only colour codes reach the terminal.
-	return safetext.Screen(strings.Join(out, "\n"))
+	return shortSGR(safetext.Screen(strings.Join(out, "\n")))
 }
 
 func (m *model) header() string {

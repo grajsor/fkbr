@@ -390,6 +390,7 @@ A read of the code with gopls's checks, when the themes were added.
 | The settings dialog's "save the changes?" took `y` and `n`: a letter typed on after Esc answered it (the editor's question had been changed for this) | Ctrl+S saves, Ctrl+X throws the changes away, Esc goes back; letters do nothing | `TestSettingsDialogAsks` |
 | A bad `-theme` or `-colors` was refused only after the node had started (and joined the share) | Refused before anything starts | `TestSetColors` |
 | The settings dialog said its appearance rows applied at once, but colours, theme and mouse changed only on save | They show as they are picked, Ctrl+X on leaving puts the old look back; the copy rows say "applies when saved" | `TestSettingsTheme` |
+| In 24-bit colour a terminal showed the blue theme's folders on green and the yellow theme's on red: bold plus a 24-bit foreground and background is one SGR of 11 parameters, and it keeps 10 (the 11th overwrote the 10th, so the background lost its blue). Every theme was off; in green, red and black it barely showed | No SGR sequence the TUI writes has more than 5 parameters; a colour stays whole in one | `TestShortSGR`, `TestThemePaintsEveryCell` |
 | Settings: a number out of range said only "a number from 1", and `0` for the sync deletion limit "a number from -1" | The range is named; where `-1` is taken, so is that | `TestSettingsNumbers` |
 
 ## How to run the lab tests

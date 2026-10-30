@@ -228,6 +228,66 @@ func CheckOptions(o Options) error {
 	return err
 }
 
+// sgrParams is the most parameters one SGR sequence gets. Some terminals
+// keep 10 and let an 11th overwrite the 10th: bold with a 24-bit
+// foreground and background is 11, and the background lost its blue
+// (the blue theme's folders on green, the yellow theme's on red).
+const sgrParams = 5
+
+// shortSGR splits each SGR sequence in s longer than sgrParams into
+// several, a colour's 38;2;r;g;b or 48;5;n kept in one. Applied in order
+// they set the same attributes.
+func shortSGR(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + len(s)/8)
+	for {
+		i := strings.Index(s, "\x1b[")
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		b.WriteString(s[:i])
+		s = s[i:]
+		j := 2
+		for j < len(s) && (s[j] >= '0' && s[j] <= '9' || s[j] == ';') {
+			j++
+		}
+		if j == len(s) || s[j] != 'm' || strings.Count(s[2:j], ";") < sgrParams {
+			n := min(j+1, len(s))
+			b.WriteString(s[:n])
+			s = s[n:]
+			continue
+		}
+		ps := strings.Split(s[2:j], ";")
+		var group []string
+		flush := func() {
+			if len(group) > 0 {
+				b.WriteString("\x1b[" + strings.Join(group, ";") + "m")
+				group = group[:0]
+			}
+		}
+		for k := 0; k < len(ps); {
+			n := 1
+			if (ps[k] == "38" || ps[k] == "48" || ps[k] == "58") && k+1 < len(ps) {
+				switch ps[k+1] {
+				case "2":
+					n = 5
+				case "5":
+					n = 3
+				}
+			}
+			n = min(n, len(ps)-k)
+			if len(group)+n > sgrParams {
+				flush()
+			}
+			group = append(group, ps[k:k+n]...)
+			k += n
+		}
+		flush()
+		s = s[j+1:]
+	}
+}
+
 func likely256(term string) bool {
 	for _, p := range []string{"xterm", "screen", "tmux", "rxvt", "putty", "konsole", "gnome", "alacritty", "kitty", "foot", "wezterm"} {
 		if strings.HasPrefix(term, p) {

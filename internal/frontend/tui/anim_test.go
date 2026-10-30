@@ -201,7 +201,7 @@ func TestSpinnerInCorner(t *testing.T) {
 	if row != len(lines)-3 { // jobs panel bottom, above status and key bar
 		t.Fatalf("with jobs: spinner on row %d, want %d", row, len(lines)-3)
 	}
-	if !strings.Contains(h.m.View(), h.m.st.spinner.Render("<")) {
+	if !strings.Contains(h.m.View(), shortSGR(h.m.st.spinner.Render("<"))) {
 		t.Error("spinner not in its yellow style")
 	}
 	h.m.spin = 0

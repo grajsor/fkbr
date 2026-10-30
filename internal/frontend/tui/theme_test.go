@@ -2,6 +2,7 @@ package tui
 
 import (
 	"reflect"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -69,6 +70,33 @@ func sgrBackground(params string, bg bool) bool {
 		}
 	}
 	return bg
+}
+
+// longestSGR is the most parameters of an SGR sequence in line.
+func longestSGR(line string) int {
+	most := 0
+	for _, m := range regexp.MustCompile(`\x1b\[([0-9;]*)m`).FindAllStringSubmatch(line, -1) {
+		most = max(most, strings.Count(m[1], ";")+1)
+	}
+	return most
+}
+
+// A terminal that keeps 10 SGR parameters showed the blue theme's folders
+// (bold, 24-bit foreground and background: 11) on green.
+func TestShortSGR(t *testing.T) {
+	for in, want := range map[string]string{
+		"\x1b[1;38;2;255;255;255;48;2;15;42;92mboot/\x1b[0m": "\x1b[1m\x1b[38;2;255;255;255m\x1b[48;2;15;42;92mboot/\x1b[0m",
+		"\x1b[38;2;1;2;3;48;2;4;5;6mx":                       "\x1b[38;2;1;2;3m\x1b[48;2;4;5;6mx",
+		"\x1b[1;4;38;5;22;48;5;17mx":                         "\x1b[1;4;38;5;22m\x1b[48;5;17mx",
+		"a\x1b[1;38;5;22mb\x1b[0mc":                          "a\x1b[1;38;5;22mb\x1b[0mc", // short: as it is
+		"\x1b[?25h\x1b[2K\x1b[1;2;3;4;5;6;7":                 "\x1b[?25h\x1b[2K\x1b[1;2;3;4;5;6;7",
+		"\x1b[1;2;3;4;5;6;7m":                                "\x1b[1;2;3;4;5m\x1b[6;7m",
+		"plain":                                              "plain",
+	} {
+		if got := shortSGR(in); got != want {
+			t.Errorf("%q:\n got %q\nwant %q", in, got, want)
+		}
+	}
 }
 
 func TestUnpaintedDetector(t *testing.T) {
@@ -152,6 +180,9 @@ func paintsEveryCell(t *testing.T, theme string, p termenv.Profile) {
 			}
 			if c := unpainted(l); c >= 0 {
 				t.Errorf("%s: line %d, column %d has no background:\n%q", name, i, c, l)
+			}
+			if p := longestSGR(l); p > sgrParams {
+				t.Errorf("%s: line %d has an SGR of %d parameters:\n%q", name, i, p, l)
 			}
 		}
 	}

@@ -312,6 +312,10 @@ theme. `TestThemePaintsEveryCell` fails on any cell without a
 background, so every string drawn must carry
 the panel or dialog background (pad with a styled fill, not lipgloss's
 own padding). Without colours, `styles.highlight` writes reverse video.
+`View()` ends in `shortSGR`: no SGR sequence longer than 5 parameters
+(a terminal that keeps 10 lost the blue of bold folders' 24-bit
+background: blue panels drew them on green); `TestThemePaintsEveryCell`
+checks it.
 
 - Names: `name/` dirs, `name@` symlinks, `../` up row (`pane.formatRow`).
 - F11 (or `o`): settings (`settings.go`), rows of the config file's
