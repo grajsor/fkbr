@@ -409,6 +409,14 @@ pty, answer `ESC]11;?` and `ESC[6n` or nothing draws for ~5 s.
   (`own/`) is in the state dir in `/tmp`, and nowhere else is safe.
 - bubbletea v1's init queries the terminal (OSC 11 + DSR): 5 s where
   nothing answers.
+- Two ssh swarms can't link the same host as the same node name at once:
+  the link's state dir is `/tmp/fkbr-<uid>-<node>-link` in both, so the
+  second link's sessions end with "a daemon is already listening" and are
+  retried for good. The home's `nodes` lists no row for a link that never
+  came up; the reason is only in its log.
+- An ssh home node keeps its records in its state dir in `/tmp`: where
+  `/tmp` is a tmpfs a reboot loses its jobs; the targets' staging of them
+  is swept once 10 min old.
 - rsync gaps: metadata-only changes re-send whole files (not
   planned), hard links, ACLs/xattrs, one-file-system, bandwidth limit,
   --backup.
