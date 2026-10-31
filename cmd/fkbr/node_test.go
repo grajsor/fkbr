@@ -141,3 +141,34 @@ func TestDialNodeChecksShareAndRoots(t *testing.T) {
 		t.Errorf("no node: %v %v", c, err)
 	}
 }
+
+// A CLI that made the state dir for a moment removes it while it is empty;
+// landing between the node making it and listening in it, the node used
+// to exit with "bind: no such file or directory" (lab runs 2026-10-30/31).
+func TestListenAfterStateDirRemoved(t *testing.T) {
+	base, err := os.MkdirTemp("/tmp", "fkls") // socket paths are short
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(base)
+	st := filepath.Join(base, "st")
+	cfg := &config.Config{StateDir: st, Socket: filepath.Join(st, "fkbr.sock"), SocketMode: 0o600}
+	removed := 0
+	afterStateDir = func() {
+		if removed < 2 {
+			removed++
+			if err := os.Remove(st); err != nil {
+				t.Errorf("remove: %v", err)
+			}
+		}
+	}
+	defer func() { afterStateDir = func() {} }()
+	l, err := listenPrivate(cfg)
+	if err != nil {
+		t.Fatalf("the node gave up when its empty state dir was removed: %v", err)
+	}
+	l.Close()
+	if removed != 2 {
+		t.Errorf("removed %d times, want 2", removed)
+	}
+}

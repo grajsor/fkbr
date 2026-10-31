@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -537,17 +538,7 @@ func startNodeWith(ctx context.Context, cfg *config.Config, log *slog.Logger, le
 	if leave {
 		c.LeaveOnStop()
 	}
-	if err := localfs.PrivateDir(cfg.StateDir); err != nil {
-		c.Close()
-		return nil, err
-	}
-	// The CLI refuses to dial a socket in a folder others control: a node
-	// listening there could be reached by nothing (cloud run 2026-10-24).
-	if err := localfs.CheckSocketDir(cfg.Socket); errors.Is(err, localfs.ErrNotPrivate) {
-		c.Close()
-		return nil, err
-	}
-	l, err := remote.Listen(cfg.Socket, os.FileMode(cfg.SocketMode))
+	l, err := listenPrivate(cfg)
 	if err != nil {
 		c.Close()
 		return nil, err
@@ -586,6 +577,35 @@ func startNodeWith(ctx context.Context, cfg *config.Config, log *slog.Logger, le
 			n.err = ctx.Err()
 		}
 		return nil, n.err
+	}
+}
+
+// afterStateDir runs between making the state dir and listening in it
+// (tests remove the dir there, as a CLI can).
+var afterStateDir = func() {}
+
+// listenPrivate makes the state dir and listens on the socket in it. A
+// CLI that made the same dir for a moment removes it again while it is
+// empty (it leaves nothing behind); landing between the two, that made
+// the bind fail and the node exit ("bind: no such file or directory",
+// lab runs 2026-10-30/31, a daemon started while a CLI polled for it).
+// Make the dir again then; once the socket is in it, it stays.
+func listenPrivate(cfg *config.Config) (net.Listener, error) {
+	for try := 1; ; try++ {
+		if err := localfs.PrivateDir(cfg.StateDir); err != nil {
+			return nil, err
+		}
+		// The CLI refuses to dial a socket in a folder others control: a
+		// node listening there could be reached by nothing (cloud run
+		// 2026-10-24).
+		if err := localfs.CheckSocketDir(cfg.Socket); errors.Is(err, localfs.ErrNotPrivate) {
+			return nil, err
+		}
+		afterStateDir()
+		l, err := remote.Listen(cfg.Socket, os.FileMode(cfg.SocketMode))
+		if err == nil || !errors.Is(err, fs.ErrNotExist) || try == 5 {
+			return l, err
+		}
 	}
 }
 

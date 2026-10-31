@@ -394,6 +394,7 @@ A read of the code with gopls's checks, when the themes were added.
 | Colours `auto` in F11 kept the depth set last: after `none` the screen stayed without colour, after `true` it stayed 24-bit | The terminal's depth is read once at start, before any choice; `auto` goes back to it | `TestSetColors` |
 | Over ssh, a handler that failed while the call was still being sent (or before its answer was read) reached the caller as a bare reset: a relayed link down failed the job instead of being ridden out (6 h run, under load) | `open` and `answer` read a coded reset back as `Read` does: a link down stays EIO | `TestFailureWhileSendingKeepsItsCode`, `TestFailureAfterAnswerKeepsItsCode` |
 | FuzzExclude: the test took `*/ /` for the name `*` (it trimmed spaces and slashes at once); it is the path `*/ ` | The test reads a pattern as `New` does; the input kept as a regression case | `FuzzExclude` |
+| A node starting while a CLI polled it (same state dir) exited with "bind: no such file or directory": the CLI removes a state dir it made once it is empty, and that landed between the node making the dir and listening in it (lab runs, twice under load) | The node makes the dir again and listens; once the socket is in it, the dir stays | `TestListenAfterStateDirRemoved` |
 | Settings: a number out of range said only "a number from 1", and `0` for the sync deletion limit "a number from -1" | The range is named; where `-1` is taken, so is that | `TestSettingsNumbers` |
 
 ## How to run the lab tests
