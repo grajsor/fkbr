@@ -211,11 +211,15 @@ func open(ctx context.Context, s *frame.Session, method string, args any, body i
 	return c, nil
 }
 
+// ctxErr is an error of open or answer as the caller sees it. A coded
+// reset is read back as Read does: one that came while the request or its
+// body was still going out (a handler that failed at once, under load)
+// was a bare reset, and failed the job where a link down rides it out.
 func (c *call) ctxErr(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	return linkErr(err)
+	return resetErr(linkErr(err))
 }
 
 // answer reads the answer header into out; the raw body follows in c.

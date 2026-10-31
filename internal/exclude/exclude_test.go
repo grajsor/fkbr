@@ -65,8 +65,11 @@ func FuzzExclude(f *testing.F) {
 			t.Fatalf("%q excludes the top", pat)
 		}
 		// A plain name pattern matches by the last name only: the same
-		// name under another folder gives the same answer.
-		if !strings.Contains(strings.Trim(pat, " /"), "/") && !strings.HasPrefix(strings.TrimSpace(pat), "/") && rel != "" && !strings.Contains(rel, "\\") {
+		// name under another folder gives the same answer. Plain as New
+		// reads it: "*/ /" is the path "*/ " (a name of one space one
+		// folder down), not the name "*".
+		core := strings.TrimRight(strings.TrimSpace(pat), "/")
+		if !strings.Contains(core, "/") && !strings.HasPrefix(strings.TrimSpace(pat), "/") && rel != "" && !strings.Contains(rel, "\\") {
 			name := path.Base(rel)
 			if s.Match("other/"+name, dir) != got && name != "." && name != "/" && !strings.HasPrefix(rel, "/") && path.Clean(rel) == rel {
 				t.Fatalf("%q: %q=%v but other/%s=%v", pat, rel, got, name, !got)
