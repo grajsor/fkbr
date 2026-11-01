@@ -75,15 +75,24 @@ func Run(ctx context.Context, c api.Client, opts Options) error {
 	if opts.Notice != "" {
 		m.setStatus(opts.Notice, false)
 	}
-	popts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx)}
-	if !opts.NoMouse {
-		popts = append(popts, tea.WithMouseCellMotion())
-	}
-	_, err := tea.NewProgram(m, popts...).Run()
+	_, err := tea.NewProgram(m, programOptions(ctx, opts)...).Run()
 	if errors.Is(err, tea.ErrProgramKilled) && ctx.Err() != nil {
 		return nil // ended from outside: the caller knows why
 	}
 	return err
+}
+
+// programOptions are the bubbletea options Run starts the program with.
+// Without bubbletea's signal handler: main cancels ctx on SIGINT, SIGTERM
+// and SIGHUP, and with both taking one SIGTERM bubbletea's handler could
+// block sending QuitMsg to an event loop the cancel had ended, its
+// shutdown waiting on it for good (in raw mode ^C is a key anyway).
+func programOptions(ctx context.Context, opts Options) []tea.ProgramOption {
+	popts := []tea.ProgramOption{tea.WithAltScreen(), tea.WithContext(ctx), tea.WithoutSignalHandler()}
+	if !opts.NoMouse {
+		popts = append(popts, tea.WithMouseCellMotion())
+	}
+	return popts
 }
 
 const (
