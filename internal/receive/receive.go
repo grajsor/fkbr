@@ -26,6 +26,8 @@ import (
 	"unicode/utf8"
 	"unsafe"
 
+	"golang.org/x/sys/unix"
+
 	"fkbr/internal/api"
 	"fkbr/internal/bundle"
 	"fkbr/internal/localfs"
@@ -713,11 +715,50 @@ func (r *Receiver) Commit() (*Result, error) {
 	if r.mtimeLost > 0 {
 		res.problem("mtime not stored on %d files: outside what this filesystem can hold (e.g. %s)", r.mtimeLost, r.mtimeExample)
 	}
+	// On disk before the staging goes and the job is done: a move deletes
+	// its sources then, and staging left after a power cut would be swept.
+	if err := r.Sync(); err != nil {
+		return res, err
+	}
 	if err := r.root.RemoveAll(r.base); err != nil {
 		return res, err
 	}
 	r.root.Remove(StagingDir) // only succeeds when no other job is staging
 	return res, nil
+}
+
+// Sync puts what this receive wrote so far on disk: staged files, the
+// journals, and after a commit the renames and metadata. A power cut loses
+// what is only in the page cache (a kill -9 does not). One syncfs(2) for
+// the root's filesystem rather than an fsync per file: staging is at the
+// root's top and a commit renames from it, so everything is on that
+// filesystem, folders included.
+func (r *Receiver) Sync() error {
+	f, err := r.root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if err := syncFS(f); err != nil {
+		return fmt.Errorf("writing to disk: %w", err)
+	}
+	return nil
+}
+
+// syncFS syncs the filesystem f is on; tests replace it.
+var syncFS = func(f *os.File) error {
+	c, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var serr error
+	if err := c.Control(func(fd uintptr) { serr = unix.Syncfs(int(fd)) }); err != nil {
+		return err
+	}
+	if serr != nil {
+		return &os.PathError{Op: "syncfs", Path: f.Name(), Err: serr}
+	}
+	return nil
 }
 
 // reportRefused counts the entries refused while staging as errors.

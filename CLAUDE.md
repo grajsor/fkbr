@@ -281,6 +281,11 @@ package tests; docs/testplan.md lists them.
   (`api.ErrNotFound` at Submit, `missingPaths` in send.go).
 - A node whose shared dir is deleted/moved/replaced stops and says so
   (`localfs.CheckRoots` every 5 s).
+- **Done means on disk** (power cuts, lab `powercut.py`): a target
+  syncs its root's filesystem (`Receiver.Sync`, one syncfs) before each
+  ack, overlapped with applying the next chunk (`pendingAck` in recv.go),
+  and in `Commit` before the staging goes. Without it a target cut after
+  `done` lost the whole copy, and a `mv` had deleted the sources.
 - **Over ssh the home node's store is a trust boundary:** linked hosts
   call it with names off the wire. Every store method checks each name
   it puts in a path (`ValidID`, roles source/target) itself;

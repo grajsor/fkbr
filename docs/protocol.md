@@ -166,7 +166,10 @@ feature; an older node refuses it with a clear message.
    every target's ack count is above N.
 4. **Consume.** A target reads chunks in order. It verifies size and
    checksum, extracts into `<root>/.fkbr-tmp/<job>/tree` through `os.Root`,
-   then raises its ack count. It reads each chunk ahead (up to 16 MiB) while
+   puts that staging on disk (one `syncfs` of the root's filesystem, while
+   it applies the next chunk), then raises its ack count: once every
+   target acked a chunk the source deletes it, so an ack must survive a
+   power cut. It reads each chunk ahead (up to 16 MiB) while
    it writes files, and sets a file's metadata through the open file. Files listed in `bad` (changed or unreadable
    while the source read them) are dropped and reported.
 5. **Install.** After the last chunk, the target renames entries into
@@ -177,8 +180,9 @@ feature; an older node refuses it with a clear message.
    installed. Each file is replaced whole, so two jobs installing into
    the same directory at once leave every file complete, each from one of
    them. It applies directory metadata deepest first (only
-   to directories it created, unless the policy is `overwrite`), then
-   removes the staging area.
+   to directories it created, unless the policy is `overwrite`), puts the
+   install on disk (`syncfs`), then removes the staging area. A target is
+   `done` only after that: a move deletes its sources then.
 6. **Finish.** A participant whose job slots (`max_jobs`) are all taken
    publishes the state `queued` until one frees up; a source that drops
    such a target says so in the reason. Every participant publishes its
@@ -194,13 +198,14 @@ longer change it. `chown` clears setuid and setgid, so those bits are
 re-applied afterwards, which needs CAP_FOWNER. Ownership is best-effort:
 it needs root or CAP_CHOWN, and for directories also CAP_DAC_OVERRIDE (see
 `operations.md`). Failures are counted and reported.
-Symlink mtimes are not preserved. Hard links arrive as separate files.
+Symlinks keep their mtime, as with `rsync -a`. Hard links arrive as separate files.
 Devices, fifos and sockets are skipped and reported.
 
 **Crash recovery.** The `send`/`receive` request stays in `inbox/<id>/cur/`
 until its job ends, so a restarted worker picks it up again.
-- *Target:* continues from its ack count. Staging persists, and re-applying
-  a chunk is idempotent.
+- *Target:* continues from its ack count. Staging persists (on disk up
+  to the last ack, also through a power cut), and re-applying a chunk is
+  idempotent.
 - *Source:* regenerates the stream from the start (the walk is
   deterministic) without re-staging chunks that were already published. If
   a regenerated chunk differs from a still-staged one, the source changed,

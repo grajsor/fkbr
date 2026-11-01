@@ -2,6 +2,7 @@ package receive
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -624,5 +625,48 @@ func TestBadJournalNames(t *testing.T) {
 	r3, err := New(dst, "old", ".", Options{Conflict: api.ConflictSkip})
 	if err != nil || !r3.bad["sub/x.txt"] {
 		t.Fatalf("old journal: %v %v", err, r3.bad)
+	}
+}
+
+// Commit puts the install on disk before it removes the staging (and so
+// before the job can be done: a move deletes its sources then). A sync that
+// fails fails the commit, staging kept.
+func TestCommitSyncs(t *testing.T) {
+	_, dstDir, src, dst := setup(t)
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, err := New(dst, "job1", "", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	staging := filepath.Join(dstDir, StagingDir, "job1")
+	var syncs int
+	orig := syncFS
+	t.Cleanup(func() { syncFS = orig })
+	syncFS = func(f *os.File) error {
+		syncs++
+		if _, err := os.Stat(filepath.Join(dstDir, "tree/sub/big.bin")); err != nil {
+			t.Errorf("synced before the install: %v", err)
+		}
+		if _, err := os.Stat(staging); err != nil {
+			t.Errorf("staging gone before the sync: %v", err)
+		}
+		return &os.PathError{Op: "syncfs", Path: f.Name(), Err: syscall.EIO}
+	}
+	if _, err := r.Commit(); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("commit with a failing sync: %v", err)
+	}
+	if _, err := os.Stat(staging); err != nil {
+		t.Fatalf("staging removed though the sync failed: %v", err)
+	}
+	syncFS = func(f *os.File) error { syncs++; return orig(f) }
+	if _, err := r.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if syncs != 2 {
+		t.Fatalf("%d syncs", syncs)
+	}
+	if _, err := os.Stat(staging); !os.IsNotExist(err) {
+		t.Fatalf("staging left: %v", err)
 	}
 }

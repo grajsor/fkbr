@@ -113,7 +113,7 @@ In the lab it beat tar, rsync and borg through the same share in every test, mos
 rsync through the share makes every file on the NFS server one at a time. Each file costs several trips to the server (create, write, set the time, rename), and each trip waits for an answer. 20,000 files means about 100,000 waits. fkbr packs many small files into a few big chunks, like sending one parcel instead of 20,000 letters. The server sees a few big writes, and each machine unpacks onto its own disk. All targets read the same chunks, too. In the lab, 20,000 small files took fkbr 5.6 s and rsync 2 min 16 s.
 
 **Can I trust it with my files?**
-It is tested by breaking things on purpose while it copies: killed and frozen processes, cut networks, full disks, clocks that jump, folders deleted mid-copy. Every copy is then checked file by file. No run has ever lost or damaged a file. See [stability.md](stability.md).
+It is tested by breaking things on purpose while it copies: killed and frozen processes, power cuts, cut networks, full disks, clocks that jump, folders deleted mid-copy. Every copy is then checked file by file. The first power cuts found a way to lose files; that is fixed, and no other run has ever lost or damaged a file. See [stability.md](stability.md).
 
 **Something broke halfway?**
 Nothing half-copied ever appears: files are put in place only when all of them have arrived and been checked. Restart fkbr and the copy goes on where it stopped.

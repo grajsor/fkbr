@@ -397,6 +397,31 @@ A read of the code with gopls's checks, when the themes were added.
 | A node starting while a CLI polled it (same state dir) exited with "bind: no such file or directory": the CLI removes a state dir it made once it is empty, and that landed between the node making the dir and listening in it (lab runs, twice under load) | The node makes the dir again and listens; once the socket is in it, the dir stays | `TestListenAfterStateDirRemoved` |
 | Settings: a number out of range said only "a number from 1", and `0` for the sync deletion limit "a number from -1" | The range is named; where `-1` is taken, so is that | `TestSettingsNumbers` |
 
+## 18. Reboots and power cuts (2026-10-31)
+
+Every fault before this one left the kernel's page cache alive: a killed
+process's writes still reach the disk. Reboots (`reboot.py`) are clean,
+so they do too. A power cut does not: the lab boxes are reset with sysrq
+`b` (no sync, no unmount) at a chosen moment of a job (`powercut.py`).
+After the cut, a job that ended done must leave its target exact,
+checked by sha256, mode and mtime. A job cut short must resume, or
+detach and catch up, never end done with a file missing. A `mv` must
+not lose a file.
+
+| Case | Before (6475202) | Now |
+|---|---|---|
+| Target cut 0, 2 and 10 s after its part was done | The folder gone (twice), or 1,181 of 1,538 files wrong (196 empty or zeros); the target had said done | Exact |
+| `mv`, the target cut as soon as it returned (the sources deleted then) | (no result: harness) | Nothing lost |
+| A lone target cut mid-copy (never detached) | Done with 3 files missing and one corrupt; a sync did not repair it (same size and mtime) | Done, exact |
+| A target cut while installing 12,035 files | Done with 6,074 missing and 3,972 wrong | Done, exact |
+| Over ssh: a linked target cut after done, and mid-copy; the home node cut mid-copy | (no result: harness) | Exact; the links end with their home; the cut job goes on and ends exact |
+| Target, target 60 s late, source and ssh hosts rebooted; NFS remounted (`reboot.py`) | Done, exact | Done, exact |
+
+| Found | Now | Test |
+|---|---|---|
+| A target never synced what it received: it acked chunks only in the page cache (the source then deletes them) and said done before its install was on disk. A cut lost data the job called done, and a `mv` had deleted the sources by then | One `syncfs(2)` on the root's filesystem before each ack, while the next chunk is applied, and one in `Commit` before the staging goes. Cost on one box with share, source and target on one disk: 3 × 512 MiB 14.9 → 16.2 s, small files and sync the same | `TestAckAfterStagingSynced`, `TestStagingSyncFailsOnce`, `TestCommitSyncs` |
+| A TUI could live on after SIGTERM (one fuzzed TUI for 18 h; caught again in this run, with its goroutines): main cancels the TUI's context on SIGTERM and bubbletea's own handler took the same signal, sent its quit message to an event loop the cancel had ended, and its shutdown waited on that for good | bubbletea's signal handler is off; main's handles SIGINT, SIGTERM and SIGHUP | `TestQuitsOnSIGTERM` (hung in round 16 of 100 before) |
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked
@@ -412,6 +437,10 @@ A read of the code with gopls's checks, when the themes were added.
 - **Compare** (`compare/`): `compare.py setup | setup_big |
   run N | runbig | clean` times fkbr, tar, rsync and borg through the
   share and verifies every copy; results go to `docs/benchmarks.md`.
+- **Reboot** (`reboot/`): `reboot.py OUTDIR [case...]` reboots a
+  target, a source, an ssh host or the ssh home mid-copy, and remounts
+  the share; `powercut.py OUTDIR [case...]` resets them without a sync
+  (section 18).
 - **Explore** (`explore/`): `explore.py quota | quota2 |
   concurrent | same | dup | queued | clean`, each a focused experiment;
   results append to `results.log`.

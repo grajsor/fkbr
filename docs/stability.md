@@ -1,24 +1,29 @@
 # Stability
 
 fkbr is tested by breaking things on purpose while it works: processes
-are killed and frozen, hosts are cut off from the NFS server and from
-each other, disks fill, clocks jump, and folders are deleted under
-running jobs. Then every copy is checked file by file against its source.
+are killed and frozen, hosts lose power or are cut off from the NFS
+server and from each other, disks fill, clocks jump, and folders are
+deleted under running jobs. Then every copy is checked file by file
+against its source.
 
-**No fault run has ever corrupted a file, or lost one in a copy, sync or
-move.** What the runs did find (jobs that failed or hung when they should
-have carried on, and answers that were wrong) is fixed, and each fix has
-a test that fails without it.
+**Kills, stops, cuts, full disks and reboots have never corrupted a file,
+or lost one in a copy, sync or move.** The first power cuts (2026-10-31)
+did: a target that had said done lost what was still only in memory
+when the power went. That is fixed (a target now puts what it received
+on disk before it says so), and no power cut since has lost anything.
+Everything else the runs found (jobs that failed or hung when they
+should have carried on, and answers that were wrong) is fixed too, and
+each fix has a test that fails without it.
 
 ## At a glance
 
 | | |
 |---|---:|
-| Hours of fault runs | **over 39 h** |
-| Copied trees checked against their source | **over 12,000** |
-| Faults injected (kills, stops, cuts, full disks, …) | **over 1,700** |
-| Files lost or corrupted | **0** |
-| Bugs found by these runs, each fixed with a test | **48** |
+| Hours of fault runs | **over 49 h** |
+| Copied trees checked against their source | **over 14,000** |
+| Faults injected (kills, stops, cuts, power cuts, full disks, …) | **over 2,400** |
+| Files lost or corrupted, except by the first power cuts (fixed) | **0** |
+| Bugs found by these runs, each fixed with a test | **50** |
 | Tests in `go test ./...` (also run with nodes linked over ssh, and under `-race`) | **over 380** |
 | Random inputs fed to the chunk reader, the exclude matcher and the TUI | **over 9 million** |
 
@@ -71,6 +76,7 @@ Up to three faults at once, a new one every 5-20 s, each undone within
 | **Memory squeeze** | Only about 250 MiB left free |
 | **CPU stall** | Every core busy |
 | **Full disk** | The target root filled to the last block |
+| **Power cut** | A host reset with no sync (`powercut.py`, between the other suites): what was only in memory is gone |
 
 And the jobs are made hard on purpose:
 
@@ -123,10 +129,25 @@ After every round, with the faults off:
 | 2026-10-25 | torture v2, run 4 | e79d440 | 1 h 26 min | 216 | 579 | 178 | 0 |
 | 2026-10-25 | torture v2, run 5 | 5b8e542 | 1 h 26 min | 206 | 569 | 182 | 0 |
 | 2026-10-25 | torture v2, run 6 | 4bb8895 | 1 h 21 min | 212 | 514 | 162 | 0 |
-| 2026-10-25 | **torture v2, run 7** | **be23f46** | 1 h 15 min | 196 | 499 | 153 | 0 |
+| 2026-10-25 | torture v2, run 7 | be23f46 | 1 h 15 min | 196 | 499 | 153 | 0 |
+| 2026-10-31 | power cuts, before the fix | 6475202 | 34 min | 10 | 10 | 10 | **1** |
+| 2026-10-31/11-01 | **every suite, twice, power cuts first** | **with the fix** | **10 h 14 min** | **over 790** | **over 2,100** | **over 730** | **1** |
 
 "Trees checked" counts target folders compared file by file with their
 source after a job.
+
+**Power cuts (2026-10-31).** Until then every fault left the kernel's
+memory alive, so whatever fkbr wrote reached the disk sooner or later.
+The new test resets a host with no sync at a chosen moment. On the build
+before, a target cut 0, 2 or 10 s after it had said done lost the whole
+copy or got files full of zeros; a target cut mid-copy, and one cut while
+installing, ended done with files missing, and one corrupt file looked
+right to a sync (same size and time). A move would have deleted its
+sources by then. A target now syncs its disk before it acks a chunk and
+before it says done. With the fix, two rounds of the same ten power cuts
+left every finished copy exact and a move lost nothing; the same night's
+10 h run of every other suite found one more bug (a TUI could live on
+after SIGTERM).
 
 The last run, on be23f46 (the store confined to the share, the editor,
 the settings dialog), found nothing in fkbr: 196 jobs under 153 faults,

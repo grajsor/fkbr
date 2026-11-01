@@ -59,10 +59,11 @@ All the numbers: `docs/benchmarks.md`.
   over ssh as fast as rsync or faster (`docs/benchmarks.md`).
 - **Crash-safe.** Atomic writes on the share, checksummed chunks and
   resumable jobs. Files are installed only after the whole transfer has
-  arrived. Tested by killing, freezing and restarting nodes mid-transfer,
-  cutting hosts off the NFS server, and deleting parts of the share under
-  running nodes: over 12,000 copies checked, no file ever lost or
-  corrupted (`docs/stability.md`).
+  arrived, and a copy is done only once it is on the target's disk.
+  Tested by killing, freezing, rebooting and cutting the power of hosts
+  mid-transfer, cutting them off the NFS server, and deleting parts of
+  the share under running nodes: over 14,000 copies checked
+  (`docs/stability.md`).
 
 ## Screenshots
 

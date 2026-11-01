@@ -132,6 +132,57 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 	wait := newWaitLog(log, "waiting for chunk", waitLogAfter, waitLogEvery)
 	ride := &rideOut{log: log}
 	srcGone := &goneWatch{e: e, node: src}
+	// A chunk's staging is put on disk (syncStaging) before its ack: the
+	// source deletes a chunk once every target acked it, so staging a
+	// power cut loses could not be had again, and a target resuming after
+	// it would install the job without it. The sync runs while the next
+	// chunk is applied; its ack goes out when both are through.
+	var pend *pendingAck
+	// settle waits for the pending sync and acks its chunk. redo: the sync
+	// failed and the chunks since it are applied again.
+	settle := func() (redo bool, err error) {
+		p := pend
+		if p == nil {
+			return false, nil
+		}
+		pend = nil
+		var serr error
+		select {
+		case serr = <-p.done:
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+		if serr != nil {
+			if ride.retry(ctx, serr) {
+				next = p.next - 1
+				status.st.Files, status.st.Bytes = p.files, p.bytes
+				return true, nil
+			}
+			return false, fmt.Errorf("chunk %d: %w", p.next-1, serr)
+		}
+		if e.chunksInMemory() {
+			// What this target applied, before its ack: a source that
+			// restarts rebuilds from the lowest ack and checks the chunk
+			// before it against this (send.go, rebuilt).
+			status.st.Chunks, status.st.ChunkSum = p.next, p.sum
+			status.put(ctx, true)
+		}
+		for {
+			err := e.st.SetAcked(ctx, src, id, e.Self(), p.next)
+			if err == nil || errors.Is(err, fs.ErrNotExist) {
+				// Not there: the source removed the job's data, as it does
+				// once the job is cancelled or over. The next chunk is
+				// missing too, and the job says which.
+				break
+			}
+			if !ride.retry(ctx, err) {
+				return false, err
+			}
+		}
+		status.st.Chunks = p.next
+		status.put(ctx, false)
+		return false, nil
+	}
 	for {
 		// Staged chunks may keep coming; a stopping worker must not apply
 		// them all before it lets go (the job resumes on restart).
@@ -144,6 +195,12 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 			continue
 		}
 		if errors.Is(err, fs.ErrNotExist) {
+			// Nothing to apply meanwhile: the last chunk's ack goes now.
+			if redo, err := settle(); err != nil {
+				return err
+			} else if redo {
+				continue
+			}
 			j, err := e.st.GetJob(ctx, id)
 			if err != nil {
 				if ride.retry(ctx, err) {
@@ -231,29 +288,27 @@ func (e *Engine) consume(ctx context.Context, job *api.Job, rcv *receive.Receive
 		ride.ok()
 		log.Info("chunk applied", "chunk", next, "entries", meta.Entries, "stored", size(meta.Size), "took", time.Since(start).Round(time.Millisecond))
 		next++
-		if e.chunksInMemory() {
-			// What this target applied, before its ack: a source that
-			// restarts rebuilds from the lowest ack and checks the chunk
-			// before it against this (send.go, rebuilt).
-			status.st.Chunks, status.st.ChunkSum = next, meta.Sum
-			status.put(ctx, true)
+		if redo, err := settle(); err != nil { // the chunk before this one
+			return err
+		} else if redo {
+			continue
 		}
-		for {
-			err := e.st.SetAcked(ctx, src, id, e.Self(), next)
-			if err == nil || errors.Is(err, fs.ErrNotExist) {
-				// Not there: the source removed the job's data, as it does
-				// once the job is cancelled or over. The next chunk is
-				// missing too, and the job says which.
-				break
-			}
-			if !ride.retry(ctx, err) {
-				return err
-			}
-		}
-		status.st.Chunks = next
-		status.put(ctx, false)
+		pend = &pendingAck{next: next, sum: meta.Sum, files: files, bytes: bytes, done: make(chan error, 1)}
+		go func(done chan<- error) { done <- syncStaging(rcv) }(pend.done)
 	}
 }
+
+// pendingAck is a chunk applied whose staging is being synced; it is acked
+// once that is done.
+type pendingAck struct {
+	next         int // the ack: chunks [0, next) applied
+	sum          string
+	files, bytes int64 // the status counts before the chunk
+	done         chan error
+}
+
+// syncStaging puts a receive's staging on disk (tests wrap it).
+var syncStaging = (*receive.Receiver).Sync
 
 // metaWaited: a chunk-meta call that took this long waited on the source
 // (sshlink metaWait, 1 s) before it said the chunk is not there yet.
