@@ -107,10 +107,10 @@ The name holds a character your terminal could act on, like an escape or a line 
 ## Speed and safety
 
 **How fast is it?**
-In the lab it beat tar, rsync and borg through the same share in every test, most of all with many small files and with several targets at once. Over ssh it is as fast as rsync or faster. The NFS server's network sets the pace; a bigger `job_quota` does not help. Numbers: [benchmarks.md](benchmarks.md).
+In the lab it beat tar, rsync and borg through the same share in every test, most of all with many small files and with several targets at once. Over ssh it is faster than rsync, except for one big file to one host. The NFS server's network sets the pace; a bigger `job_quota` does not help. Numbers: [benchmarks.md](benchmarks.md).
 
 **Why so much faster than rsync for many small files?**
-rsync through the share makes every file on the NFS server one at a time. Each file costs several trips to the server (create, write, set the time, rename), and each trip waits for an answer. 20,000 files means about 100,000 waits. fkbr packs many small files into a few big chunks, like sending one parcel instead of 20,000 letters. The server sees a few big writes, and each machine unpacks onto its own disk. All targets read the same chunks, too. In the lab, 20,000 small files took fkbr 5.6 s and rsync 2 min 16 s.
+rsync through the share makes every file on the NFS server one at a time. Each file costs several trips to the server (create, write, set the time, rename), and each trip waits for an answer. 20,000 files means about 100,000 waits. fkbr packs many small files into a few big chunks, like sending one parcel instead of 20,000 letters. The server sees a few big writes, and each machine unpacks onto its own disk. All targets read the same chunks, too. In the lab, 20,000 small files took fkbr 5.8 s and rsync 2 min 24 s.
 
 **Can I trust it with my files?**
 It is tested by breaking things on purpose while it copies: killed and frozen processes, power cuts, cut networks, full disks, clocks that jump, folders deleted mid-copy. Every copy is then checked file by file. The first power cuts found a way to lose files; that is fixed, and no other run has ever lost or damaged a file. See [stability.md](stability.md).
