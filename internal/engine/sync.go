@@ -636,7 +636,15 @@ func (s *planSink) Delete(i int, p string) error {
 	return d.add(inventory.Join(s.plan.Request.DstPath, p))
 }
 
-func (s *planSink) commit() error {
+// commit publishes the lists. On an error it aborts every list not yet
+// published: a writer left alone keeps a temp file open (and, over ssh, a
+// call to the home node) until it is collected or the link ends.
+func (s *planSink) commit() (err error) {
+	defer func() {
+		if err != nil {
+			s.abort()
+		}
+	}()
 	// A target that needs entries of several target sets gets one job per
 	// set, and the jobs install into the same folders at the same time.
 	// A folder's mtime is set after a job's own installs, so every job that

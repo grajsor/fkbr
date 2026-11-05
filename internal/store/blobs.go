@@ -92,6 +92,9 @@ func (m *Dir) OpenBlob(_ context.Context, name string) (io.ReadCloser, error) {
 }
 
 func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
+	if err := checkAge(maxAge); err != nil {
+		return err
+	}
 	kinds, err := m.fs.ReadDir(m.path("blobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

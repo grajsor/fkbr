@@ -41,24 +41,11 @@ type shareFS struct {
 	r       *os.Root
 	dir     *os.File // the same directory, for openat2
 	beneath bool     // openat2 works here
-	// retired: the descriptors of earlier opens, kept open for the
-	// operations that took them (see open). closed: Close was called.
-	retired []retiredRoot
 	closed  bool
 	// afterDirfd runs in openBeneath between taking the directory's
 	// descriptor and using it (tests).
 	afterDirfd func()
 }
-
-type retiredRoot struct {
-	r   *os.Root
-	dir *os.File
-}
-
-// retiredMax is how many earlier opens stay open. An operation that
-// outlives that many reopens (the path named another directory that often
-// while it waited on a hung server) gets an error, as on a closed file.
-const retiredMax = 4
 
 var errOutsideShare = errors.New("not in the share")
 
@@ -89,25 +76,21 @@ func (s *shareFS) open() error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		r.Close()
 		dir.Close()
 		return os.ErrClosed
 	}
-	// The old descriptors are not closed here: an operation that took
-	// the directory's number a moment ago would use it closed (EBADF),
-	// or, the number reused by another folder, look names up there. They
-	// are kept for the last few opens (retiredMax) and closed by Close.
-	if s.r != nil {
-		s.retired = append(s.retired, retiredRoot{s.r, s.dir})
-		if len(s.retired) > retiredMax {
-			s.retired[0].r.Close()
-			s.retired[0].dir.Close()
-			s.retired = s.retired[1:]
-		}
-	}
+	oldR, oldDir := s.r, s.dir
 	s.r, s.dir = r, dir
+	s.mu.Unlock()
+	// A call that took the old directory's number holds a duplicate of it
+	// (openBeneath), and os.Root counts its users: closing is safe.
+	if oldR != nil {
+		oldR.Close()
+		oldDir.Close()
+	}
 	return nil
 }
 
@@ -131,9 +114,16 @@ func (s *shareFS) openBeneath(op, p string, flags int, perm uint32) (int, error)
 	if err != nil {
 		return -1, err
 	}
+	// A duplicate of the directory's descriptor, taken under the lock: a
+	// reopen may close the original (and another folder take its number)
+	// while this call is on its way, but not the duplicate.
 	s.mu.RLock()
-	dirfd := int(s.dir.Fd())
+	dirfd, derr := unix.FcntlInt(s.dir.Fd(), unix.F_DUPFD_CLOEXEC, 0)
 	s.mu.RUnlock()
+	if derr != nil {
+		return -1, &fs.PathError{Op: op, Path: p, Err: derr}
+	}
+	defer unix.Close(dirfd)
 	if s.afterDirfd != nil {
 		s.afterDirfd()
 	}
@@ -416,11 +406,6 @@ func (s *shareFS) Close() error {
 	s.closed = true
 	s.r.Close()
 	s.dir.Close()
-	for _, o := range s.retired {
-		o.r.Close()
-		o.dir.Close()
-	}
-	s.retired = nil
 	return nil
 }
 

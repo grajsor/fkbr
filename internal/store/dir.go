@@ -620,6 +620,9 @@ const StaleTmp = time.Hour
 // would otherwise delete other nodes' files that are still in use.
 
 func (m *Dir) Prune(_ context.Context, maxAge time.Duration) error {
+	if err := checkAge(maxAge); err != nil {
+		return err
+	}
 	m.layout()              // a layout folder replaced by a symlink: a real one first
 	m.openedUp.Do(m.openUp) // once per process: new entries get the right modes
 	now, err := m.serverNow()

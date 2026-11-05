@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net"
 	"os"
@@ -12,7 +13,9 @@ import (
 	"runtime/debug"
 	"strings"
 	"testing"
+	"time"
 
+	"fkbr/internal/api"
 	"fkbr/internal/sshlink/frame"
 	"fkbr/internal/store"
 )
@@ -120,5 +123,52 @@ func TestLinkChurnLeavesNoDescriptors(t *testing.T) {
 	}
 	if grown := openFDs(t) - before; grown > 4 {
 		t.Errorf("%d rounds of links left %d more descriptors open", rounds, grown)
+	}
+}
+
+// A linked host that asks the home node to prune by a negative age is
+// refused, and the finished jobs stay (review 2026-11-05).
+func TestRemotePruneNegativeAge(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	_, mb, cli := linked(t, dir)
+	j := &api.Job{ID: "000000000000000000000012", Request: api.TransferRequest{SrcNode: "web01", DstNodes: []string{"web01"}}}
+	if err := mb.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	mb.PutStatus(ctx, j.ID, &api.JobStatus{Node: "web01", Role: api.RoleSource, State: api.JobDone})
+	mb.PutStatus(ctx, j.ID, &api.JobStatus{Node: "web01", Role: api.RoleTarget, State: api.JobDone})
+	// Old enough to go, were the age taken at its word.
+	old := time.Now().Add(-2 * time.Minute)
+	filepath.WalkDir(filepath.Join(dir, "jobs", j.ID), func(p string, _ fs.DirEntry, _ error) error {
+		return os.Chtimes(p, old, old)
+	})
+	for _, call := range []string{"prune", "job.prune", "blob.prune"} {
+		if err := do(ctx, cli, call, map[string]time.Duration{"max_age": -time.Hour}, nil); err == nil {
+			t.Errorf("%s accepted a negative age", call)
+		}
+	}
+	if _, err := mb.GetJob(ctx, j.ID); err != nil {
+		t.Fatalf("a finished job went with a negative age: %v", err)
+	}
+}
+
+// A blob writer whose context ends before anything is written is freed:
+// its call to the home node waited in io.Copy on the pipe, which resetting
+// the stream does not wake (review 2026-11-05).
+func TestBlobWriterFreedWhenContextEnds(t *testing.T) {
+	_, _, cli := linked(t, t.TempDir())
+	r := &Remote{sess: cli}
+	ctx, cancel := context.WithCancel(context.Background())
+	w, err := r.CreateBlob(ctx, "plans/p1/copy-x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(100 * time.Millisecond) // the call is on its way, waiting for a body
+	cancel()
+	select {
+	case <-w.(*blobWriter).done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the writer's call is still waiting after its context ended")
 	}
 }

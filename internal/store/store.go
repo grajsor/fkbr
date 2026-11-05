@@ -524,7 +524,21 @@ func (m *Dir) removeRacing(dir string) error {
 	return err
 }
 
+// checkAge refuses a negative age to prune by: it would put the cutoff in
+// the future and make everything old enough. Zero is a policy (-keep 0:
+// only the floors below keep anything); a call from a linked host with a
+// negative one is a bug there (review 2026-11-05).
+func checkAge(maxAge time.Duration) error {
+	if maxAge < 0 {
+		return fmt.Errorf("store: prune: negative age %v", maxAge)
+	}
+	return nil
+}
+
 func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
+	if err := checkAge(maxAge); err != nil {
+		return err
+	}
 	des, err := m.fs.ReadDir(m.path("jobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

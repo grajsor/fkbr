@@ -396,7 +396,13 @@ func (r *Remote) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 func (r *Remote) CreateBlob(ctx context.Context, name string) (transport.ChunkWriter, error) {
 	pr, pw := io.Pipe()
 	w := &blobWriter{pw: pw, done: make(chan error, 1)}
+	// A context that ends while nobody writes or reads the pipe: the call
+	// below waits in io.Copy on the pipe, which resetting the stream does
+	// not wake. So a writer dropped without Commit or Abort is freed when its
+	// context ends.
+	stop := context.AfterFunc(ctx, func() { pw.CloseWithError(ctx.Err()) })
 	go func() {
+		defer stop()
 		c, err := open(ctx, r.sess, "blob.create", &blobArgs{name}, pr)
 		if err == nil {
 			err = c.answer(ctx, nil)

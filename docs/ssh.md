@@ -143,7 +143,9 @@ and acks).
 
 ssh decides who reaches which host. A remote node reaches only the home
 node's calls; those keep the store's checks (IDs, names, size caps, owner
-checks), and chunk calls check their names too. The swarm is one trust
+checks), and chunk calls check their names too. The exception is the size
+of a blob (a sync's plan or scan): `blob.create` has no cap, and a linked
+node can fill the home node's disk with them. The swarm is one trust
 domain: any node can read and write what the others share.
 
 ## Packages

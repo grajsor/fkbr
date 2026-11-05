@@ -451,19 +451,36 @@ and fuzzers in six cycles.
 
 ## 20. A second model's review (2026-11-05)
 
-Another model read the code and sent ten suggestions. Each was checked
-against the code; three were right and are fixed, each with a test that
-fails on the build before. The rest were already covered (a negative
-`max_age` is floored in the blob and job prune; every caller of the
-blob writer aborts it), or would do harm (closing the old API listener
-unlinks the new socket, and ends `Serve` with an error), or guard a
-linked host that is trusted by design.
+Another model read the code and sent ten suggestions, then a second pass
+on the answer. Each point was checked against the code. Six are fixed,
+each with a test that fails on the build before; the others are left, with
+the reasons below.
 
 | Found | Now | Test |
 |---|---|---|
-| The share's directory descriptor was copied, the lock let go, and used a moment later; a reopen (remount, share made again) closed it in between: the call failed with EBADF, or, the number reused by another folder, looked its names up there (reproduced: it read another folder's file) | A reopen keeps the old descriptors, the last 4 of them, until `Close`, so no number is closed under a call | `TestReopenDuringOperation` |
+| The share's directory descriptor was copied, the lock let go, and used a moment later; a reopen (remount, share made again) closed it in between: the call failed with EBADF, or, the number reused by another folder, looked its names up there (reproduced: it read another folder's file). A first fix that kept the last four old descriptors open was still open to it after five reopens | `openBeneath` takes a duplicate of the descriptor under the lock and closes it after the call; a reopen closes the old ones at once (`os.Root` counts its users) | `TestReopenDuringOperation` (1, 5 and 12 reopens inside one call) |
 | A store opened for a moment was never closed: the home node's store for a linked node was left to the garbage collector when the link ended, after a refused duplicate hello, and after a refused protocol; so was `fkbr check`'s | `Dir.Close` (idempotent), called at each of those | `TestCloseReleasesDescriptors`, `TestDirCloseAndFailedOpen`, `TestLinkChurnLeavesNoDescriptors` (60 descriptors left by 15 rounds before; the GC is off in the test) |
-| A panic in a handler of the ssh link ended the whole process, all links and jobs | A call whose handler panics fails alone, with the stack in the log; the link and the other calls go on. Jobs are not wrapped: a panic there still stops the node, which resumes on restart | `TestHandlerPanicFailsOnlyItsCall` |
+| A panic in a handler of the ssh link ended the whole process, all links and jobs | A call whose handler panics fails alone, with the stack in the log; the link and the other calls go on. Only the handler is covered, not the frame loops. Jobs are not wrapped: a panic there still stops the node, which resumes on restart | `TestHandlerPanicFailsOnlyItsCall` |
+| A negative `max_age` (a linked host's `prune`, `job.prune`, `blob.prune`, or the store's own) put the cutoff in the future: `PruneJobs` deleted a finished job past its one-minute floor, `Prune` the node's failed and reply records. Only the blob prune and the orphan-folder case had a floor | All three prunes refuse a negative age; zero stays a policy (`-keep 0`) | `TestPruneRefusesNegativeAge`, `TestRemotePruneNegativeAge` |
+| A sync plan whose lists could not be published (`planSink.commit` failed) left the writers open: a temp file in `tmp/` until it was collected, over ssh a call to the home node waiting for a body | `commit` aborts every writer when it fails | `TestPlanSinkCommitFailureAbortsWriters` |
+| Over ssh a blob writer whose context ended before anything was written kept its call to the home node waiting on the pipe: resetting the stream does not wake the copy | The context closes the pipe | `TestBlobWriterFreedWhenContextEnds` |
+
+Left as they are:
+
+- Admission control per link (a limit on calls in progress, a deadline for
+  the first line) and a size or quota for blobs a linked host sends: the
+  swarm is one trust domain (ssh.md "Trust"), so these bound accident, not
+  attack. A limit needs a number that no legitimate plan or scan exceeds.
+- `recover` around a whole job: a panic there is a crash and the job
+  resumes on restart, by design.
+- HTTP server timeouts and a connection cap on the API socket (local
+  clients; the socket is 0600 in a private directory by default).
+- Closing the API's old listener when the socket is made again, and the
+  `Lstat`, `Dial`, `Remove`, `Listen` window in `Listen`: one idle
+  listener per removal, a private directory. Doable with
+  `SetUnlinkOnClose(false)`; not worth the complexity.
+- `workerLock.take` recurses without a bound if the lock path is replaced
+  between its two syscalls every time; a bounded loop would do.
 
 ## How to run the lab tests
 

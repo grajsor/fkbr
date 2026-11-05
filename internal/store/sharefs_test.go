@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -14,9 +15,12 @@ import (
 // under it gave EBADF, or, once the number was reused by another folder,
 // a lookup relative to that folder (review 2026-11-05).
 func TestReopenDuringOperation(t *testing.T) {
-	if testing.Short() {
-		t.Skip()
+	for _, reopens := range []int{1, 5, 12} {
+		t.Run(fmt.Sprint(reopens, " reopens"), func(t *testing.T) { reopenDuringOperation(t, reopens) })
 	}
+}
+
+func reopenDuringOperation(t *testing.T, reopens int) {
 	share, other := t.TempDir(), t.TempDir()
 	if err := os.WriteFile(filepath.Join(share, "x"), []byte("share"), 0o600); err != nil {
 		t.Fatal(err)
@@ -35,8 +39,10 @@ func TestReopenDuringOperation(t *testing.T) {
 	var squatters []int
 	s.afterDirfd = func() {
 		s.afterDirfd = nil
-		if err := s.open(); err != nil { // the share path now names a new directory
-			t.Error(err)
+		for range reopens { // the share path now names a new directory
+			if err := s.open(); err != nil {
+				t.Error(err)
+			}
 		}
 		// Take the lowest free descriptor number: the one the old
 		// directory had, if it was closed.
@@ -74,8 +80,8 @@ func openFDs(t *testing.T) int {
 	return len(ents)
 }
 
-// A reopened share does not pile up descriptors, and Close gives back all
-// it holds, more than once without harm.
+// A reopened share holds no more descriptors than before, and Close gives
+// back what it holds, more than once without harm.
 func TestCloseReleasesDescriptors(t *testing.T) {
 	share := t.TempDir()
 	before := openFDs(t)
@@ -88,8 +94,8 @@ func TestCloseReleasesDescriptors(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if held := openFDs(t) - before; held > 2+retiredMax*2 {
-		t.Errorf("20 reopens hold %d descriptors, want at most %d", held, 2+retiredMax*2)
+	if held := openFDs(t) - before; held > 2 {
+		t.Errorf("20 reopens hold %d descriptors, want 2", held)
 	}
 	s.Close()
 	s.Close()
