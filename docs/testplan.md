@@ -60,7 +60,7 @@ Status: **auto** = in `go test`, **lab** = run on the lab and passed,
 | More jobs than `max_jobs` on one node | Extra jobs show `queued`; a fan-out drops a queued target after `detach_after` with a clear reason | auto, lab |
 | `job_quota` 256 MiB / 1 GiB / 4 GiB | 1 and 4 GiB equal, 256 MiB slower | lab |
 | 1 million small files, one sync | Memory bounded, plan streams | lab (one Pi, 2026-10-19; `benchmarks.md`) |
-| 1,000,000 entries copied to 1 and 3 targets | All verified; 2 min 12 s and 4 min 54 s | lab (compare) |
+| 1,000,000 entries copied to 1 and 3 targets | All verified; 2 min 11 s and 4 min 35 s (2026-11-04) | lab (compare) |
 | fkbr against tar, rsync and borg through the share | See `benchmarks.md` | lab (compare) |
 | Files bigger than `job_quota` (e.g. 20 GiB) | Segments flow through the window | **todo** on the lab (auto for 3 MiB through 256 KiB) |
 | 200 copies submitted at once; 100,000 files in one folder | All done (27 s); `jobs` 0.03 s; 100k files in 12 s, target RSS 55 MiB | lab (weird `flood`, `bigdir`) |
@@ -421,6 +421,33 @@ not lose a file.
 |---|---|---|
 | A target never synced what it received: it acked chunks only in the page cache (the source then deletes them) and said done before its install was on disk. A cut lost data the job called done, and a `mv` had deleted the sources by then | One `syncfs(2)` on the root's filesystem before each ack, while the next chunk is applied, and one in `Commit` before the staging goes. Cost on the lab, against builds that did not wait, the same day (`benchmarks.md`): through the NAS nothing measurable for big files, 5–20% for small ones; over ssh 10–25% | `TestAckAfterStagingSynced`, `TestStagingSyncFailsOnce`, `TestCommitSyncs` |
 | A TUI could live on after SIGTERM (one fuzzed TUI for 18 h; caught again in this run, with its goroutines): main cancels the TUI's context on SIGTERM and bubbletea's own handler took the same signal, sent its quit message to an event loop the cancel had ended, and its shutdown waited on that for good | bubbletea's signal handler is off; main's handles SIGINT, SIGTERM and SIGHUP | `TestQuitsOnSIGTERM` (hung in round 16 of 100 before) |
+
+## 19. Benchmarks and every suite again (2026-11-04)
+
+Every benchmark (`benchmarks.md`), the Go suites (also over ssh, under
+`-race` on the Rocky 10 VM, the model 400 rounds, both fuzzers), then a
+mix of every lab suite for 3 h 38 min on 5225f98: power cuts, reboots,
+edge tests, NAS cuts, explore, ssh faults, cut and cancel repros,
+torture v2, and on the Pi weird, funky, both TUI fuzzers, the Go suites
+and fuzzers in six cycles.
+
+| Suite | Result |
+|---|---|
+| Power cuts (10 cases) | 9 exact; the ssh home cut mid-copy found the hang below |
+| Reboots (7 cases) | 14 checks exact, 0 findings |
+| Edge tests (13) | 42 trees exact, 3 converged, 0 findings |
+| NAS cut of a target and of a source | As designed: the cut target detached, nothing installed; the rest exact |
+| Explore (quota, concurrent, same files, duplicate worker, queued) | All clean |
+| ssh faults (5 cases) | All ok, every fault hit |
+| Link cut at 9 moments, cancel at 20 | Every job done; every cancel clean |
+| Torture v2 (seed 4101, 1 h 29 min) | 184 jobs, 358 trees exact and 106 made exact by one sync, 148 faults, 0 fkbr findings (one harness false alarm, below) |
+| Pi, 6 cycles | weird, funky, `go test`, ssh mode, model: all pass; TUI fuzzers 212,246 keys and 136,162 mouse events, always alive; Go fuzzers about 87 million inputs |
+| `-race` (Rocky 10 VM) | All pass except `internal/bundle`, killed for memory (1.7 GB): `TestChunkSizesRamp` and `TestSparseExtents` (a 1 GiB all-zero file kept twice in memory, which `-race` counts); both pass without `-race` |
+
+| Found | Now | Test |
+|---|---|---|
+| A linked node could hang for good when its ssh home lost power while the link wrote to it. sshd's pipes are blocking; the dead home's sshd stopped reading (its ssh window full, and with the home's kernel gone nothing ever came back to reset the connection), and the link's write stayed in the kernel. The link saw the home gone after 45 s and began to stop, but its other writers waited behind the stuck one, and the stop waited for them. It kept its lock, so the restarted home could not link that host again (22 min, until killed) | `fkbr link` moves stdin and stdout to descriptors of its own in non-blocking mode (fd 0 and 1 then point at /dev/null), so Go's poller runs them and closing the link ends a write in progress. And once the link has ended, a stop that takes more than 1 min ends the process | `TestLinkStdoutCloseEndsStuckWrite` (the write stuck before), `TestLinkStdioLeavesDevNull`, `TestStopWithinGivesUp`; powercut.py again on the fix: all 10 cases exact, the ssh home cut 4 times, no link left behind |
+| (Harness) A catch-up into torture's 200 MiB root failed with no fault on and was counted as a finding; the sync that followed into the same root failed with "no space left": that round's copies had filled it. The target's error was not logged, so the catch-up's own reason is unproven | `torture.py` logs the target's error, and notes a catch-up into the small root that failed for space, as it already did for convergence syncs | |
 
 ## How to run the lab tests
 

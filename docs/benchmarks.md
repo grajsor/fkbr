@@ -1,6 +1,6 @@
 # Benchmarks
 
-## fkbr, tar, rsync and borg through the share (2026-11-01, protocol 3)
+## fkbr, tar, rsync and borg through the share (2026-11-04, protocol 3)
 
 **Setup**
 - **Share:** a NAS over NFSv3 on 1 GbE (`actimeo=1800`, hard).
@@ -11,10 +11,9 @@
 - **Runs:** source the Rocky 9 VM. "1 target" is Rocky 10; "3 targets"
   are Rocky 10, Rocky 8 and CentOS 7. Page caches dropped on every host before each run.
   Times are from the start until every target has everything; every copy
-  was then checked with sha256 against the source. fkbr and tar ran in
-  two sessions that day: the 1 GiB and 20,000 file cases four times
-  (the mean is shown), the larger ones twice; rsync and borg in the
-  first.
+  was then checked with sha256 against the source. The 1 GiB and 20,000
+  file cases ran four times, in two sessions that day (the mean is
+  shown), the larger ones once.
 
 **Data** (all random, so compression does not help anyone)
 
@@ -42,31 +41,30 @@
 
 | | fkbr | tar | rsync | borg |
 |---|---|---|---|---|
-| 1 GiB file → 1 target | 20 s | 21 s | 20 s | 27 s |
-| 1 GiB file → 3 targets | **34 s** | 37 s | 38 s | – |
-| 20,000 files → 1 target | **5.8 s** | 6.1 s | 2 min 24 s | 18 s |
-| 20,000 files → 3 targets | **9.6 s** | 10 s | 2 min 29 s | – |
-| 200,000 files → 1 target | **26 s** | 30 s | 22 min 44 s | 2 min 2 s |
-| 200,000 files → 3 targets | **53 s** | 55 s | not run | – |
-| 1,000,000 entries → 1 target | **2 min 12 s** | 3 min 10 s | not run | 10 min 25 s |
-| 1,000,000 entries → 3 targets | **4 min 54 s** | 5 min 28 s | not run | – |
+| 1 GiB file → 1 target | 20.5 s | 20.0 s | 22.5 s | 26.9 s |
+| 1 GiB file → 3 targets | 38.6 s | 38.7 s | 38.1 s | – |
+| 20,000 files → 1 target | **5.9 s** | 6.4 s | 2 min 22 s | 17.8 s |
+| 20,000 files → 3 targets | **9.8 s** | 10.0 s | 2 min 27 s | – |
+| 200,000 files → 1 target | **26 s** | 34 s | 22 min 44 s | 2 min 6 s |
+| 200,000 files → 3 targets | **47 s** | 52 s | not run | – |
+| 1,000,000 entries → 1 target | **2 min 11 s** | 3 min 5 s | not run | 10 min 27 s |
+| 1,000,000 entries → 3 targets | **4 min 35 s** | 5 min 3 s | not run | – |
 
 rsync was not run where it would have taken hours: at its pace, a million
 files would take about 2 h to one target. Its 200,000-file time is from
 2026-10-24 (rsync does not depend on fkbr's build).
 
 **What this shows**
-- **Big files: the NAS sets the pace.** To one target every tool takes
-  about 20 s per GiB (runs vary by up to 2 s). To three, fkbr is ahead: its targets read each chunk
-  while the source is still writing the next, whereas tar and rsync must
-  finish writing to the share before anyone can read.
-- **Small files: fkbr is ahead of tar,** by 5–30%, although it does
+- **Big files: the NAS sets the pace.** Every tool takes about 20 s per
+  GiB to one target and about 38 s to three; single runs vary by up to
+  10 s, as the NAS is busy or not.
+- **Small files: fkbr is ahead of tar,** by 2–30%, although it does
   more per file: each file goes into a staging area first and is moved
   into place when everything has arrived, so nothing half-copied ever
   shows, and fkbr says done only once the copy is on the target's disk
   (below); tar extracts in place and leaves the writing to the kernel.
 - **rsync through NFS is not an option for many files:** it creates every
-  file on the share one by one, 25–50 times slower than fkbr.
+  file on the share one by one, 15–50 times slower than fkbr.
 - **borg is a backup tool:** it is three to four times slower than tar for
   small files, and its strengths (deduplication, history) do not help a
   one-off copy.
@@ -90,7 +88,7 @@ files would take about 2 h to one target. Its 200,000-file time is from
   (on XFS a truncate writes the file out at once), and move a directory
   that is new at the destination into place with one rename.
 
-## fkbr and rsync over ssh (2026-11-01, protocol 3)
+## fkbr and rsync over ssh (2026-11-04, protocol 3)
 
 The same four VMs and data, no share: the Rocky 9 VM runs fkbr's home
 node and links the targets over ssh (`fkbr ssh:HOST:/dir,...`). rsync
@@ -98,26 +96,27 @@ runs `rsync -a` over plain ssh, one per target at once. "Relayed" copies
 between two linked hosts through a third (Rocky 8): fkbr's home node
 passes the data on in memory; rsync uses `ssh -J`. Page caches dropped
 before each run, every copy checked with sha256, mean of four runs in
-two sessions that day (single runs vary by up to 1.5 s). fkbr holds the chunks it
+two sessions that day (single runs vary by up to 2.5 s). fkbr holds the chunks it
 sends in memory, never on disk.
 
 | | fkbr | rsync |
 |---|---|---|
-| 1 GiB file → 1 target | 8.6 s | **7.7 s** |
-| 1 GiB file → 3 targets | **21 s** | 22 s |
-| 1 GiB file, relayed | **9.4 s** | 11 s |
-| 20,000 files → 1 target | **3.4 s** | 3.8 s |
-| 20,000 files → 3 targets | **8.0 s** | 9.6 s |
-| 20,000 files, relayed | **3.7 s** | 4.4 s |
-| 200,000 files → 1 target | **21 s** | 27 s |
-| 200,000 files → 3 targets | **49 s** | 1 min 7 s |
-| 200,000 files, relayed | **19 s** | 28 s |
+| 1 GiB file → 1 target | **6.8 s** | 7.3 s |
+| 1 GiB file → 3 targets | **16.2 s** | 17.2 s |
+| 1 GiB file, relayed | **8.1 s** | 9.4 s |
+| 20,000 files → 1 target | **3.2 s** | 3.6 s |
+| 20,000 files → 3 targets | **7.0 s** | 8.6 s |
+| 20,000 files, relayed | **3.4 s** | 4.2 s |
+| 200,000 files → 1 target | **19 s** | 26 s |
+| 200,000 files → 3 targets | **46 s** | 1 min 4 s |
+| 200,000 files, relayed | **20 s** | 27 s |
 
-- **One big file to one target:** rsync is ahead. It streams the file and
-  leaves the writing to the kernel; fkbr packs it into chunks, each with
-  a checksum (xxh3-128) checked on both ends, and says done only once the
-  file is on the target's disk (below). To three targets fkbr is ahead:
-  it reads the file once for all of them.
+- **One big file to one target:** fkbr is about even with rsync (0.5 s
+  ahead), although it packs the file into chunks, each with a checksum
+  (xxh3-128) checked on both ends, and says done only once the file is
+  on the target's disk (below); rsync streams it and leaves the writing
+  to the kernel. To three targets fkbr reads the file once for all of
+  them.
 - **Many files, or several targets:** fkbr is ahead. It packs files into
   chunks and makes each chunk once for every target, where rsync sends
   each file on its own, once per target.

@@ -12,9 +12,9 @@ CLI.
 
 | | fkbr | tar | rsync |
 |---|---|---|---|
-| 20,000 small files → 1 host | **5.8 s** | 6.1 s | 2 min 24 s (**25× slower**) |
-| 200,000 small files → 1 host | **26 s** | 30 s | 22 min 44 s (**52× slower**) |
-| 1 GiB file → 3 hosts | **34 s** | 37 s | 38 s |
+| 20,000 small files → 1 host | **5.9 s** | 6.4 s | 2 min 22 s (**24× slower**) |
+| 200,000 small files → 1 host | **26 s** | 34 s | 22 min 44 s (**52× slower**) |
+| 950,000 small files → 1 host | **2 min 11 s** | 3 min 5 s | hours (not run) |
 
 rsync through NFS waits on the server for every file; fkbr packs small
 files into big chunks.
@@ -23,8 +23,8 @@ files into big chunks.
 
 | | fkbr | rsync |
 |---|---|---|
-| 20,000 small files → 3 hosts | **8.0 s** | 9.6 s |
-| 200,000 small files → 3 hosts | **49 s** | 1 min 7 s |
+| 20,000 small files → 3 hosts | **7.0 s** | 8.6 s |
+| 200,000 small files → 3 hosts | **46 s** | 1 min 4 s |
 
 All the numbers: `docs/benchmarks.md`.
 
@@ -54,10 +54,9 @@ All the numbers: `docs/benchmarks.md`.
 - **Sync** in one direction, incremental or mirror, over millions of files
   with flat memory use. Every sync is planned as a dry run you confirm.
   Excludes, keep-newer and a delete limit protect the target.
-- **Fast.** Faster than tar, rsync and borg through the same share in
-  every lab test, most of all with many small files or several targets;
-  over ssh faster than rsync but for one big file to one host
-  (`docs/benchmarks.md`).
+- **Fast.** Through the same share faster than tar, rsync and borg with
+  small files, as fast as tar and rsync with big ones; over ssh faster
+  than rsync in every lab test (`docs/benchmarks.md`).
 - **Crash-safe.** Atomic writes on the share, checksummed chunks and
   resumable jobs. Files are installed only after the whole transfer has
   arrived, and a copy is done only once it is on the target's disk.

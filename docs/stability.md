@@ -19,13 +19,13 @@ each fix has a test that fails without it.
 
 | | |
 |---|---:|
-| Hours of fault runs | **over 49 h** |
-| Copied trees checked against their source | **over 14,000** |
-| Faults injected (kills, stops, cuts, power cuts, full disks, …) | **over 2,400** |
+| Hours of fault runs | **over 53 h** |
+| Copied trees checked against their source | **over 14,500** |
+| Faults injected (kills, stops, cuts, power cuts, full disks, …) | **over 2,600** |
 | Files lost or corrupted, except by the first power cuts (fixed) | **0** |
-| Bugs found by these runs, each fixed with a test | **50** |
-| Tests in `go test ./...` (also run with nodes linked over ssh, and under `-race`) | **over 380** |
-| Random inputs fed to the chunk reader, the exclude matcher and the TUI | **over 9 million** |
+| Bugs found by these runs, each fixed with a test | **51** |
+| Tests in `go test ./...` (also run with nodes linked over ssh, and under `-race`) | **over 390** |
+| Random inputs fed to the chunk reader, the exclude matcher and the TUI | **over 90 million** |
 
 The full list of cases, and every bug with its test, is in
 `testplan.md`.
@@ -132,6 +132,8 @@ After every round, with the faults off:
 | 2026-10-25 | torture v2, run 7 | be23f46 | 1 h 15 min | 196 | 499 | 153 | 0 |
 | 2026-10-31 | power cuts, before the fix | 6475202 | 34 min | 10 | 10 | 10 | **1** |
 | 2026-10-31/11-01 | **every suite, twice, power cuts first** | **with the fix** | **10 h 14 min** | **over 790** | **over 2,100** | **over 730** | **1** |
+| 2026-11-04 | every suite, power cuts first | 5225f98 | 3 h 38 min | over 200 | about 560 | about 200 | **1** |
+| 2026-11-04 | power cuts again, the ssh home cut 4 times | with the link fix | 13 min | 13 | 13 | 13 | 0 |
 
 "Trees checked" counts target folders compared file by file with their
 source after a job.
@@ -149,7 +151,20 @@ left every finished copy exact and a move lost nothing; the same night's
 10 h run of every other suite found one more bug (a TUI could live on
 after SIGTERM).
 
-The last run, on be23f46 (the store confined to the share, the editor,
+**Every suite again (2026-11-04).** After the benchmarks, a mix of every
+suite for 3 h 38 min on 5225f98 found one bug: when the ssh home node
+lost power while a linked host was sending it data, that host's link
+hung for good (22 min, until killed). The dead home's sshd stopped
+reading, nothing ever reset the connection, and the link's write stayed
+in the kernel; the host could not be linked again. Files were never at
+risk: the copy run again went exact once the link was killed. Fixed the
+same day: a link's stdin and stdout go through Go's poller, so ending the
+link ends the write, and a link whose home is gone that cannot stop in
+a minute exits. The same ten power cuts, and the ssh home cut three more
+times, then passed. Torture v2 in the same run: 184 jobs under 148
+faults, every target exact or made exact by one sync.
+
+The last torture run before, on be23f46 (the store confined to the share, the editor,
 the settings dialog), found nothing in fkbr: 196 jobs under 153 faults,
 every target exact or made exact by one sync, memory at most 122 MiB
 per process, open files at most 36. It raised two alarms, both the
@@ -200,12 +215,13 @@ race detector there was no data race. There were 3 failures, all a
 ## What the runs found
 
 Each of these is fixed and has a regression test (`testplan.md`
-sections 8, 11, 13 and 14):
+sections 8, 11, 13, 14, 18 and 19):
 
 - **Jobs that gave up too soon.** A link cut of 30-45 s over ssh, or two
   short NAS drops 3 min apart, failed a copy that should have carried on.
 - **Jobs that waited forever:** for a target that was gone, or a source
-  and a target each waiting for the other after the ssh home node froze.
+  and a target each waiting for the other after the ssh home node froze;
+  and a linked host whose ssh home lost power while it was sending.
 - **Wrong answers.** A `sync` that exited 0 with nothing copied; a
   cancelled job shown as failed; a job shown running though every target
   was done.

@@ -2,18 +2,22 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"fkbr/internal/api/local"
 	"fkbr/internal/config"
 	"fkbr/internal/localfs"
 	"fkbr/internal/sshlink"
 	"fkbr/internal/sshlink/frame"
+
+	"golang.org/x/sys/unix"
 )
 
 type linkFlags struct {
@@ -76,7 +80,11 @@ func runLink(f linkFlags) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
-	r, err := sshlink.Dial(ctx, stdio{}, cfg.NodeID, buildCommit(), cfg.NFSRoot, frame.Options{}, log)
+	conn, err := linkStdio()
+	if err != nil {
+		return err
+	}
+	r, err := sshlink.Dial(ctx, conn, cfg.NodeID, buildCommit(), cfg.NFSRoot, frame.Options{}, log)
 	if err != nil {
 		return err
 	}
@@ -97,6 +105,7 @@ func runLink(f linkFlags) error {
 	case <-r.Stopping():
 	case <-r.Done():
 		log.Warn("link to the home node ended", "err", r.Err())
+		return stopWithin(n.stop, linkStopWait)
 	case <-n.exited:
 		n.c.Close()
 		return n.err
@@ -104,12 +113,71 @@ func runLink(f linkFlags) error {
 	return n.stop()
 }
 
-// stdio is this process's stdin and stdout as one connection.
-type stdio struct{}
+// pollable moves fd (the link's stdin or stdout) to a descriptor of its
+// own in non-blocking mode, so Go's poller runs it and a Close ends a Read
+// or Write in progress. sshd's pipes are blocking: there a write on a pipe
+// the dead home's sshd no longer reads stayed in the kernel for good, and
+// so did the link (power cut of the home, 2026-11-04). fd itself is
+// pointed at /dev/null: nothing else writing there can reach the home
+// node, or a file that later gets that number.
+func pollable(fd int, name string) (*os.File, error) {
+	own, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 3)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	null, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err == nil {
+		err = unix.Dup3(int(null.Fd()), fd, 0)
+		null.Close()
+	}
+	if err == nil {
+		err = unix.SetNonblock(own, true)
+	}
+	if err != nil {
+		unix.Close(own)
+		return nil, fmt.Errorf("%s: %w", name, err)
+	}
+	return os.NewFile(uintptr(own), name), nil
+}
 
-func (stdio) Read(p []byte) (int, error)  { return os.Stdin.Read(p) }
-func (stdio) Write(p []byte) (int, error) { return os.Stdout.Write(p) }
-func (stdio) Close() error {
-	os.Stdin.Close()
-	return os.Stdout.Close()
+// stdio is this process's stdin and stdout as one connection.
+type stdio struct{ in, out *os.File }
+
+func linkStdio() (stdio, error) {
+	in, err := pollable(0, "stdin")
+	if err != nil {
+		return stdio{}, err
+	}
+	out, err := pollable(1, "stdout")
+	if err != nil {
+		in.Close()
+		return stdio{}, err
+	}
+	return stdio{in, out}, nil
+}
+
+func (s stdio) Read(p []byte) (int, error)  { return s.in.Read(p) }
+func (s stdio) Write(p []byte) (int, error) { return s.out.Write(p) }
+func (s stdio) Close() error {
+	s.in.Close()
+	return s.out.Close()
+}
+
+// linkStopWait bounds a link's stop once its home node is gone.
+const linkStopWait = time.Minute
+
+// stopWithin waits up to d for stop. A link whose home is gone has nothing
+// left to finish there (its records are the home's), and one stuck in
+// stopping would keep its lock, so the home could not link this host
+// again until someone killed it. Giving up ends the process, as a kill
+// -9 would: transfers resume from the home's records.
+func stopWithin(stop func() error, d time.Duration) error {
+	res := make(chan error, 1)
+	go func() { res <- stop() }()
+	select {
+	case err := <-res:
+		return err
+	case <-time.After(d):
+		return fmt.Errorf("still stopping %s after the link ended: giving up", d)
+	}
 }

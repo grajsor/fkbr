@@ -286,6 +286,12 @@ package tests; docs/testplan.md lists them.
   ack, overlapped with applying the next chunk (`pendingAck` in recv.go),
   and in `Commit` before the staging goes. Without it a target cut after
   `done` lost the whole copy, and a `mv` had deleted the sources.
+- **A link never hangs on a dead home** (power cut, 2026-11-04): sshd's
+  pipes are blocking, and a dead home's sshd stops reading without the
+  connection ever failing. `fkbr link` moves stdin/stdout to non-blocking
+  descriptors of its own (`pollable`; fd 0/1 point at /dev/null), so
+  closing the link ends a write in progress; once the link ended, a stop
+  over 1 min ends the process (`stopWithin`).
 - **Over ssh the home node's store is a trust boundary:** linked hosts
   call it with names off the wire. Every store method checks each name
   it puts in a path (`ValidID`, roles source/target) itself;
