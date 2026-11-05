@@ -539,6 +539,7 @@ func (m *Dir) PruneJobs(ctx context.Context, maxAge time.Duration) error {
 	if err := checkAge(maxAge); err != nil {
 		return err
 	}
+	m.layout() // a link standing in for jobs/ is replaced before it is read
 	des, err := m.fs.ReadDir(m.path("jobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

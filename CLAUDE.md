@@ -233,6 +233,19 @@ package tests; docs/testplan.md lists them.
   opened for a moment is closed (`Dir.Close`). The ssh link contains a
   panicking handler to its own call (`callHandler`); job goroutines are
   left to crash and resume. Prunes refuse a negative age (`checkAge`).
+- **Source and target on one node, other filesystems, links in a root**
+  (third review pass 2026-11-05). A sync's scans are blobs named by node:
+  the source scan of a sync that targets its own node is `<node>.src.snap`
+  (`scanRequest.Name`), the targets' stay `<node>.snap`. Staging is at the
+  root's top; rename across filesystems is EXDEV, so `install` copies
+  (`copyAcross`) and `Sync` also syncs the destination's filesystem. In a
+  root that holds the share the `Hide` check looks where links lead
+  (`localfs.Real`, `lookup(follow)`, `writablePathVia`; the copy's `DstDir`
+  is resolved first). `NameRules.Key` is the target's own rule (casefold:
+  full case folding; vfat: lowercase); a folding target gets a lookahead
+  pass in the planner (`Target.Again`). Snapshot entries and path lists
+  from the share are validated when read. `jobs`, `data`, `blobs` are
+  layout folders.
 - Chunks from the share are bounded (`bundle.MaxChunkBytes` 2 GiB stored
   or unpacked, `MaxEntries` 16 M, the writer rolls before it, files 256
   TiB, `chunk_size` ≤ 1 GiB); `meta.Bad` applies after the checksum. The
@@ -416,6 +429,10 @@ pty, answer `ESC]11;?` and `ESC[6n` or nothing draws for ~5 s.
 
 ## Known, minor, not fixed
 
+- A copy across filesystems that is cut leaves `.fkbr-xdev-<job>-<hash>`
+  in the destination folder (a rerun of the same job replaces it); a
+  staged file already given to another owner needs DAC override to be
+  copied across. exFAT's name folding is not checked (no exfat mount here).
 - `/proc` files arrive empty (stat size 0, like tar/rsync).
 - A TUI attached to a TUI that quits keeps retrying the dead socket.
 - A copy to a node that just left says "destination: missing root".

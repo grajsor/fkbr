@@ -110,8 +110,15 @@ func (e *Engine) remoteCall(ctx context.Context, node, typ string, body, out any
 }
 
 // writablePath resolves a root-relative path for modification, refusing
-// the root itself and the staging area.
+// the root itself, the staging area and the share (also where a symlink
+// in the root leads to them: a link to the share is the share).
 func (e *Engine) writablePath(rootID, rel string) (string, error) {
+	return e.writablePathVia(rootID, rel, false)
+}
+
+// writablePathVia is writablePath; follow is set when the operation goes
+// through the last component too if it is a symlink (mkdir -p does).
+func (e *Engine) writablePathVia(rootID, rel string, follow bool) (string, error) {
 	c, err := localfs.CleanRel(rel)
 	if err != nil {
 		return "", err
@@ -119,11 +126,14 @@ func (e *Engine) writablePath(rootID, rel string) (string, error) {
 	if c == "." {
 		return "", fmt.Errorf("%w: refusing to modify the root itself", api.ErrBadPath)
 	}
-	if c == receive.StagingDir || strings.HasPrefix(c, receive.StagingDir+"/") {
-		return "", fmt.Errorf("%w: %s is %s's staging area", api.ErrBadPath, receive.StagingDir, product.Name)
-	}
-	if h := e.shareIn(rootID); h != "" && (c == h || strings.HasPrefix(c, h+"/") || strings.HasPrefix(h, c+"/")) {
-		return "", fmt.Errorf("%w: %s is or holds the share (%s)", api.ErrBadPath, c, h)
+	h := e.shareIn(rootID)
+	for _, p := range []string{c, e.fs.Real(rootID, c, follow)} {
+		if p == receive.StagingDir || strings.HasPrefix(p, receive.StagingDir+"/") {
+			return "", fmt.Errorf("%w: %s is %s's staging area", api.ErrBadPath, receive.StagingDir, product.Name)
+		}
+		if h != "" && (p == h || strings.HasPrefix(p, h+"/") || strings.HasPrefix(h, p+"/")) {
+			return "", fmt.Errorf("%w: %s is or holds the share (%s)", api.ErrBadPath, c, h)
+		}
 	}
 	return c, nil
 }
@@ -139,7 +149,7 @@ func (e *Engine) shareIn(rootID string) string {
 }
 
 func (e *Engine) mkdirLocal(req api.MkdirRequest) error {
-	p, err := e.writablePath(req.Root, req.Path)
+	p, err := e.writablePathVia(req.Root, req.Path, true)
 	if err != nil {
 		return err
 	}
@@ -377,8 +387,8 @@ func removeAll(root *os.Root, p string) error {
 		}
 		return nil
 	})
-	if fi, err := root.Lstat(path.Dir(p)); err == nil && fi.Mode().Perm()&0o200 == 0 && root.Chmod(path.Dir(p), fi.Mode().Perm()|0o200) == nil {
-		defer root.Chmod(path.Dir(p), fi.Mode().Perm())
+	if fi, err := root.Lstat(path.Dir(p)); err == nil && fi.Mode().Perm()&0o200 == 0 && root.Chmod(path.Dir(p), localfs.ModeBits(fi.Mode())|0o200) == nil {
+		defer root.Chmod(path.Dir(p), localfs.ModeBits(fi.Mode()))
 	}
 	return root.RemoveAll(p)
 }

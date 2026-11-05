@@ -482,6 +482,37 @@ Left as they are:
 - `workerLock.take` recurses without a bound if the lock path is replaced
   between its two syscalls every time; a bounded loop would do.
 
+## 21. Third pass of the second model's review (2026-11-05)
+
+A third pass went after paths the first two had not: syncs from a node to
+itself, links inside a root, destinations on other filesystems, the prune
+layout. Eight of its ten findings were real and reproduced (the review's
+own reproductions, then ours); each is fixed with a test that fails on the
+build before. Why none of the earlier runs met them: every sync went from
+one node to another, every destination was on the root's own filesystem,
+and the odd filesystems we tried were whole roots, never a mount below
+one.
+
+| Found | Now | Test |
+|---|---|---|
+| A sync from a node to itself (a folder into another, or between two roots) planned nothing and applied nothing: the source's scan and the target's were written to one blob, `scans/<plan>/<node>.snap`, and the planner read that as both sides | The source scan of a sync that has the node among its targets is written to `<node>.src.snap` (the request's `name`, checked on the node: only its own `.src`); targets keep `<node>.snap`, which `scannedBelow` and older nodes read. An older node as such a source gives an error (blob not found) where it gave a silent no-op | `TestSyncOnOneNode` (same root, other root, mirror delete, second plan empty), `TestSyncOnOneNodeWithExcludes`, `TestSyncOnOneNodeAndAnother` |
+| A destination below a mount point (a drive under the root, a tmpfs, a bind mount): staging is at the root's top, rename across filesystems is `EXDEV`, and the job ended `done` with an error for every file (real tmpfs: 2 files and 7 errors of 9) | On `EXDEV` the staged file or link is copied into a temporary file in the destination's folder (holes stay holes; mode, mtime, owner as staged; fsync), renamed into place, and the staged one removed; the destination's filesystem is synced (`Receiver.Sync`) too. A staged file already given to another owner needs DAC override to be read back; without it the copy reports the error. A copy that is cut leaves `.fkbr-xdev-<job>-<hash>` in that folder | `TestInstallAcrossFilesystems` (EXDEV simulated, new and existing folder, same result as a rename), `TestCopyAcrossKeepsHoles`, `TestCopyToAnotherFilesystem` (a real tmpfs; `FKBR_TEST_MOUNT=1`, sudo) |
+| `Hide` (the share inside a root) was checked on the path as written: `link/x` with `link -> box` listed, read, wrote, made folders in and removed from the share. A remove through one deleted the share's `info.json` | `localfs.Real` follows the links inside the root (only in a root that holds the share); lookup, list, open, mkdir, remove and the destination of a copy use where the path leads. Links themselves stay entries | `TestHideFollowsSymlinks`, `TestShareThroughSymlink` |
+| A relative link in place of `jobs`, `blobs` or `data` to another folder of the share made `PruneBlobs`, `PruneJobs` and the orphan sweep delete what is in that folder (the share only refuses links that leave it) | `jobs`, `data` and `blobs` are layout folders: made again if a link or file stands there, and `PruneJobs` and `PruneBlobs` do it first | `TestPruneThroughLinkToSiblingFolder` |
+| A target that holds `readme` while the source has `README` (it sorts first): the plan sent `README`, the receiver found the name taken, and no sync ever settled. Both spellings at the source with `readme` at the target the same | A target that folds names gets a pass over its snapshot and one over the source's before the merge (`Target.Again`, `PlanOptions.SrcAgain`); source names that fold onto another spelling the target keeps (a mirror keeps it only if the source has it too) are left out and reported | `TestPlanFoldedTargetNamesAhead` |
+| `NameRules.Key` lowercased: `straße`/`STRASSE` and `Σ`/`ς` are one name on a casefold ext4 (checked on one) but two keys | Casefold uses Unicode full case folding (`cases.Fold`). vfat stays lowercasing: on a vfat mount `σ` and `Σ` are one name and `Σ` and `ς` two (checked). exFAT could not be mounted on this kernel, so it is unchecked and unchanged | `TestNameRulesKey` |
+| A snapshot or plan list off the share was not checked: `../outside` read back as such | A snapshot entry must be a clean relative path of a known type; a path list line must pass `CleanRel` | `TestReaderRejectsBadEntries`, `TestReadPathListRefusesBadPaths` |
+| The temporary chmod of a read-only folder (receive, remove) restored `Perm()` only: setgid and sticky were lost | The whole mode is restored (`localfs.ModeBits`) | `TestReadOnlyDirKeepsSetgidAndSticky`, `TestRemoveKeepsParentSetgidAndSticky` |
+| The first 256 events of a subscriber's snapshot were kept, the rest dropped and counted as seen, so never sent | The channel is as big as the snapshot plus 256 | `TestSubscribeSnapshotIsComplete` (255 of 300 before) |
+| (Notes of the review) The map of refreshed directories in a long-running NFS node grew for ever; `protocol.md` said a plan is applied "at most once" where the code says two nodes in one instant can both pass | The map forgets directories untouched for a minute past 1024; the document says what the code does | `TestRefresherForgetsOldDirectories` |
+
+Left as decisions, not defects: the textual overlap checks of a sync or a
+move on one node with overlapping roots, or two nodes exposing the same
+directory (finding 9), and the admission limits of section 20 (finding 10).
+Harness: `torture.py` treats the staging a deliberately failed job leaves
+(edge `ro`, `inodes`) as a note for 10 min (a prune sweeps it), not as a
+finding.
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

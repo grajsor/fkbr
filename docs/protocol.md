@@ -319,8 +319,9 @@ is one-way, in `incremental` mode (copy new and changed entries) or
 
 1. **Scan.** The planning engine sends `scan` to the source and to every
    target, and scans in parallel. Each node walks its directory and writes
-   a snapshot to `blobs/scans/<plan>/<node>.snap`: zstd-compressed JSON lines in
-   walk order (depth-first, names sorted per directory), after a header.
+   a snapshot to `blobs/scans/<plan>/<node>.snap` (the source's, when it is
+   also one of the targets, to `<node>.src.snap`: the request's `name`):
+   zstd-compressed JSON lines in walk order (depth-first, names sorted per directory), after a header.
    Progress comes back as non-final reply parts every 2 seconds (entries,
    bytes, errors, and `dir`: the folder the walk is in, root-relative;
    older builds send none). A scan
@@ -371,7 +372,10 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    there is refused (feature `recheck`). Then each group becomes a transfer job with
    `paths_blob`, `base_dir` = `src_path` and `no_recurse` (each listed
    entry is sent alone), with conflict policy `overwrite`. A plan is
-   applied at most once.
+   applied once: the node marks it before anything runs, and applies
+   through one node are serialised. Two nodes applying the same plan at
+   the same instant can both pass the mark, as the share has no exclusive
+   create.
 
 Offline members of a `@role` destination are skipped and listed; the
 next sync catches them up. Plans and snapshots are pruned after

@@ -38,6 +38,11 @@ type FS interface {
 	Open(rootID, rel string) (*os.File, error)
 	// WritableRoot returns the os.Root handle of a root that allows writes.
 	WritableRoot(rootID string) (*os.Root, error)
+	// Real is rel with the symlinks inside the root followed (the last
+	// component too if follow is set; a part that does not exist is kept as
+	// written). Only a root that holds the share (config.Root.Hide) is
+	// resolved: that is what the share check must look at.
+	Real(rootID, rel string, follow bool) string
 	// CheckRoots returns ErrRootGone if a root's directory was deleted,
 	// moved or replaced since it was opened.
 	CheckRoots() error
@@ -73,9 +78,17 @@ func CleanRel(rel string) (string, error) {
 	return c, nil
 }
 
+// ModeBits is the mode to give back to a directory that was made writable
+// for a moment: its permissions and its setuid, setgid and sticky bits
+// (FileMode.Perm alone drops them).
+func ModeBits(m fs.FileMode) fs.FileMode {
+	return m & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
+}
+
 type root struct {
-	cfg config.Root
-	r   *os.Root
+	cfg  config.Root
+	r    *os.Root
+	real string // the root's own path with symlinks resolved
 }
 
 // Local is the real FS over the configured roots.
@@ -94,7 +107,11 @@ func Open(roots []config.Root) (*Local, error) {
 			l.Close()
 			return nil, fmt.Errorf("root %q: %w", rc.ID, err)
 		}
-		l.roots[rc.ID] = &root{cfg: rc, r: r}
+		real, err := filepath.EvalSymlinks(rc.Path)
+		if err != nil {
+			real = filepath.Clean(rc.Path)
+		}
+		l.roots[rc.ID] = &root{cfg: rc, r: r, real: real}
 		l.order = append(l.order, api.Root{ID: rc.ID, Path: rc.Path, Writable: rc.AllowWrite, Local: rc.Local})
 	}
 	return l, nil
@@ -134,7 +151,10 @@ func (l *Local) CheckRoots() error {
 	return nil
 }
 
-func (l *Local) lookup(rootID, rel string) (*root, string, error) {
+// lookup checks rootID and rel. follow: the operation goes through rel's
+// last component if it is a symlink (open, list), so where that leads
+// counts for the share check, not only where the path says.
+func (l *Local) lookup(rootID, rel string, follow bool) (*root, string, error) {
 	r, ok := l.roots[rootID]
 	if !ok {
 		return nil, "", fmt.Errorf("%w: %q", api.ErrUnknownRoot, rootID)
@@ -143,7 +163,7 @@ func (l *Local) lookup(rootID, rel string) (*root, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if r.hidden(c) {
+	if r.hidden(c) || r.hidden(r.resolve(c, follow)) {
 		return nil, "", &fs.PathError{Op: "open", Path: c, Err: fs.ErrNotExist}
 	}
 	return r, c, nil
@@ -156,13 +176,75 @@ func (l *Local) Hidden(rootID, rel string) bool {
 	return ok && r.hidden(rel)
 }
 
+// Real: see FS.
+func (l *Local) Real(rootID, rel string, follow bool) string {
+	r, ok := l.roots[rootID]
+	if !ok {
+		return rel
+	}
+	return r.resolve(rel, follow)
+}
+
+// resolve follows the symlinks of rel inside the root, as the kernel does
+// for a path opened through os.Root (which refuses to leave the root: a
+// link that leaves it is left as it is here). Only done where it matters,
+// in a root that holds the share.
+func (r *root) resolve(rel string, follow bool) string {
+	if r.cfg.Hide == "" || rel == "." || rel == "" {
+		return rel
+	}
+	parts := strings.Split(rel, "/")
+	cur := ""
+	for links := 0; len(parts) > 0; {
+		name := parts[0]
+		parts = parts[1:]
+		next := path.Join(cur, name)
+		fi, err := r.r.Lstat(next)
+		if err != nil {
+			// Not there: the rest is as written.
+			return path.Join(append([]string{next}, parts...)...)
+		}
+		if fi.Mode()&fs.ModeSymlink == 0 || !follow && len(parts) == 0 {
+			cur = next
+			continue
+		}
+		if links++; links > 40 {
+			return rel
+		}
+		target, err := r.r.Readlink(next)
+		if err != nil {
+			return rel
+		}
+		if path.IsAbs(target) {
+			t, ok := strings.CutPrefix(path.Clean(target), filepath.ToSlash(r.real))
+			if !ok || t != "" && t[0] != '/' {
+				return rel // outside the root: os.Root refuses it
+			}
+			target = strings.TrimPrefix(t, "/")
+			cur = ""
+		}
+		joined := path.Join(cur, target)
+		if joined == ".." || strings.HasPrefix(joined, "../") {
+			return rel
+		}
+		cur = ""
+		if joined != "." {
+			parts = append(strings.Split(joined, "/"), parts...)
+		}
+	}
+	if cur == "" {
+		return "."
+	}
+	return cur
+}
+
 func (r *root) hidden(rel string) bool {
 	h := r.cfg.Hide
 	return h != "" && (rel == h || strings.HasPrefix(rel, h+"/"))
 }
 
 func (l *Local) List(rootID, rel string) ([]api.Entry, error) {
-	r, rel, err := l.lookup(rootID, rel)
+	r, rel, err := l.lookup(rootID, rel, true)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +281,7 @@ func (l *Local) List(rootID, rel string) ([]api.Entry, error) {
 }
 
 func (l *Local) Stat(rootID, rel string) (api.Entry, error) {
-	r, rel, err := l.lookup(rootID, rel)
+	r, rel, err := l.lookup(rootID, rel, false)
 	if err != nil {
 		return api.Entry{}, err
 	}
@@ -207,7 +289,7 @@ func (l *Local) Stat(rootID, rel string) (api.Entry, error) {
 }
 
 func (l *Local) Open(rootID, rel string) (*os.File, error) {
-	r, rel, err := l.lookup(rootID, rel)
+	r, rel, err := l.lookup(rootID, rel, true)
 	if err != nil {
 		return nil, err
 	}
@@ -226,7 +308,7 @@ func (l *Local) WritableRoot(rootID string) (*os.Root, error) {
 }
 
 func (l *Local) Walk(rootID, rel string, fn WalkFunc) error {
-	r, rel, err := l.lookup(rootID, rel)
+	r, rel, err := l.lookup(rootID, rel, false)
 	if err != nil {
 		return err
 	}

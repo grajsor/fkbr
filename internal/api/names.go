@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
+	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -295,10 +297,27 @@ func (n NameRules) Key(name string) string {
 		name = norm.NFC.String(name)
 	}
 	if n.Fold {
-		name = strings.ToLower(name)
+		if n.FS == "casefold" {
+			// ext4 and f2fs casefold compare by Unicode full case folding:
+			// straße is STRASSE, ς is Σ (seen on a casefold ext4).
+			c := foldCasers.Get().(*cases.Caser)
+			c.Reset()
+			name = c.String(name)
+			foldCasers.Put(c)
+			if n.Form {
+				name = norm.NFC.String(name)
+			}
+		} else {
+			// vfat, exFAT: letter by letter (σ and Σ one name, Σ and ς not,
+			// seen on a vfat mount).
+			name = strings.ToLower(name)
+		}
 	}
 	return name
 }
+
+// foldCasers holds *cases.Caser, which is not safe for concurrent use.
+var foldCasers = sync.Pool{New: func() any { c := cases.Fold(); return &c }}
 
 func (s ScanProgress) MarshalJSON() ([]byte, error) {
 	type plain ScanProgress

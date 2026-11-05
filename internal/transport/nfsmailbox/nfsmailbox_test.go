@@ -2,6 +2,7 @@ package nfsmailbox
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -71,5 +72,28 @@ func TestRefreshMissingDirRefreshesParent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(parent, "job")); !os.IsNotExist(err) {
 		t.Errorf("refresh created the missing directory: %v", err)
+	}
+}
+
+// The map of refreshed directories does not grow for ever: a node that ran
+// for months had a key for every job directory it ever read (review
+// 2026-11-05).
+func TestRefresherForgetsOldDirectories(t *testing.T) {
+	share := t.TempDir()
+	r := newRefresher(share, "a")
+	touch := func(string) error { return nil }
+	for i := range 3 * refreshKeep {
+		r.at[filepath.Join(share, "jobs", fmt.Sprint(i))] = time.Now().Add(-time.Hour)
+	}
+	r.fresh(filepath.Join(share, "jobs", "new"), touch)
+	if n := len(r.at); n > 2 {
+		t.Errorf("%d directories remembered after the old ones should be gone", n)
+	}
+	// Recent ones stay, so the throttle still holds.
+	for i := range refreshKeep + 10 {
+		r.fresh(filepath.Join(share, "jobs", fmt.Sprint("r", i)), touch)
+	}
+	if n := len(r.at); n < refreshKeep {
+		t.Errorf("recent directories were forgotten: %d", n)
 	}
 }

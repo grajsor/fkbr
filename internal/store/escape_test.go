@@ -171,3 +171,46 @@ func TestOpenUpOnlyLayout(t *testing.T) {
 	}
 	check()
 }
+
+// A layout folder replaced by a link to another folder of the share (not
+// outside it, which the share refuses) is made again before a prune reads
+// it: PruneBlobs through blobs -> data deleted a job's staged chunks, and
+// PruneJobs through jobs -> data a job's folder (review 2026-11-05).
+func TestPruneThroughLinkToSiblingFolder(t *testing.T) {
+	for _, c := range []struct {
+		link, to, victim string
+		age              time.Duration
+	}{
+		{"blobs", "data", "data/victim/keep", 5 * time.Hour},
+		{"jobs", "data", "data/victim/job.json", 5 * time.Hour},
+		// pruneOrphanData reads data/<self>; PruneJobs would take an older
+		// folder of jobs/ as an orphan job, so it is a minute old.
+		{"data", "jobs", "jobs/a/keep", time.Minute},
+	} {
+		t.Run(c.link+"->"+c.to, func(t *testing.T) {
+			share := t.TempDir()
+			m := open(t, share, "a")
+			v := filepath.Join(share, c.victim)
+			os.MkdirAll(filepath.Dir(v), 0o777)
+			os.WriteFile(v, []byte("x"), 0o666)
+			old := time.Now().Add(-c.age)
+			for _, p := range []string{v, filepath.Dir(v)} {
+				os.Chtimes(p, old, old)
+			}
+			l := filepath.Join(share, c.link)
+			os.RemoveAll(l) // the real folder (and what it held)
+			if err := os.Symlink(c.to, l); err != nil {
+				t.Fatal(err)
+			}
+			m.Prune(ctx, 0)
+			m.PruneJobs(ctx, 0)
+			m.PruneBlobs(ctx, 0)
+			if _, err := os.Stat(v); err != nil {
+				t.Errorf("%s -> %s: a prune deleted %s: %v", c.link, c.to, c.victim, err)
+			}
+			if fi, err := os.Lstat(l); err != nil || !fi.IsDir() {
+				t.Errorf("%s was not made a folder again: %v", c.link, err)
+			}
+		})
+	}
+}

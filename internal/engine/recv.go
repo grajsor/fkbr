@@ -52,7 +52,13 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 		return status.finish(ctx, api.JobFailed, err)
 	}
 	_, noModes := localfs.Limits(e.dstPath(req.DstRoot, req.DstDir))
-	rcv, err := receive.New(root, id, req.DstDir, receive.Options{
+	// Where the destination really is: a link in the root to the share must
+	// meet the share check as the share (the receiver looks at the path).
+	dstDir := req.DstDir
+	if c, err := localfs.CleanRel(dstDir); err == nil {
+		dstDir = e.fs.Real(req.DstRoot, c, true)
+	}
+	rcv, err := receive.New(root, id, dstDir, receive.Options{
 		NoModes:    noModes,
 		Conflict:   req.Conflict,
 		Chown:      e.info.ChownCapable,

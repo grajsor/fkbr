@@ -193,7 +193,9 @@ func (m *Dir) Self() string { return m.self }
 // share heals instead of failing until every node restarts. It never
 // recreates a job's directories: a pruned job stays gone.
 func (m *Dir) layout() error {
-	dirs := []string{"tmp", "nodes", "inbox", "reply"}
+	// jobs, data and blobs are folders too: the prunes read them, and one
+	// that is a link to another folder of the share would send them there.
+	dirs := []string{"tmp", "nodes", "inbox", "reply", "jobs", "data", "blobs"}
 	if m.registered.Load() {
 		dirs = append(dirs, m.inbox(m.self, "new"), m.inbox(m.self, "cur"), m.inbox(m.self, "failed"),
 			filepath.Join("reply", m.self), filepath.Join("nodes", m.self))

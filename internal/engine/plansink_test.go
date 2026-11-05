@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"testing"
 
 	"fkbr/internal/api"
@@ -59,6 +61,22 @@ func TestPlanSinkCommitFailureAbortsWriters(t *testing.T) {
 	for i, w := range st.writers {
 		if !w.aborted {
 			t.Errorf("writer %d was left open", i)
+		}
+	}
+}
+
+// A plan's path list comes off the share: a path that leaves the root or is
+// absolute ends the read; names of any other kind pass.
+func TestReadPathListRefusesBadPaths(t *testing.T) {
+	good := "\".\"\n\"a/b c\"\n\"caf\\xe9\"\n"
+	var got []string
+	if err := readPathList(strings.NewReader(good), func(p string) error { got = append(got, p); return nil }); err != nil || len(got) != 3 {
+		t.Fatalf("a good list: %v %q", err, got)
+	}
+	for _, bad := range []string{"../x", "/etc/passwd", "a/../../x", "a\x00b"} {
+		err := readPathList(strings.NewReader(strconv.Quote(bad)+"\n"), func(string) error { return nil })
+		if err == nil {
+			t.Errorf("path %q was read", bad)
 		}
 	}
 }

@@ -670,3 +670,38 @@ func TestCommitSyncs(t *testing.T) {
 		t.Fatalf("staging left: %v", err)
 	}
 }
+
+// The directory made writable for a moment gets its whole mode back, not
+// only the permission bits: setgid and sticky stay (review 2026-11-05).
+func TestReadOnlyDirKeepsSetgidAndSticky(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root ignores directory permissions")
+	}
+	_, dstDir, src, dst := setup(t)
+	ro := filepath.Join(dstDir, "ro")
+	os.MkdirAll(ro, 0o755)
+	want := os.FileMode(0o555) | os.ModeSetgid | os.ModeSticky
+	if err := os.Chmod(ro, want); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(ro, 0o755) })
+	if fi, _ := os.Stat(ro); fi.Mode() != want|os.ModeDir {
+		t.Skipf("this filesystem keeps %v of %v", fi.Mode(), want)
+	}
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, err := New(dst, "job1", "ro", Options{Conflict: api.ConflictOverwrite})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r, s, 0)
+	res, err := r.Commit()
+	if err != nil || res.Errors != 0 {
+		t.Fatalf("Commit: %+v %v", res, err)
+	}
+	if _, err := os.Stat(filepath.Join(ro, "tree", "sub", "big.bin")); err != nil {
+		t.Fatalf("nothing installed: %v", err)
+	}
+	if fi, _ := os.Stat(ro); fi.Mode() != want|os.ModeDir {
+		t.Errorf("mode %v, want %v", fi.Mode(), want|os.ModeDir)
+	}
+}

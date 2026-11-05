@@ -238,3 +238,74 @@ func TestMtimeRange(t *testing.T) {
 		t.Errorf("implausible range %d..%d", lo, hi)
 	}
 }
+
+// The share inside a root is hidden where a link leads to it, not only
+// where a path says so (review 2026-11-05).
+func TestHideFollowsSymlinks(t *testing.T) {
+	root := t.TempDir()
+	must(t, os.MkdirAll(filepath.Join(root, "box/sub"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "box/secret"), []byte("x"), 0o600))
+	must(t, os.WriteFile(filepath.Join(root, "box/sub/deep"), []byte("x"), 0o600))
+	must(t, os.MkdirAll(filepath.Join(root, "d/e"), 0o755))
+	must(t, os.WriteFile(filepath.Join(root, "d/ok.txt"), []byte("fine"), 0o644))
+	for l, target := range map[string]string{
+		"link":     "box",     // to the share
+		"ln2":      "box/sub", // into it
+		"d/up":     "../box",  // relative, from a folder
+		"abs":      filepath.Join(root, "box"),
+		"chain":    "link",               // a link to a link
+		"d/e/back": "../../d/../box/sub", // with ..
+		"fine":     "d",                  // not the share
+		"dangling": "nowhere",
+		"loop1":    "loop2",
+		"loop2":    "loop1",
+		"outside":  "/etc",
+	} {
+		must(t, os.Symlink(target, filepath.Join(root, l)))
+	}
+	l, err := Open([]config.Root{{ID: "files", Path: root, Hide: "box"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	hidden := []string{"box", "box/secret", "link", "link/secret", "ln2", "ln2/deep", "d/up", "d/up/secret", "abs", "abs/secret",
+		"chain", "chain/secret", "d/e/back", "d/e/back/deep"}
+	for _, p := range hidden {
+		if f, err := l.Open("files", p); err == nil {
+			f.Close()
+			t.Errorf("Open(%s) reached the share", p)
+		}
+		if _, err := l.List("files", p); err == nil {
+			t.Errorf("List(%s) reached the share", p)
+		}
+	}
+	// The links themselves are entries of the root, and their parents are
+	// where they are; what does not lead to the share is not hidden.
+	for _, p := range []string{"link", "ln2", "d/up", "chain", "dangling", "loop1", "outside"} {
+		if e, err := l.Stat("files", p); err != nil || e.Type != api.TypeSymlink {
+			t.Errorf("Stat(%s) = %+v, %v; the link itself is an entry", p, e, err)
+		}
+	}
+	for _, p := range []string{"d", "d/ok.txt", "fine/ok.txt", "fine/e"} {
+		if _, err := l.Stat("files", p); err != nil {
+			t.Errorf("Stat(%s): %v", p, err)
+		}
+	}
+	if f, err := l.Open("files", "fine/ok.txt"); err != nil {
+		t.Errorf("Open(fine/ok.txt): %v", err)
+	} else {
+		f.Close()
+	}
+	// What cannot be resolved is left to os.Root, which refuses it or finds nothing.
+	for _, p := range []string{"dangling/x", "loop1/x", "nothing/x"} {
+		if got := l.Real("files", p, true); got == "" {
+			t.Errorf("Real(%s) is empty", p)
+		}
+	}
+	if got := l.Real("files", "d/e/back/deep", true); got != "box/sub/deep" {
+		t.Errorf("Real(d/e/back/deep) = %q, want box/sub/deep", got)
+	}
+	if got := l.Real("files", "link", false); got != "link" {
+		t.Errorf("Real(link, no follow) = %q, want link", got)
+	}
+}

@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
@@ -199,7 +200,26 @@ func (r *Reader) raw() (*Entry, error) {
 		return nil, fmt.Errorf("snapshot line: %w", err)
 	}
 	e.P, e.L = api.DecodeName(e.P), api.DecodeName(e.L)
+	if err := validEntry(&e); err != nil {
+		return nil, err
+	}
 	return &e, nil
+}
+
+// validEntry refuses what a scan never writes: a path that is not clean
+// and relative to the base (the snapshot comes off the share, and plans
+// join these paths to a root), or a type it does not know.
+func validEntry(e *Entry) error {
+	switch e.T {
+	case TypeFile, TypeDir, TypeSymlink, TypeOther, TypeError:
+	default:
+		return fmt.Errorf("snapshot: entry %q has type %q", e.P, e.T)
+	}
+	p := e.P
+	if p != "." && (p == "" || strings.ContainsRune(p, 0) || path.IsAbs(p) || path.Clean(p) != p || p == ".." || strings.HasPrefix(p, "../")) {
+		return fmt.Errorf("snapshot: bad path %q", p)
+	}
+	return nil
 }
 
 // Next returns the next entry or io.EOF. A directory followed by an error

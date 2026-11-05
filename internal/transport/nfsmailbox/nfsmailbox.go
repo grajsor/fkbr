@@ -39,8 +39,14 @@ func Open(root, self string, opts Options) (*store.Dir, error) {
 	return store.Open(root, self, so)
 }
 
-// refreshEvery throttles directory refreshes per directory.
-const refreshEvery = 100 * time.Millisecond
+// refreshEvery throttles directory refreshes per directory. Over
+// refreshKeep directories remembered, those untouched for refreshForget are
+// dropped.
+const (
+	refreshEvery  = 100 * time.Millisecond
+	refreshKeep   = 1024
+	refreshForget = time.Minute
+)
 
 type refresher struct {
 	root, self string
@@ -63,6 +69,15 @@ func (r *refresher) fresh(dir string, touch func(path string) error) {
 		return
 	}
 	r.at[dir] = now
+	if len(r.at) > refreshKeep {
+		// Directories of jobs long done: forget those not refreshed for
+		// a while (a stale entry only skips the throttle).
+		for d, t := range r.at {
+			if now.Sub(t) > refreshForget {
+				delete(r.at, d)
+			}
+		}
+	}
 	r.mu.Unlock()
 	p := filepath.Join(dir, fmt.Sprintf(".r-%s-%d", r.self, r.seq.Add(1)))
 	err := touch(p)

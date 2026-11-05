@@ -42,6 +42,27 @@ type scanRequest struct {
 	// Target: the scan is of a destination, which may probe what its
 	// filesystem can store (it writes a temporary file).
 	Target bool `json:"target,omitempty"`
+	// Name is the base of the scan's blobs when it is not the node's ID:
+	// srcScanName, for the source scan of a sync that has this node among
+	// its targets too. Both scans would write one blob otherwise, and the
+	// planner read that one as both sides. Targets keep the node's ID
+	// (scannedBelow and older nodes read them by it).
+	Name string `json:"name,omitempty"`
+}
+
+// srcScanName is the blob base of node's scan as the source of a sync
+// that also targets it.
+func srcScanName(node string) string { return node + ".src" }
+
+// scanBase is the base of the blob names of the scan req on this node.
+func (e *Engine) scanBase(req scanRequest) (string, error) {
+	switch req.Name {
+	case "":
+		return e.Self(), nil
+	case srcScanName(e.Self()):
+		return req.Name, nil
+	}
+	return "", fmt.Errorf("%w: scan name %q", api.ErrBadPath, req.Name)
 }
 
 func snapshotBlob(planID, node string) string { return "scans/" + planID + "/" + node + ".snap" }
@@ -52,7 +73,11 @@ func planBlob(planID string) string          { return "plans/" + planID + "/plan
 
 // scanLocal snapshots root/path into the share.
 func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(inventory.ScanStats)) (*inventory.ScanStats, error) {
-	w, err := e.st.CreateBlob(ctx, snapshotBlob(req.PlanID, e.Self()))
+	base, err := e.scanBase(req)
+	if err != nil {
+		return nil, err
+	}
+	w, err := e.st.CreateBlob(ctx, snapshotBlob(req.PlanID, base))
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +129,7 @@ func (e *Engine) scanLocal(ctx context.Context, req scanRequest, progress func(i
 		return nil, err
 	}
 	if len(holders) > 0 {
-		hw, err := e.st.CreateBlob(ctx, holdersBlob(req.PlanID, e.Self()))
+		hw, err := e.st.CreateBlob(ctx, holdersBlob(req.PlanID, base))
 		if err != nil {
 			return nil, err
 		}
@@ -298,14 +323,17 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 	errs := make([]error, len(nodesToScan))
 	var wg sync.WaitGroup
 	for i, n := range nodesToScan {
-		root, path := req.DstRoot, req.DstPath
+		root, path, name := req.DstRoot, req.DstPath, ""
 		if i == 0 {
 			root, path = req.SrcRoot, req.SrcPath
+			if slices.Contains(targets, req.SrcNode) {
+				name = srcScanName(req.SrcNode)
+			}
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			stats[i], errs[i] = e.scan(ctx, n, scanRequest{PlanID: plan.ID, Root: root, Path: path, Checksum: req.Checksum, Exclude: req.Exclude, Target: i > 0})
+			stats[i], errs[i] = e.scan(ctx, n, scanRequest{PlanID: plan.ID, Root: root, Path: path, Checksum: req.Checksum, Exclude: req.Exclude, Target: i > 0, Name: name})
 		}()
 	}
 	wg.Wait()
@@ -318,8 +346,8 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		return nil, fmt.Errorf("%w: source %s:%s/%s does not exist", api.ErrBadPath, req.SrcNode, req.SrcRoot, req.SrcPath)
 	}
 
-	open := func(node string) (*inventory.Reader, io.Closer, error) {
-		rc, err := e.st.OpenBlob(ctx, snapshotBlob(plan.ID, node))
+	open := func(node, base string) (*inventory.Reader, io.Closer, error) {
+		rc, err := e.st.OpenBlob(ctx, snapshotBlob(plan.ID, base))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -330,7 +358,16 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		}
 		return r, rc, nil
 	}
-	srcRd, c, err := open(req.SrcNode)
+	// again opens a snapshot once more, for the planner's lookahead at names
+	// a folding target holds.
+	again := func(node, base string) func() (*inventory.Reader, io.Closer, error) {
+		return func() (*inventory.Reader, io.Closer, error) { return open(node, base) }
+	}
+	srcBase := req.SrcNode
+	if slices.Contains(targets, req.SrcNode) {
+		srcBase = srcScanName(req.SrcNode)
+	}
+	srcRd, c, err := open(req.SrcNode, srcBase)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +375,7 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 	defer srcRd.Close()
 	var its []inventory.Target
 	for _, t := range targets {
-		r, c, err := open(t)
+		r, c, err := open(t, t)
 		if err != nil {
 			return nil, err
 		}
@@ -349,10 +386,10 @@ func (e *Engine) PlanSync(ctx context.Context, req api.SyncRequest) (*api.SyncPl
 		if err != nil {
 			return nil, err
 		}
-		its = append(its, inventory.Target{Node: t, Snap: r, Chown: n.ChownCapable, ChownDirs: n.ChownCapable && n.DACOverride, Holders: holders})
+		its = append(its, inventory.Target{Node: t, Snap: r, Chown: n.ChownCapable, ChownDirs: n.ChownCapable && n.DACOverride, Holders: holders, Again: again(t, t)})
 	}
 	sink := &planSink{e: e, ctx: ctx, plan: plan, targets: targets, groups: map[uint64]*listWriter{}, deletes: map[int]*listWriter{}}
-	ps, err := inventory.Plan(srcRd, its, inventory.PlanOptions{Mirror: req.Mode == api.SyncMirror, Checksum: req.Checksum, KeepNewer: req.KeepNewer}, sink)
+	ps, err := inventory.Plan(srcRd, its, inventory.PlanOptions{Mirror: req.Mode == api.SyncMirror, Checksum: req.Checksum, KeepNewer: req.KeepNewer, SrcAgain: again(req.SrcNode, srcBase)}, sink)
 	if err != nil {
 		sink.abort()
 		return nil, err
@@ -557,6 +594,11 @@ func readPathList(r io.Reader, fn func(string) error) error {
 	for sc.Scan() {
 		p, err := strconv.Unquote(sc.Text())
 		if err != nil {
+			return fmt.Errorf("path list: %w", err)
+		}
+		// Off the share: a path that climbs out of the root or is absolute
+		// is a damaged or forged list, not a path to act on.
+		if _, err := localfs.CleanRel(p); err != nil {
 			return fmt.Errorf("path list: %w", err)
 		}
 		if err := fn(p); err != nil {

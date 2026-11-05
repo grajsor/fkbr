@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -479,5 +480,92 @@ func TestPlanNamesTheTargetCannotStore(t *testing.T) {
 	Plan(snap(t, dir("."), file("readme", 1)), []Target{{Node: "fat", Snap: snapH(t, h, dir("."), file("README", 1))}}, PlanOptions{Mirror: true}, s)
 	if s.copies["readme"] == 0 || len(s.deletes[0]) != 1 {
 		t.Errorf("mirror over a case-only rename: copies %v deletes %v", s.copies, s.deletes)
+	}
+}
+
+// A snapshot comes off the share: paths that leave the scan base, odd
+// forms of one and unknown types are corruption, not entries (review
+// 2026-11-05: "../outside" was read back as it was).
+func TestReaderRejectsBadEntries(t *testing.T) {
+	for _, p := range []string{"../outside", "/abs", "a/../../x", "a/../b", "a//b", "a/./b", "", "a/", "x\x00y", ".."} {
+		r := snap(t, dir("."), file(p, 1))
+		var err error
+		for err == nil {
+			_, err = r.Next()
+		}
+		if err == io.EOF {
+			t.Errorf("path %q was accepted", p)
+		}
+	}
+	r := snap(t, dir("."), Entry{P: "t", T: "x"})
+	var err error
+	for err == nil {
+		_, err = r.Next()
+	}
+	if err == io.EOF {
+		t.Error("an unknown entry type was accepted")
+	}
+	// What is fine stays fine: nested names, spaces, bytes that are no UTF-8.
+	r = snap(t, dir("."), dir("a"), file("a/b c", 1), file("a/\xffz", 1), Entry{P: "e", T: TypeError, E: "x"})
+	n := 0
+	for {
+		_, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("a good snapshot: %v", err)
+		}
+		n++
+	}
+	if n != 5 {
+		t.Errorf("%d entries read, want 5", n)
+	}
+}
+
+// foldPlan plans src into one FAT target with the lookahead for names the
+// target holds further on (Again readers).
+func foldPlan(t *testing.T, opts PlanOptions, src, dst []Entry) (*recSink, *PlanStats) {
+	t.Helper()
+	h := Header{Node: "fat", MtimeStep: 2, NoModes: true, Names: &api.NameRules{FS: "vfat", Fold: true, ASCII: true, NoSymlinks: true}}
+	again := func(h Header, es []Entry) func() (*Reader, io.Closer, error) {
+		return func() (*Reader, io.Closer, error) { return snapH(t, h, es...), io.NopCloser(nil), nil }
+	}
+	opts.SrcAgain = again(Header{Node: "n"}, src)
+	s := newSink()
+	st, err := Plan(snapH(t, Header{Node: "n"}, src...), []Target{{Node: "fat", Snap: snapH(t, h, dst...), Again: again(h, dst)}}, opts, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, st
+}
+
+// A target name that sorts after the source's spelling of it (readme after
+// README) is known before the source entry is planned: README is left out,
+// not sent to a clash at install that no sync ever settles (review
+// 2026-11-05).
+func TestPlanFoldedTargetNamesAhead(t *testing.T) {
+	// incremental: the target keeps readme
+	s, st := foldPlan(t, PlanOptions{}, []Entry{dir("."), file("README", 1)}, []Entry{dir("."), file("readme", 2)})
+	if s.copies["README"] != 0 || st.Targets[0].Refused != 1 {
+		t.Errorf("incremental: copied %q refused %d, want README left out", s.copied(1), st.Targets[0].Refused)
+	}
+	// mirror: the target's readme goes (the source has no readme), README comes
+	s, st = foldPlan(t, PlanOptions{Mirror: true}, []Entry{dir("."), file("README", 1)}, []Entry{dir("."), file("readme", 2)})
+	if s.copies["README"] == 0 || len(s.deletes[0]) != 1 || st.Targets[0].Refused != 0 {
+		t.Errorf("mirror: copies %v deletes %v refused %d, want README sent and readme deleted", s.copies, s.deletes, st.Targets[0].Refused)
+	}
+	// both spellings at the source, readme on the target: readme is the one
+	// that is there, README is left out (in both modes)
+	for _, mirror := range []bool{false, true} {
+		s, st = foldPlan(t, PlanOptions{Mirror: mirror}, []Entry{dir("."), file("README", 1), file("readme", 1)}, []Entry{dir("."), file("readme", 2)})
+		if s.copies["README"] != 0 || s.copies["readme"] == 0 || st.Targets[0].Refused != 1 || len(s.deletes[0]) != 0 {
+			t.Errorf("mirror=%v, both at the source: copies %v deletes %v refused %d", mirror, s.copies, s.deletes, st.Targets[0].Refused)
+		}
+	}
+	// different folders are different names
+	s, _ = foldPlan(t, PlanOptions{}, []Entry{dir("."), dir("a"), file("a/README", 1), dir("b"), file("b/other", 1)}, []Entry{dir("."), dir("a"), dir("b"), file("b/readme", 2)})
+	if s.copies["a/README"] == 0 {
+		t.Errorf("a/README is not b/readme: copies %v", s.copies)
 	}
 }

@@ -95,6 +95,7 @@ func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	if err := checkAge(maxAge); err != nil {
 		return err
 	}
+	m.layout() // a link standing in for blobs/ is replaced before it is read
 	kinds, err := m.fs.ReadDir(m.path("blobs"))
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil

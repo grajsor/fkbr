@@ -23,7 +23,6 @@ type hub struct {
 }
 
 func (e *Engine) Subscribe(ctx context.Context) (<-chan api.Event, error) {
-	ch := make(chan api.Event, 256)
 	h := &e.hub
 	h.mu.Lock()
 	if h.subs == nil {
@@ -37,6 +36,9 @@ func (e *Engine) Subscribe(ctx context.Context) (<-chan api.Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Room for all of the snapshot and then for the changes after it: what
+	// does not fit would be counted as seen by pollEvents and never sent.
+	ch := make(chan api.Event, len(nodes)+len(jobs)+256)
 	now := time.Now().UTC()
 	for i := range nodes {
 		trySend(ch, api.Event{Type: api.EventNode, Time: now, Node: &nodes[i]})

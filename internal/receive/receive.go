@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"io/fs"
 	"os"
@@ -102,6 +103,9 @@ type Receiver struct {
 	// destNames caches destination directory listings during a commit
 	// (see listed).
 	destNames map[string]map[string]bool
+	// crossed: destination folders on another filesystem than the staging
+	// that got a copy (see copyAcross); Sync puts those on disk too.
+	crossed map[string]bool
 }
 
 // stagingDir returns dir (inside the staging tree) open, creating it.
@@ -742,7 +746,40 @@ func (r *Receiver) Sync() error {
 	if err := syncFS(f); err != nil {
 		return fmt.Errorf("writing to disk: %w", err)
 	}
+	// What was copied over to another filesystem (copyAcross), and the
+	// destination folder itself, which may be on one: syncfs is per
+	// filesystem.
+	dirs := []string{r.dstDir}
+	for d := range r.crossed {
+		dirs = append(dirs, d)
+	}
+	rootDev := deviceOf(f)
+	done := map[uint64]bool{rootDev: true}
+	for _, d := range dirs {
+		df, err := r.root.Open(d)
+		if err != nil {
+			continue // not made yet, or gone
+		}
+		if dev := deviceOf(df); !done[dev] {
+			done[dev] = true
+			err = syncFS(df)
+		}
+		df.Close()
+		if err != nil {
+			return fmt.Errorf("writing to disk: %w", err)
+		}
+	}
 	return nil
+}
+
+// deviceOf is the device (filesystem) f is on, 0 if unknown.
+func deviceOf(f *os.File) uint64 {
+	if fi, err := f.Stat(); err == nil {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			return uint64(st.Dev)
+		}
+	}
+	return 0
 }
 
 // syncFS syncs the filesystem f is on; tests replace it.
@@ -826,10 +863,11 @@ func (r *Receiver) writable(dir string, op func() error) error {
 	if serr != nil || !fi.IsDir() || fi.Mode().Perm()&0o200 != 0 {
 		return err
 	}
-	if r.root.Chmod(dir, fi.Mode().Perm()|0o200) != nil {
+	mode := localfs.ModeBits(fi.Mode())
+	if r.root.Chmod(dir, mode|0o200) != nil {
 		return err // not ours
 	}
-	defer r.root.Chmod(dir, fi.Mode().Perm())
+	defer r.root.Chmod(dir, mode)
 	return op()
 }
 
@@ -952,7 +990,13 @@ func (r *Receiver) install(name, src, dst string, sfi fs.FileInfo, res *Result) 
 		res.problem("%s: destination not older, skipped", name)
 		return nil
 	}
-	if err := r.writable(path.Dir(dst), func() error { return renameEntry(r.root, src, dst) }); err != nil {
+	err = r.writable(path.Dir(dst), func() error { return renameEntry(r.root, src, dst) })
+	if errors.Is(err, syscall.EXDEV) {
+		// dst is on another filesystem than the staging (a drive mounted
+		// below the root): copy it over.
+		err = r.writable(path.Dir(dst), func() error { return r.copyAcross(src, dst, sfi) })
+	}
+	if err != nil {
 		// One unwritable directory must not stop the rest of the install.
 		res.Errors++
 		res.problem("%s: %v", name, err)
@@ -965,6 +1009,87 @@ func (r *Receiver) install(name, src, dst string, sfi fs.FileInfo, res *Result) 
 		res.Bytes += sfi.Size()
 	}
 	return nil
+}
+
+// copyAcross installs the staged file or link src as dst when they are on
+// different filesystems and rename cannot do it (EXDEV): the copy is made
+// in dst's folder under a temporary name, with the staged entry's mode,
+// mtime and owner, put on disk, renamed into place, and the staged entry
+// goes. Holes stay holes. The staged file was given its owner already, so
+// reading it back needs the same right the owner has or DAC override.
+func (r *Receiver) copyAcross(src, dst string, sfi fs.FileInfo) (err error) {
+	dir := path.Dir(dst)
+	sum := fnv.New64a()
+	sum.Write([]byte(dst))
+	tmp := path.Join(dir, fmt.Sprintf(".fkbr-xdev-%s-%x", path.Base(r.base), sum.Sum64()))
+	r.root.Remove(tmp) // left by an earlier run of this job
+	defer func() {
+		if err != nil {
+			r.root.Remove(tmp)
+		}
+	}()
+	st, _ := sfi.Sys().(*syscall.Stat_t)
+	if sfi.Mode()&fs.ModeSymlink != 0 {
+		target, err := r.root.Readlink(src)
+		if err != nil {
+			return err
+		}
+		if err := r.root.Symlink(target, tmp); err != nil {
+			return err
+		}
+		r.linkTime(tmp, sfi.ModTime().UnixNano())
+		if r.opts.Chown && st != nil {
+			r.root.Lchown(tmp, int(st.Uid), int(st.Gid))
+		}
+	} else {
+		in, err := r.root.Open(src)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := r.root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		if _, err := writeSparse(out, in, 0); err != nil {
+			out.Close()
+			return err
+		}
+		if err := out.Truncate(sfi.Size()); err != nil {
+			out.Close()
+			return err
+		}
+		// As setFileMeta does, in its order.
+		m := sfi.Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky)
+		if err := r.chmod(func() error { return out.Chmod(m) }); err != nil {
+			out.Close()
+			return err
+		}
+		if err := futimes(out, sfi.ModTime().UnixNano()); err != nil {
+			out.Close()
+			return err
+		}
+		if r.opts.Chown && st != nil && (st.Uid != uint32(os.Getuid()) || st.Gid != uint32(os.Getgid())) {
+			if out.Chown(int(st.Uid), int(st.Gid)) == nil && m&(fs.ModeSetuid|fs.ModeSetgid) != 0 {
+				out.Chmod(m) // chown cleared them
+			}
+		}
+		if err := out.Sync(); err != nil {
+			out.Close()
+			return err
+		}
+		if err := out.Close(); err != nil {
+			return err
+		}
+	}
+	if err := renameEntry(r.root, tmp, dst); err != nil {
+		return err
+	}
+	if r.crossed == nil {
+		r.crossed = map[string]bool{}
+	}
+	r.crossed[dir] = true
+	return r.root.Remove(src)
 }
 
 func (r *Receiver) applyDirMeta(res *Result, created map[string]bool) error {

@@ -18,6 +18,10 @@ type Target struct {
 	// Holders are the target's folders (paths inside the base) that hold
 	// excluded entries: a mirror deletes what else is in them, never them.
 	Holders map[string]bool
+	// Again opens the snapshot a second time, for the planner to read the
+	// names it holds ahead of the merge (target with folding names only;
+	// without it, only names met so far are known). See PlanOptions.SrcAgain.
+	Again func() (*Reader, io.Closer, error)
 }
 
 type PlanOptions struct {
@@ -26,6 +30,9 @@ type PlanOptions struct {
 	// KeepNewer keeps a target's file or symlink when it is newer than the
 	// source's (rsync -u); a type change still applies.
 	KeepNewer bool
+	// SrcAgain opens the source snapshot a second time, for the same
+	// lookahead as Target.Again.
+	SrcAgain func() (*Reader, io.Closer, error)
 }
 
 // Sink receives the plan as it is computed. Copy is called once per entry
@@ -89,6 +96,9 @@ type planner struct {
 	// keeps a few examples per target.
 	refusedDir []string
 	refusals   [][]string
+	// clash: per target, source paths left out for a name it keeps in
+	// another spelling (see lookahead).
+	clash []*foldClash
 }
 
 // Plan merges the source snapshot with every target snapshot in one pass.
@@ -106,6 +116,9 @@ func Plan(src *Reader, targets []Target, opts PlanOptions, sink Sink) (*PlanStat
 		refusals:   make([][]string, len(targets)),
 	}
 	var err error
+	if err = p.lookahead(); err != nil {
+		return nil, err
+	}
 	if p.src, err = next(src); err != nil {
 		return nil, err
 	}
@@ -156,6 +169,9 @@ func (p *planner) cannotStore(i int, path string, s *Entry) string {
 		if other, ok := m[r.Key(base)]; ok && other != base {
 			return fmt.Sprintf("the same name as %q there", other)
 		}
+	}
+	if c := p.clash[i]; c != nil && c.out[c.hash(path)] {
+		return "the same name as another one there"
 	}
 	return ""
 }
