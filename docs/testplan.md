@@ -449,6 +449,22 @@ and fuzzers in six cycles.
 | A linked node could hang for good when its ssh home lost power while the link wrote to it. sshd's pipes are blocking; the dead home's sshd stopped reading (its ssh window full, and with the home's kernel gone nothing ever came back to reset the connection), and the link's write stayed in the kernel. The link saw the home gone after 45 s and began to stop, but its other writers waited behind the stuck one, and the stop waited for them. It kept its lock, so the restarted home could not link that host again (22 min, until killed) | `fkbr link` moves stdin and stdout to descriptors of its own in non-blocking mode (fd 0 and 1 then point at /dev/null), so Go's poller runs them and closing the link ends a write in progress. And once the link has ended, a stop that takes more than 1 min ends the process | `TestLinkStdoutCloseEndsStuckWrite` (the write stuck before), `TestLinkStdioLeavesDevNull`, `TestStopWithinGivesUp`; powercut.py again on the fix: all 10 cases exact, the ssh home cut 4 times, no link left behind |
 | (Harness) A catch-up into torture's 200 MiB root failed with no fault on and was counted as a finding; the sync that followed into the same root failed with "no space left": that round's copies had filled it. The target's error was not logged, so the catch-up's own reason is unproven | `torture.py` logs the target's error, and notes a catch-up into the small root that failed for space, as it already did for convergence syncs | |
 
+## 20. A second model's review (2026-11-05)
+
+Another model read the code and sent ten suggestions. Each was checked
+against the code; three were right and are fixed, each with a test that
+fails on the build before. The rest were already covered (a negative
+`max_age` is floored in the blob and job prune; every caller of the
+blob writer aborts it), or would do harm (closing the old API listener
+unlinks the new socket, and ends `Serve` with an error), or guard a
+linked host that is trusted by design.
+
+| Found | Now | Test |
+|---|---|---|
+| The share's directory descriptor was copied, the lock let go, and used a moment later; a reopen (remount, share made again) closed it in between: the call failed with EBADF, or, the number reused by another folder, looked its names up there (reproduced: it read another folder's file) | A reopen keeps the old descriptors, the last 4 of them, until `Close`, so no number is closed under a call | `TestReopenDuringOperation` |
+| A store opened for a moment was never closed: the home node's store for a linked node was left to the garbage collector when the link ended, after a refused duplicate hello, and after a refused protocol; so was `fkbr check`'s | `Dir.Close` (idempotent), called at each of those | `TestCloseReleasesDescriptors`, `TestDirCloseAndFailedOpen`, `TestLinkChurnLeavesNoDescriptors` (60 descriptors left by 15 rounds before; the GC is off in the test) |
+| A panic in a handler of the ssh link ended the whole process, all links and jobs | A call whose handler panics fails alone, with the stack in the log; the link and the other calls go on. Jobs are not wrapped: a panic there still stops the node, which resumes on restart | `TestHandlerPanicFailsOnlyItsCall` |
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

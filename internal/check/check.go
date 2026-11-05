@@ -222,6 +222,7 @@ func (c *checker) registry(ctx context.Context) {
 		c.add(Fail, "registry", "%v", err)
 		return
 	}
+	defer mb.Close()
 	nodes, err := mb.Nodes(ctx)
 	if err != nil {
 		c.add(Fail, "registry", "%v", err)

@@ -351,6 +351,7 @@ func (h *Home) ServeConn(ctx context.Context, conn io.ReadWriteCloser, host stri
 			delete(h.peers, p.node)
 		}
 		h.mu.Unlock()
+		p.mb.Close() // serve has returned: no call is using it
 		h.setState(host, p.node, "down", errText(sess.Err()))
 	}()
 	serve(ctx, sess, h.handlers(p), h.log)
@@ -387,6 +388,7 @@ func (h *Home) greet(ctx context.Context, st *frame.Stream, sess *frame.Session,
 		h.mu.Lock()
 		if other := h.peers[a.Node]; other != nil {
 			h.mu.Unlock()
+			mb.Close()
 			return nil, fmt.Errorf("%w: a node named %s is linked already (from %s); name this one in the ssh list: NAME=host[:path]",
 				api.ErrNotAllowed, a.Node, other.host)
 		}

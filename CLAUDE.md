@@ -227,6 +227,11 @@ package tests; docs/testplan.md lists them.
   only the layout, never through a link; `checkShareDir` refuses `/`,
   `$HOME`, the binary's dir and a non-empty dir that is no share yet. A
   new store operation must use `m.fs`, never `os.*` with a share path.
+  A reopen of the share (`shareFS.open`) never closes the old descriptors
+  under a running call (the last `retiredMax` stay open): a closed number
+  can be reused by another folder. A store opened for a moment is closed
+  (`Dir.Close`). The ssh link contains a panicking handler to its own
+  call (`callHandler`); job goroutines are left to crash and resume.
 - Chunks from the share are bounded (`bundle.MaxChunkBytes` 2 GiB stored
   or unpacked, `MaxEntries` 16 M, the writer rolls before it, files 256
   TiB, `chunk_size` ≤ 1 GiB); `meta.Bad` applies after the checksum. The

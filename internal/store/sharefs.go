@@ -41,7 +41,24 @@ type shareFS struct {
 	r       *os.Root
 	dir     *os.File // the same directory, for openat2
 	beneath bool     // openat2 works here
+	// retired: the descriptors of earlier opens, kept open for the
+	// operations that took them (see open). closed: Close was called.
+	retired []retiredRoot
+	closed  bool
+	// afterDirfd runs in openBeneath between taking the directory's
+	// descriptor and using it (tests).
+	afterDirfd func()
 }
+
+type retiredRoot struct {
+	r   *os.Root
+	dir *os.File
+}
+
+// retiredMax is how many earlier opens stay open. An operation that
+// outlives that many reopens (the path named another directory that often
+// while it waited on a hung server) gets an error, as on a closed file.
+const retiredMax = 4
 
 var errOutsideShare = errors.New("not in the share")
 
@@ -72,13 +89,25 @@ func (s *shareFS) open() error {
 		return err
 	}
 	s.mu.Lock()
-	oldR, oldDir := s.r, s.dir
-	s.r, s.dir = r, dir
-	s.mu.Unlock()
-	if oldR != nil {
-		oldR.Close()
-		oldDir.Close()
+	defer s.mu.Unlock()
+	if s.closed {
+		r.Close()
+		dir.Close()
+		return os.ErrClosed
 	}
+	// The old descriptors are not closed here: an operation that took
+	// the directory's number a moment ago would use it closed (EBADF),
+	// or, the number reused by another folder, look names up there. They
+	// are kept for the last few opens (retiredMax) and closed by Close.
+	if s.r != nil {
+		s.retired = append(s.retired, retiredRoot{s.r, s.dir})
+		if len(s.retired) > retiredMax {
+			s.retired[0].r.Close()
+			s.retired[0].dir.Close()
+			s.retired = s.retired[1:]
+		}
+	}
+	s.r, s.dir = r, dir
 	return nil
 }
 
@@ -105,6 +134,9 @@ func (s *shareFS) openBeneath(op, p string, flags int, perm uint32) (int, error)
 	s.mu.RLock()
 	dirfd := int(s.dir.Fd())
 	s.mu.RUnlock()
+	if s.afterDirfd != nil {
+		s.afterDirfd()
+	}
 	if flags&(unix.O_CREAT|unix.O_TMPFILE) == 0 {
 		perm = 0 // openat2 takes a mode only when it creates
 	}
@@ -372,6 +404,24 @@ func (s *shareFS) touch(p string) error {
 	}
 	f.Close()
 	return s.Remove(p)
+}
+
+// Close closes the share's descriptors. Operations still running fail.
+func (s *shareFS) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	s.r.Close()
+	s.dir.Close()
+	for _, o := range s.retired {
+		o.r.Close()
+		o.dir.Close()
+	}
+	s.retired = nil
+	return nil
 }
 
 func (s *shareFS) String() string { return fmt.Sprintf("share %s", s.root) }

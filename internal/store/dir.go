@@ -145,9 +145,11 @@ func Open(root, self string, opts Options) (*Dir, error) {
 	}
 	m.opts = opts
 	if err := m.layout(); err != nil {
+		sfs.Close()
 		return nil, fmt.Errorf("store: %w", err)
 	}
 	if err := m.checkProtocol(); err != nil {
+		sfs.Close()
 		return nil, err
 	}
 	before := time.Now()
@@ -156,6 +158,12 @@ func Open(root, self string, opts Options) (*Dir, error) {
 	}
 	return m, nil
 }
+
+// Close gives back the share's directory descriptors. A Dir that lives as
+// long as its process need not be closed; one opened for a moment (a
+// linked node's, a check's) or dropped on the way (a refused hello) is.
+// It may be called more than once; calls still running fail.
+func (m *Dir) Close() error { return m.fs.Close() }
 
 func (m *Dir) checkProtocol() error {
 	p := filepath.Join(m.root, "protocol-version")

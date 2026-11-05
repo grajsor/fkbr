@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -331,7 +332,7 @@ func serveOne(ctx context.Context, st *frame.Stream, handlers map[string]handler
 		st.CloseWrite()
 		return
 	}
-	res, err := h(ctx, req.A, r, w)
+	res, err := callHandler(ctx, h, req, r, w, log)
 	switch {
 	case errors.Is(err, errAnswered):
 	case err != nil:
@@ -351,6 +352,22 @@ func serveOne(ctx context.Context, st *frame.Stream, handlers map[string]handler
 	st.CloseWrite()
 	// Wait for the caller to finish reading, so Close does not reset.
 	io.Copy(io.Discard, r)
+}
+
+// callHandler runs h. A handler that panics (a bug met on names, JSON or
+// state that came off the wire) fails its call like any error, and the
+// stack goes to the log; the link and every other call go on. Only calls
+// are contained: a panic anywhere else is still a crash, as before.
+func callHandler(ctx context.Context, h handler, req request, body io.Reader, w *answerWriter, log *slog.Logger) (res any, err error) {
+	defer func() {
+		if p := recover(); p != nil {
+			if log != nil {
+				log.Error("ssh link: a call panicked", "call", req.M, "panic", fmt.Sprint(p), "stack", string(debug.Stack()))
+			}
+			res, err = nil, fmt.Errorf("ssh link: %s: internal error (panic: %v)", req.M, p)
+		}
+	}()
+	return h(ctx, req.A, body, w)
 }
 
 // args decodes a request's arguments.
