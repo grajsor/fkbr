@@ -527,6 +527,13 @@ that fails on the build before.
 | `lookahead` closed the blob but not the snapshot reader, so its decoder was never returned to the pool (no goroutine: the decoders are synchronous; an allocation per plan and folding target) | `eachEntry` closes both; `Reader.Close` may be called twice | `TestEachEntryClosesReader` |
 | A copy across filesystems dropped a failed `Chown`/`Lchown`, so a job onto a filesystem that refuses owners (FAT below the root) reported none | Counted in `OwnerNotPreserved` as the plain install counts it; a failed setuid re-chmod is counted too | `TestCopyAcrossCountsOwnerFailures` (file and link; skipped as root) |
 
+Checked on the lab (build `2aa2d61`, four boxes): `go test ./...` and the
+engine tests in ssh mode pass; a copy to three nodes and a mirror sync to two
+(Latin-1 name, a symlink) end with equal checksums and an empty second plan;
+on a real node with `stlink -> .fkbr-tmp`, `mkdir` and `rm -r` through it are
+refused ("staging area"), a copy into `stlink/keep` fails, and the staging
+folder is as it was.
+
 Documented, not changed: the planner's lookahead keeps two hash maps per
 folding target (about 40 bytes per entry, some 600 MB at the 16 M limit), so
 the planner's memory is flat except for those targets (`protocol.md`).
