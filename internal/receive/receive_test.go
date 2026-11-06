@@ -3,6 +3,7 @@ package receive
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -732,5 +734,39 @@ func TestResumeReplacesStagedDirByLink(t *testing.T) {
 	}
 	if got, err := os.Readlink(filepath.Join(dstDir, "tree/sub/link")); err != nil || got != "../a.txt" {
 		t.Errorf("link = %q, %v", got, err)
+	}
+}
+
+// A chunk applied again after a crash read the whole staging folder for
+// every file that was already there: N listings of N names in a flat
+// folder (review 2026-11-06).
+func TestReplayListsStagingFoldersOnce(t *testing.T) {
+	srcDir, _, src, dst := setup(t)
+	const n = 400
+	for i := range n {
+		if err := os.WriteFile(filepath.Join(srcDir, "tree", fmt.Sprintf("flat-%04d", i)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, _ := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	apply(t, r, s, 0)
+	var lists atomic.Int32
+	old := listStaging
+	listStaging = func(root *os.Root, dir string) ([]string, error) {
+		lists.Add(1)
+		return old(root, dir)
+	}
+	t.Cleanup(func() { listStaging = old })
+	r2, err := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r2, s, 0)
+	if got := lists.Load(); got > 10 {
+		t.Errorf("%d folder listings to replay %d files", got, n)
+	}
+	if _, err := r2.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

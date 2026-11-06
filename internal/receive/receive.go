@@ -19,7 +19,6 @@ import (
 	"io/fs"
 	"os"
 	"path"
-	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -103,6 +102,9 @@ type Receiver struct {
 	// destNames caches destination directory listings during a commit
 	// (see listed).
 	destNames map[string]map[string]bool
+	// stageNames caches listings of staging directories for hasName, so a
+	// replayed chunk does not list a folder once per entry that exists.
+	stageNames map[string]map[string]bool
 	// crossed: destination folders on another filesystem than the staging
 	// that got a copy (see copyAcross); Sync puts those on disk too.
 	crossed map[string]bool
@@ -212,6 +214,7 @@ func (r *Receiver) appendLine(name string, line []byte) error {
 // MarkBad drops files the source reported as unreadable or changed.
 func (r *Receiver) MarkBad(names []string) error {
 	r.closeDir() // what it removes may be the open directory
+	r.stageNames = nil
 	for _, n := range names {
 		n, err := localfs.CleanRel(n)
 		if err != nil || r.bad[n] {
@@ -286,6 +289,7 @@ func isEntryError(err error) bool {
 // other entry.
 func (r *Receiver) refuse(name string, cause error) error {
 	r.closeDir()
+	r.stageNames = nil
 	r.bad[name] = true
 	if err := r.appendLine("bad", badLine(name)); err != nil {
 		return err
@@ -373,17 +377,39 @@ func (r *Receiver) listed(dir, name string) bool {
 	return names[name]
 }
 
+// listStaging lists a folder of the staging tree; tests replace it to count.
+var listStaging = func(root *os.Root, dir string) ([]string, error) {
+	f, err := root.Open(dir)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return f.Readdirnames(-1)
+}
+
 // hasName reports whether directory dir lists exactly name. Where a name
 // exists but is not listed, the filesystem matched another spelling
 // (README for readme on FAT).
 func (r *Receiver) hasName(dir, name string) bool {
-	f, err := r.root.Open(dir)
+	if r.stageNames[dir][name] {
+		return true
+	}
+	// Not in the listing taken before (or none yet): the folder may have
+	// changed since, so read it again before saying the name is another
+	// spelling. Entries that exist, the common case, are found above.
+	names, err := listStaging(r.root, dir)
 	if err != nil {
 		return true // cannot tell; let the operation itself decide
 	}
-	defer f.Close()
-	names, err := f.Readdirnames(-1)
-	return err != nil || slices.Contains(names, name)
+	set := make(map[string]bool, len(names))
+	for _, n := range names {
+		set[n] = true
+	}
+	if r.stageNames == nil {
+		r.stageNames = map[string]map[string]bool{}
+	}
+	r.stageNames[dir] = set
+	return set[name]
 }
 
 var errClashed = errors.New("clashes with another name here (a case-insensitive filesystem?)")
@@ -696,6 +722,7 @@ func (r *Receiver) chown(p string, e api.Entry, link bool) bool {
 // Commit moves staged entries into place and removes the staging area.
 func (r *Receiver) Commit() (*Result, error) {
 	r.closeDir()
+	r.stageNames = nil
 	res := &Result{}
 	created := map[string]bool{}
 	if err := r.ensureDir(r.dstDir, created); err != nil {
@@ -1160,6 +1187,7 @@ func (r *Receiver) applyDirMeta(res *Result, created map[string]bool) error {
 // Abort discards the staging area.
 func (r *Receiver) Abort() error {
 	r.closeDir()
+	r.stageNames = nil
 	err := r.root.RemoveAll(r.base)
 	r.root.Remove(StagingDir)
 	return err

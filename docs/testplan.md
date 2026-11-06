@@ -545,7 +545,7 @@ hash.
 ## 23. Fifth pass of the second model's review (2026-11-06)
 
 A reviewer's top ten and bench list (`SUGGESTIONS.md`) were checked against
-the code one by one; seven were real and are fixed, each with a test that
+the code one by one; nine were real and are fixed, each with a test that
 fails on the build before.
 
 | Found | Now | Test |
@@ -556,6 +556,8 @@ fails on the build before.
 | `fkbr check` dereferenced nil when the clock-skew probe's `Stat` failed | A warning, no panic; the write error is reported too | (nil `Stat` cannot be provoked on a plain file system) |
 | The F3 viewer wrapped by characters, so wide ones overflowed the dialog | Wraps by cells, in one pass | `TestWrapTextCells` |
 | The cursor row's marquee dropped characters for a width in cells, so a wide name went blank at the rest | Drops cells | `TestScrolledWideNames` |
+| A chunk applied again after a crash listed the whole staging folder for every file already there (N listings of N names in a flat folder) | `hasName` keeps the listing per folder and reads again only for a name it does not hold; dropped when staging is removed or committed | `TestReplayListsStagingFoldersOnce` (405 listings for 400 files before) |
+| The jobs panel counted the arrow in `" → "` in bytes (5), leaving two cells of the line unused | Counted in cells | `TestJobLineKeepsProgress` (trailing room) |
 | Sizes such as `256mib` or `2gb` were refused; `listed()` cached an empty folder when it could not open it (a wrong "clashes" refusal) | Case-insensitive suffix; an open that fails is not cached | `TestParseByteSize`; (no test for `listed`) |
 
 Not real: the claim that sync re-copies setuid/setgid files forever. The
@@ -563,7 +565,9 @@ planner's mode mask is `0o1777`, which leaves those bits out on purpose.
 Not done, by choice: `GetJob`'s repeated listings (the refresh before each
 read is the NFS rule, and it has not shown as a cost), paging re-sorts in
 the pane, a bound on a window grant (only a 32-bit build can be hurt, and
-none is built), and the other performance and hardening notes.
+none is built), and the other bench notes (home-node ceilings, the `StagedBytes`
+lock, directory fsync, scrollbar thumb, settings `Stat`, spinner repaint;
+reasons in the reply to the reviewer).
 
 ## How to run the lab tests
 

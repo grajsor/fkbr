@@ -763,6 +763,11 @@ func TestJobLineKeepsProgress(t *testing.T) {
 		if !strings.Contains(l, "25%") || !strings.Contains(l, "ETA") || !strings.Contains(l, "→ backup01,build01") {
 			t.Errorf("width %d: progress or destination cut off: %q", w, l)
 		}
+		// The paths and destination share all the room left: none of it is
+		// padding (the arrow was counted in bytes, leaving two cells over).
+		if strings.HasSuffix(l, " ") {
+			t.Errorf("width %d: room left over: %q", w, l)
+		}
 	}
 }
 

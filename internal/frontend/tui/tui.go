@@ -1290,7 +1290,7 @@ func jobLine(j *api.Job, width int) string {
 	// the paths giving way first.
 	head := fmt.Sprintf("%s %-16s %s:", short(j.ID), state, r.SrcNode)
 	dst := safetext.Clean(fmt.Sprintf("%s:%s/%s", strings.Join(r.DstNodes, ","), r.DstRoot, r.DstDir))
-	room := width - runewidth.StringWidth(head) - len(" → ") - runewidth.StringWidth("  "+progress)
+	room := width - runewidth.StringWidth(head) - runewidth.StringWidth(" → ") - runewidth.StringWidth("  "+progress)
 	pw, dw := runewidth.StringWidth(paths), runewidth.StringWidth(dst)
 	if pw+dw > room {
 		dw = min(dw, max(room-8, room/2))
