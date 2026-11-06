@@ -239,9 +239,9 @@ package tests; docs/testplan.md lists them.
   (`scanRequest.Name`), the targets' stay `<node>.snap`. Staging is at the
   root's top; rename across filesystems is EXDEV, so `install` copies
   (`copyAcross`) and `Sync` also syncs the destination's filesystem. In a
-  root that holds the share the `Hide` check looks where links lead
-  (`localfs.Real`, `lookup(follow)`, `writablePathVia`; the copy's `DstDir`
-  is resolved first). `NameRules.Key` is the target's own rule (casefold:
+  root the share and staging checks look where links lead (`localfs.Real`
+  in every root, but `lookup(follow)` walks only where there is a `Hide`;
+  `writablePathVia`; the copy's `DstDir` is resolved first). `NameRules.Key` is the target's own rule (casefold:
   full case folding; vfat: lowercase); a folding target gets a lookahead
   pass in the planner (`Target.Again`). Snapshot entries and path lists
   from the share are validated when read. `jobs`, `data`, `blobs` are

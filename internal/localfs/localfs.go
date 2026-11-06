@@ -40,8 +40,8 @@ type FS interface {
 	WritableRoot(rootID string) (*os.Root, error)
 	// Real is rel with the symlinks inside the root followed (the last
 	// component too if follow is set; a part that does not exist is kept as
-	// written). Only a root that holds the share (config.Root.Hide) is
-	// resolved: that is what the share check must look at.
+	// written). In every root: the share check and the staging check
+	// (receive.StagingDir) must look at where a path really leads.
 	Real(rootID, rel string, follow bool) string
 	// CheckRoots returns ErrRootGone if a root's directory was deleted,
 	// moved or replaced since it was opened.
@@ -163,7 +163,9 @@ func (l *Local) lookup(rootID, rel string, follow bool) (*root, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	if r.hidden(c) || r.hidden(r.resolve(c, follow)) {
+	// Links are followed only where there is a share to hide: reads in
+	// other roots need no walk.
+	if r.hidden(c) || r.cfg.Hide != "" && r.hidden(r.resolve(c, follow)) {
 		return nil, "", &fs.PathError{Op: "open", Path: c, Err: fs.ErrNotExist}
 	}
 	return r, c, nil
@@ -187,10 +189,10 @@ func (l *Local) Real(rootID, rel string, follow bool) string {
 
 // resolve follows the symlinks of rel inside the root, as the kernel does
 // for a path opened through os.Root (which refuses to leave the root: a
-// link that leaves it is left as it is here). Only done where it matters,
-// in a root that holds the share.
+// link that leaves it is left as it is here). One Lstat per component:
+// callers on the read path use it only in a root that holds the share.
 func (r *root) resolve(rel string, follow bool) string {
-	if r.cfg.Hide == "" || rel == "." || rel == "" {
+	if rel == "." || rel == "" {
 		return rel
 	}
 	parts := strings.Split(rel, "/")

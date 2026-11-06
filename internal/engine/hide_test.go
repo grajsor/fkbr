@@ -121,12 +121,20 @@ func TestShareThroughSymlink(t *testing.T) {
 		}
 	}
 	// A copy into a folder that is the share through a link is refused.
+	// The source exists first: a missing one would fail the Submit and the
+	// receive refusal would never be reached (review 2026-11-06).
+	if err := os.WriteFile(filepath.Join(broot, "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	id, err := b.Submit(ctx, api.TransferRequest{SrcRoot: "data", Paths: []string{"x"}, DstNodes: []string{"a"}, DstRoot: "data", DstDir: "link/nodes"})
-	os.WriteFile(filepath.Join(broot, "x"), []byte("x"), 0o644)
-	if err == nil {
-		if j := waitJob(t, b, id, 10*time.Second); j.State == api.JobDone {
-			t.Error("a copy into the share through a link was done")
-		}
+	if err != nil {
+		t.Fatalf("Submit: %v (the refusal belongs to the target)", err)
+	}
+	if j := waitJob(t, b, id, 10*time.Second); j.State == api.JobDone {
+		t.Error("a copy into the share through a link was done")
+	}
+	if _, err := os.Stat(filepath.Join(aroot, "box/nodes/x")); err == nil {
+		t.Error("the copy landed in the share")
 	}
 	// A copy of a folder holding a link to the share sends the link, and
 	// nothing of the share.

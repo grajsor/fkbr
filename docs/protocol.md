@@ -339,8 +339,11 @@ is one-way, in `incremental` mode (copy new and changed entries) or
    case-insensitively there.
 2. **Plan.** One streaming k-way merge of the source snapshot with all
    target snapshots. Paths compare component-wise (`a/x` < `a-b`), which
-   matches walk order, so memory stays flat: 1M entries took 16 MB. Per
-   target:
+   matches walk order, so memory stays flat: 1M entries took 16 MB. The one
+   exception is a target that folds names (FAT, casefold): before the merge
+   the planner reads its snapshot and the source's once more and keeps two
+   hash maps, about 40 bytes per entry (some 600 MB at 16 M entries, once
+   per such target). Per target:
    - *new* → copy;
    - *changed* (size, mtime in whole seconds, mode without setuid/setgid,
      symlink target, ownership only where that target can apply it,

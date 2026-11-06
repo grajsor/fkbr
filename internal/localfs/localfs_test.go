@@ -309,3 +309,37 @@ func TestHideFollowsSymlinks(t *testing.T) {
 		t.Errorf("Real(link, no follow) = %q, want link", got)
 	}
 }
+
+// Real follows links in every root, not only in one that holds the share:
+// the staging check needs where a path really leads (review 2026-11-06).
+func TestRealWithoutShare(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, ".fkbr-tmp", "j"), 0o700)
+	os.MkdirAll(filepath.Join(dir, "d"), 0o755)
+	os.Symlink(".fkbr-tmp", filepath.Join(dir, "link"))
+	os.Symlink("../.fkbr-tmp", filepath.Join(dir, "d", "up"))
+	os.Symlink(filepath.Join(dir, ".fkbr-tmp"), filepath.Join(dir, "abs"))
+	l, err := Open([]config.Root{{ID: "files", Path: dir}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	for in, want := range map[string]string{
+		"link/j":   ".fkbr-tmp/j",
+		"link/new": ".fkbr-tmp/new",
+		"d/up/j":   ".fkbr-tmp/j",
+		"abs/j":    ".fkbr-tmp/j",
+		"d":        "d",
+	} {
+		if got := l.Real("files", in, true); got != want {
+			t.Errorf("Real(%s) = %q, want %q", in, got, want)
+		}
+	}
+	if got := l.Real("files", "link", false); got != "link" {
+		t.Errorf("Real(link, no follow) = %q", got)
+	}
+	// Reads in a root without a share are not walked: the link is listed.
+	if _, err := l.List("files", "link"); err != nil {
+		t.Errorf("List(link): %v", err)
+	}
+}

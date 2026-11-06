@@ -497,7 +497,7 @@ one.
 |---|---|---|
 | A sync from a node to itself (a folder into another, or between two roots) planned nothing and applied nothing: the source's scan and the target's were written to one blob, `scans/<plan>/<node>.snap`, and the planner read that as both sides | The source scan of a sync that has the node among its targets is written to `<node>.src.snap` (the request's `name`, checked on the node: only its own `.src`); targets keep `<node>.snap`, which `scannedBelow` and older nodes read. An older node as such a source gives an error (blob not found) where it gave a silent no-op | `TestSyncOnOneNode` (same root, other root, mirror delete, second plan empty), `TestSyncOnOneNodeWithExcludes`, `TestSyncOnOneNodeAndAnother` |
 | A destination below a mount point (a drive under the root, a tmpfs, a bind mount): staging is at the root's top, rename across filesystems is `EXDEV`, and the job ended `done` with an error for every file (real tmpfs: 2 files and 7 errors of 9) | On `EXDEV` the staged file or link is copied into a temporary file in the destination's folder (holes stay holes; mode, mtime, owner as staged; fsync), renamed into place, and the staged one removed; the destination's filesystem is synced (`Receiver.Sync`) too. A staged file already given to another owner needs DAC override to be read back; without it the copy reports the error. A copy that is cut leaves `.fkbr-xdev-<job>-<hash>` in that folder | `TestInstallAcrossFilesystems` (EXDEV simulated, new and existing folder, same result as a rename), `TestCopyAcrossKeepsHoles`, `TestCopyToAnotherFilesystem` (a real tmpfs; `FKBR_TEST_MOUNT=1`, sudo) |
-| `Hide` (the share inside a root) was checked on the path as written: `link/x` with `link -> box` listed, read, wrote, made folders in and removed from the share. A remove through one deleted the share's `info.json` | `localfs.Real` follows the links inside the root (only in a root that holds the share); lookup, list, open, mkdir, remove and the destination of a copy use where the path leads. Links themselves stay entries | `TestHideFollowsSymlinks`, `TestShareThroughSymlink` |
+| `Hide` (the share inside a root) was checked on the path as written: `link/x` with `link -> box` listed, read, wrote, made folders in and removed from the share. A remove through one deleted the share's `info.json` | `localfs.Real` follows the links inside the root (in every root since section 22; the read path walks only where there is a share); lookup, list, open, mkdir, remove and the destination of a copy use where the path leads. Links themselves stay entries | `TestHideFollowsSymlinks`, `TestShareThroughSymlink` |
 | A relative link in place of `jobs`, `blobs` or `data` to another folder of the share made `PruneBlobs`, `PruneJobs` and the orphan sweep delete what is in that folder (the share only refuses links that leave it) | `jobs`, `data` and `blobs` are layout folders: made again if a link or file stands there, and `PruneJobs` and `PruneBlobs` do it first | `TestPruneThroughLinkToSiblingFolder` |
 | A target that holds `readme` while the source has `README` (it sorts first): the plan sent `README`, the receiver found the name taken, and no sync ever settled. Both spellings at the source with `readme` at the target the same | A target that folds names gets a pass over its snapshot and one over the source's before the merge (`Target.Again`, `PlanOptions.SrcAgain`); source names that fold onto another spelling the target keeps (a mirror keeps it only if the source has it too) are left out and reported | `TestPlanFoldedTargetNamesAhead` |
 | `NameRules.Key` lowercased: `straße`/`STRASSE` and `Σ`/`ς` are one name on a casefold ext4 (checked on one) but two keys | Casefold uses Unicode full case folding (`cases.Fold`). vfat stays lowercasing: on a vfat mount `σ` and `Σ` are one name and `Σ` and `ς` two (checked). exFAT could not be mounted on this kernel, so it is unchecked and unchanged | `TestNameRulesKey` |
@@ -512,6 +512,28 @@ directory (finding 9), and the admission limits of section 20 (finding 10).
 Harness: `torture.py` treats the staging a deliberately failed job leaves
 (edge `ro`, `inodes`) as a note for 10 min (a prune sweeps it), not as a
 finding.
+
+## 22. Fourth pass of the second model's review (2026-11-06)
+
+The review of the third pass's report (`RESULT.md`) found the `Hide` fix
+only half done and three smaller defects. Each was reproduced first (the
+staging one with throwaway tests, three ways), and each is fixed with a test
+that fails on the build before.
+
+| Found | Now | Test |
+|---|---|---|
+| `localfs.Real` returned the path as written in a root without a share, so the staging check (`writablePath`, the copy's destination) never saw where a link leads: with `link -> .fkbr-tmp`, a mkdir made `.fkbr-tmp/new`, a remove deleted a folder of the staging area, and a copy into `link/<existing folder>` was installed there | `Real` follows links in every root (one `Lstat` per component, on writes and the copy's destination only; reads walk only where there is a share) | `TestRealWithoutShare`, `TestStagingThroughLink` (copy, mkdir, remove, through a link and through `d/up -> ../.fkbr-tmp`) |
+| `TestShareThroughSymlink` made its source file after `Submit`, so `Submit` failed on the missing source and the refusal on the target was never reached; the report cited it as the receive test | The file exists first; the job must not be done and nothing may land in the share. Checked against the build with the receive-side `Real` taken out: fails | `TestShareThroughSymlink` |
+| `lookahead` closed the blob but not the snapshot reader, so its decoder was never returned to the pool (no goroutine: the decoders are synchronous; an allocation per plan and folding target) | `eachEntry` closes both; `Reader.Close` may be called twice | `TestEachEntryClosesReader` |
+| A copy across filesystems dropped a failed `Chown`/`Lchown`, so a job onto a filesystem that refuses owners (FAT below the root) reported none | Counted in `OwnerNotPreserved` as the plain install counts it; a failed setuid re-chmod is counted too | `TestCopyAcrossCountsOwnerFailures` (file and link; skipped as root) |
+
+Documented, not changed: the planner's lookahead keeps two hash maps per
+folding target (about 40 bytes per entry, some 600 MB at the 16 M limit), so
+the planner's memory is flat except for those targets (`protocol.md`).
+Declined: the review's note that `.fkbr-xdev-<job>-<hash>` may collide with a
+user file: the name is removed on purpose so a rerun of the same job can
+replace its own leftover, and a collision needs a file made with that job's
+hash.
 
 ## How to run the lab tests
 

@@ -158,3 +158,55 @@ func TestCopyAcrossKeepsHoles(t *testing.T) {
 		t.Errorf("%d entries in the destination, want 1 (no temp file)", len(ents))
 	}
 }
+
+// A copy across counts an owner it could not set, as the plain install does
+// (review 2026-11-06: the errors were dropped, the job said nothing). The
+// staged entry's stat says another owner; a plain user may not give files
+// away.
+func TestCopyAcrossCountsOwnerFailures(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root may give files away")
+	}
+	for _, link := range []bool{false, true} {
+		name := "file"
+		if link {
+			name = "symlink"
+		}
+		t.Run(name, func(t *testing.T) {
+			base := t.TempDir()
+			root, err := os.OpenRoot(base)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer root.Close()
+			os.MkdirAll(filepath.Join(base, StagingDir, "j", "tree"), 0o700)
+			os.MkdirAll(filepath.Join(base, "d"), 0o755)
+			srcP := filepath.Join(StagingDir, "j", "tree", "f")
+			if link {
+				root.Symlink("target", srcP)
+			} else {
+				os.WriteFile(filepath.Join(base, srcP), []byte("data"), 0o644)
+			}
+			r := &Receiver{root: root, opts: Options{Chown: true}, base: filepath.Join(StagingDir, "j")}
+			sfi, err := root.Lstat(srcP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			other := &syscall.Stat_t{Uid: uint32(os.Getuid()) + 1, Gid: uint32(os.Getgid())}
+			if err := r.copyAcross(srcP, "d/f", otherOwner{sfi, other}); err != nil {
+				t.Fatal(err)
+			}
+			if r.ownerFails != 1 {
+				t.Errorf("ownerFails = %d, want 1", r.ownerFails)
+			}
+		})
+	}
+}
+
+// otherOwner is a FileInfo whose Sys says who owns the entry.
+type otherOwner struct {
+	fs.FileInfo
+	st *syscall.Stat_t
+}
+
+func (o otherOwner) Sys() any { return o.st }

@@ -1038,8 +1038,12 @@ func (r *Receiver) copyAcross(src, dst string, sfi fs.FileInfo) (err error) {
 			return err
 		}
 		r.linkTime(tmp, sfi.ModTime().UnixNano())
+		// Counted as setFileMeta counts it: the job says when the owner
+		// could not be kept (a filesystem below the root may refuse).
 		if r.opts.Chown && st != nil {
-			r.root.Lchown(tmp, int(st.Uid), int(st.Gid))
+			if r.root.Lchown(tmp, int(st.Uid), int(st.Gid)) != nil {
+				r.ownerFails++
+			}
 		}
 	} else {
 		in, err := r.root.Open(src)
@@ -1070,8 +1074,13 @@ func (r *Receiver) copyAcross(src, dst string, sfi fs.FileInfo) (err error) {
 			return err
 		}
 		if r.opts.Chown && st != nil && (st.Uid != uint32(os.Getuid()) || st.Gid != uint32(os.Getgid())) {
-			if out.Chown(int(st.Uid), int(st.Gid)) == nil && m&(fs.ModeSetuid|fs.ModeSetgid) != 0 {
-				out.Chmod(m) // chown cleared them
+			switch {
+			case out.Chown(int(st.Uid), int(st.Gid)) != nil:
+				r.ownerFails++
+			case m&(fs.ModeSetuid|fs.ModeSetgid) != 0:
+				if out.Chmod(m) != nil { // chown cleared them
+					r.setidLost++
+				}
 			}
 		}
 		if err := out.Sync(); err != nil {

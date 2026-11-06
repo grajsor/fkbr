@@ -89,6 +89,7 @@ func eachEntry(open func() (*Reader, io.Closer, error), fn func(*Entry)) error {
 		return err
 	}
 	defer c.Close()
+	defer r.Close()
 	for {
 		e, err := r.Next()
 		if errors.Is(err, io.EOF) {

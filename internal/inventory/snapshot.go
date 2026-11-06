@@ -182,7 +182,13 @@ func NewReader(r io.Reader) (*Reader, error) {
 }
 
 // Close releases the decoder; it does not close the underlying reader.
-func (r *Reader) Close() { r.zr.Close() }
+// Closing twice is harmless.
+func (r *Reader) Close() {
+	if r.zr != nil {
+		r.zr.Close()
+		r.zr = nil
+	}
+}
 
 func (r *Reader) raw() (*Entry, error) {
 	if e := r.peeked; e != nil {

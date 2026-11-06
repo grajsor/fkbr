@@ -569,3 +569,32 @@ func TestPlanFoldedTargetNamesAhead(t *testing.T) {
 		t.Errorf("a/README is not b/readme: copies %v", s.copies)
 	}
 }
+
+// The lookahead gives its decoders back: eachEntry closes the reader it was
+// handed as well as the blob (review 2026-11-06).
+func TestEachEntryClosesReader(t *testing.T) {
+	var got *Reader
+	closed := false
+	open := func() (*Reader, io.Closer, error) {
+		got = snapH(t, Header{Node: "n"}, dir("."), file("a", 1))
+		return got, closerFunc(func() error { closed = true; return nil }), nil
+	}
+	n := 0
+	if err := eachEntry(open, func(*Entry) { n++ }); err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("%d entries, want 2", n)
+	}
+	if !closed {
+		t.Error("the blob was not closed")
+	}
+	if got.zr != nil {
+		t.Error("the reader was not closed")
+	}
+	got.Close() // twice is fine
+}
+
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
