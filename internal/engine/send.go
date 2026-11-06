@@ -768,21 +768,32 @@ func (s *sender) waitAfterNoSpace(ctx context.Context, cause error) error {
 	s.status.put(ctx, true)
 	s.e.log.Warn(full+"; retrying", "job", s.job.ID, "err", cause)
 	deadline := time.Now().Add(noSpaceWait)
+	ride := &rideOut{log: s.log}
 	for time.Now().Before(deadline) {
-		if _, err := s.gc(ctx, -1); err != nil {
+		err := s.noSpaceRound(ctx)
+		if err != nil && ride.retry(ctx, err) { // a soft mount hiccup, as in the waits around it
+			continue
+		}
+		if err != nil {
 			return err
 		}
-		if err := s.check(ctx, true); err != nil {
-			return err
-		}
-		if err := s.detachLaggards(ctx, -1); err != nil {
-			return err
-		}
+		ride.ok()
 		if err := s.e.sleep(ctx); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// noSpaceRound is one look at the targets while the share is full.
+func (s *sender) noSpaceRound(ctx context.Context) error {
+	if _, err := s.gc(ctx, -1); err != nil {
+		return err
+	}
+	if err := s.check(ctx, true); err != nil {
+		return err
+	}
+	return s.detachLaggards(ctx, -1)
 }
 
 // waitForSpace blocks until staging chunk seq stays within quota and fits

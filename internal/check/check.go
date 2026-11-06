@@ -5,6 +5,7 @@ package check
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -160,10 +161,14 @@ func (c *checker) share(mounts []mountinfo.Mount) {
 	// uses server mtimes), but skew confuses logs and job timestamps.
 	f, err := os.CreateTemp(tmp, ".skew-*")
 	if err == nil {
-		f.Write([]byte("x"))
-		fi, _ := f.Stat()
+		_, werr := f.Write([]byte("x"))
+		fi, serr := f.Stat()
 		f.Close()
 		os.Remove(f.Name())
+		if err := errors.Join(werr, serr); err != nil {
+			c.add(Warn, "clock", "could not measure the clock skew against the NFS server: %v", err)
+			return
+		}
 		skew := time.Since(fi.ModTime()).Round(time.Second)
 		lvl := OK
 		if skew > time.Minute || skew < -time.Minute {

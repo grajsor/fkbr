@@ -191,8 +191,8 @@ func (b ByteSize) String() string {
 }
 
 func ParseByteSize(s string) (ByteSize, error) {
-	t := strings.TrimSuffix(strings.TrimSpace(s), "B")
-	t = strings.TrimSuffix(t, "i")
+	t := strings.TrimSuffix(strings.ToUpper(strings.TrimSpace(s)), "B")
+	t = strings.TrimSuffix(t, "I")
 	mult := int64(1)
 	if t != "" {
 		if i := strings.IndexByte("KMGT", t[len(t)-1]); i >= 0 {

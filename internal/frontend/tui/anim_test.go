@@ -7,6 +7,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 	"github.com/muesli/termenv"
 
 	"fkbr/internal/api"
@@ -259,5 +260,39 @@ func TestLongNameScrolls(t *testing.T) {
 	h.m.View()
 	if time.Since(h.m.marqueeAt) > time.Second {
 		t.Error("marquee did not restart for the new cursor row")
+	}
+}
+
+// The marquee drops cells, not characters: a wide name used to run out of
+// characters before the cells were gone and showed nothing at the rest.
+func TestScrolledWideNames(t *testing.T) {
+	name := "日本語日本語日本語日本語" // 24 cells
+	const width = 10
+	end := marqueeRest + time.Duration(24-width)*marqueeStep + time.Second
+	got := scrolled(name, width, end)
+	if got == "" || runewidth.StringWidth(got) > width {
+		t.Errorf("at the rest after the run: %q (%d cells)", got, runewidth.StringWidth(got))
+	}
+	if !strings.HasSuffix(name, got) {
+		t.Errorf("%q is not the end of the name", got)
+	}
+	for step := range 30 {
+		g := scrolled(name, width, marqueeRest+time.Duration(step)*marqueeStep)
+		if !strings.HasSuffix(name, g) || g == "" {
+			t.Errorf("step %d: %q", step, g)
+		}
+	}
+}
+
+// Long lines break at the cell width, so wide characters do not overflow.
+func TestWrapTextCells(t *testing.T) {
+	got := wrapText(strings.Repeat("日", 7)+"\nabcdefghij", 6)
+	for _, l := range strings.Split(got, "\n") {
+		if runewidth.StringWidth(l) > 6 {
+			t.Errorf("line %q is %d cells", l, runewidth.StringWidth(l))
+		}
+	}
+	if want := "日日日\n日日日\n日\nabcdef\nghij"; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

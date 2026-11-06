@@ -542,6 +542,29 @@ user file: the name is removed on purpose so a rerun of the same job can
 replace its own leftover, and a collision needs a file made with that job's
 hash.
 
+## 23. Fifth pass of the second model's review (2026-11-06)
+
+A reviewer's top ten and bench list (`SUGGESTIONS.md`) were checked against
+the code one by one; seven were real and are fixed, each with a test that
+fails on the build before.
+
+| Found | Now | Test |
+|---|---|---|
+| The last subscriber leaving while a new one read its snapshot stopped the event poller, and the newcomer (who saw a subscriber on arrival) never started it: no events | `Subscribe` decides to start the poller under the lock, after joining | `TestSubscribeAfterLastLeavesDuringSnapshot` (hook `afterSnapshot`) |
+| A staged directory where a resumed run now has a symlink failed the chunk with ENOTEMPTY, and every retry the same | The symlink branch removes it with `RemoveAll`, as the file branch does | `TestResumeReplacesStagedDirByLink` |
+| The wait after "share full" returned the first soft-mount error and failed the job | Its three calls ride out transient errors like the waits around them | `TestShareFullWaitRidesOutEIO` |
+| `fkbr check` dereferenced nil when the clock-skew probe's `Stat` failed | A warning, no panic; the write error is reported too | (nil `Stat` cannot be provoked on a plain file system) |
+| The F3 viewer wrapped by characters, so wide ones overflowed the dialog | Wraps by cells, in one pass | `TestWrapTextCells` |
+| The cursor row's marquee dropped characters for a width in cells, so a wide name went blank at the rest | Drops cells | `TestScrolledWideNames` |
+| Sizes such as `256mib` or `2gb` were refused; `listed()` cached an empty folder when it could not open it (a wrong "clashes" refusal) | Case-insensitive suffix; an open that fails is not cached | `TestParseByteSize`; (no test for `listed`) |
+
+Not real: the claim that sync re-copies setuid/setgid files forever. The
+planner's mode mask is `0o1777`, which leaves those bits out on purpose.
+Not done, by choice: `GetJob`'s repeated listings (the refresh before each
+read is the NFS rule, and it has not shown as a cost), paging re-sorts in
+the pane, a bound on a window grant (only a 32-bit build can be hurt, and
+none is built), and the other performance and hardening notes.
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

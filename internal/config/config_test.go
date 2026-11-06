@@ -55,7 +55,7 @@ func TestParseRejects(t *testing.T) {
 }
 
 func TestParseByteSize(t *testing.T) {
-	ok := map[string]ByteSize{"1024": 1024, "512MiB": 512 << 20, "2GiB": 2 << 30, "10G": 10 << 30, "64K": 64 << 10, "3 MB": 3 << 20}
+	ok := map[string]ByteSize{"1024": 1024, "512MiB": 512 << 20, "2GiB": 2 << 30, "10G": 10 << 30, "64K": 64 << 10, "3 MB": 3 << 20, "256mib": 256 << 20, "2gb": 2 << 30, "1kib": 1 << 10, "4m": 4 << 20}
 	for in, want := range ok {
 		if got, err := ParseByteSize(in); err != nil || got != want {
 			t.Errorf("ParseByteSize(%q) = %d, %v; want %d", in, got, err, want)

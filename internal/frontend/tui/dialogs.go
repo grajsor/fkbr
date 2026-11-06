@@ -516,12 +516,21 @@ func flowText(s string, w int) string {
 func wrapText(s string, w int) string {
 	var out strings.Builder
 	for _, line := range strings.Split(strings.ReplaceAll(s, "\t", "    "), "\n") {
-		for len([]rune(line)) > w {
-			r := []rune(line)
-			out.WriteString(string(r[:w]) + "\n")
-			line = string(r[w:])
+		if w < 1 || runewidth.StringWidth(line) <= w {
+			out.WriteString(line + "\n")
+			continue
 		}
-		out.WriteString(line + "\n")
+		cells := 0
+		for _, c := range line {
+			cw := runewidth.RuneWidth(c)
+			if cells+cw > w && cells > 0 {
+				out.WriteString("\n")
+				cells = 0
+			}
+			out.WriteRune(c)
+			cells += cw
+		}
+		out.WriteString("\n")
 	}
 	return strings.TrimSuffix(out.String(), "\n")
 }

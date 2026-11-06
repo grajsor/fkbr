@@ -42,3 +42,50 @@ func TestSubscribeSnapshotIsComplete(t *testing.T) {
 		}
 	}
 }
+
+// The last subscriber leaving while a new one reads its snapshot stopped
+// the poller, and the newcomer, who had seen a subscriber on arrival, did
+// not start it again: no event ever reached it (review 2026-11-06).
+func TestSubscribeAfterLastLeavesDuringSnapshot(t *testing.T) {
+	share := t.TempDir()
+	a, _ := node(t, share, "a")
+	runWorker(t, a)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctxA, cancelA := context.WithCancel(ctx)
+	if _, err := a.Subscribe(ctxA); err != nil {
+		t.Fatal(err)
+	}
+	afterSnapshot = func() {
+		cancelA()
+		waitUntil(t, func() bool {
+			a.hub.mu.Lock()
+			defer a.hub.mu.Unlock()
+			return len(a.hub.subs) == 0
+		}, "first subscriber gone")
+	}
+	defer func() { afterSnapshot = func() {} }()
+	ch, err := a.Subscribe(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterSnapshot = func() {}
+	for len(ch) > 0 { // the snapshot
+		<-ch
+	}
+	j := &api.Job{ID: fmt.Sprintf("%024d", 1), Request: api.TransferRequest{SrcNode: "a", DstNodes: []string{"a"}}}
+	if err := a.st.CreateJob(ctx, j); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case ev := <-ch:
+			if ev.Type == api.EventJob && ev.JobID == j.ID {
+				return
+			}
+		case <-deadline:
+			t.Fatal("no event after the first subscriber left during the snapshot")
+		}
+	}
+}

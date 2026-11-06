@@ -353,15 +353,17 @@ func (r *Receiver) listed(dir, name string) bool {
 	names, ok := r.destNames[dir]
 	if !ok {
 		names = map[string]bool{}
-		if f, err := r.root.Open(dir); err == nil {
-			ns, err := f.Readdirnames(-1)
-			f.Close()
-			if err != nil {
-				return true // cannot tell; let the operation itself decide
-			}
-			for _, n := range ns {
-				names[n] = true
-			}
+		f, err := r.root.Open(dir)
+		if err != nil {
+			return true // cannot tell (not cached); let the operation itself decide
+		}
+		ns, err := f.Readdirnames(-1)
+		f.Close()
+		if err != nil {
+			return true // cannot tell; let the operation itself decide
+		}
+		for _, n := range ns {
+			names[n] = true
 		}
 		if r.destNames == nil {
 			r.destNames = map[string]map[string]bool{}
@@ -425,7 +427,9 @@ func (r *Receiver) apply(h *bundle.Header, data io.Reader) error {
 		line, _ := json.Marshal(dirRecord{api.EncodeName(h.Name), h.Entry})
 		return r.appendLine("dirs", line)
 	case api.TypeSymlink:
-		if err := r.root.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		// A resumed run may find a staged directory here (the path was a
+		// directory when the partial staging was written).
+		if err := r.root.RemoveAll(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
 			return err
 		}
 		if err := r.root.Symlink(h.Entry.LinkTarget, p); err != nil {

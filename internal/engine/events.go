@@ -14,6 +14,10 @@ import (
 // here is cheaper than every frontend polling on its own.
 const eventInterval = time.Second
 
+// afterSnapshot runs in Subscribe between the snapshot and joining the hub;
+// tests use it to make another subscriber leave there.
+var afterSnapshot = func() {}
+
 // hub fans out change events to subscribers. It polls only while there is
 // at least one subscriber.
 type hub struct {
@@ -28,7 +32,6 @@ func (e *Engine) Subscribe(ctx context.Context) (<-chan api.Event, error) {
 	if h.subs == nil {
 		h.subs = map[chan api.Event]bool{}
 	}
-	first := len(h.subs) == 0
 	h.mu.Unlock()
 
 	// The initial snapshot goes to this subscriber only, before it joins.
@@ -36,6 +39,7 @@ func (e *Engine) Subscribe(ctx context.Context) (<-chan api.Event, error) {
 	if err != nil {
 		return nil, err
 	}
+	afterSnapshot()
 	// Room for all of the snapshot and then for the changes after it: what
 	// does not fit would be counted as seen by pollEvents and never sent.
 	ch := make(chan api.Event, len(nodes)+len(jobs)+256)
@@ -49,7 +53,9 @@ func (e *Engine) Subscribe(ctx context.Context) (<-chan api.Event, error) {
 
 	h.mu.Lock()
 	h.subs[ch] = true
-	if first && h.cancel == nil {
+	// Judged here, not before the snapshot: a subscriber that was the last
+	// one may have left meanwhile and stopped the poller.
+	if h.cancel == nil {
 		pctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 		h.cancel = cancel
 		go e.pollEvents(pctx, nodes, jobs)

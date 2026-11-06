@@ -705,3 +705,32 @@ func TestReadOnlyDirKeepsSetgidAndSticky(t *testing.T) {
 		t.Errorf("mode %v, want %v", fi.Mode(), want|os.ModeDir)
 	}
 }
+
+// A resumed run found a staged directory where the source now has a
+// symlink: Remove failed with ENOTEMPTY and every retry failed the same
+// (review 2026-11-06).
+func TestResumeReplacesStagedDirByLink(t *testing.T) {
+	_, dstDir, src, dst := setup(t)
+	s := bundleTree(t, src, "tree", 64<<10)
+	r, _ := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	apply(t, r, s, 0)
+	staged := filepath.Join(dstDir, ".fkbr-tmp", "job", "tree", "tree", "sub", "link")
+	if err := os.Remove(staged); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(staged, "old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(staged, "old", "f"), []byte("x"), 0o644)
+	r2, err := New(dst, "job", ".", Options{Conflict: api.ConflictSkip})
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply(t, r2, s, 0)
+	if _, err := r2.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.Readlink(filepath.Join(dstDir, "tree/sub/link")); err != nil || got != "../a.txt" {
+		t.Errorf("link = %q, %v", got, err)
+	}
+}

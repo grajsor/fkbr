@@ -151,8 +151,17 @@ func marqueeOffset(elapsed time.Duration, overflow int) int {
 // scrolled drops the first characters of name to show it scrolled within
 // width cells at elapsed time.
 func scrolled(name string, width int, elapsed time.Duration) string {
-	if off := marqueeOffset(elapsed, runewidth.StringWidth(name)-width); off > 0 {
-		return string([]rune(name)[off:])
+	off := marqueeOffset(elapsed, runewidth.StringWidth(name)-width)
+	if off <= 0 {
+		return name
 	}
-	return name
+	// off is in cells: drop whole characters until that many are gone (a
+	// wide one may take one cell more; the caller pads or clips).
+	for i, c := range name {
+		if off <= 0 {
+			return name[i:]
+		}
+		off -= runewidth.RuneWidth(c)
+	}
+	return ""
 }

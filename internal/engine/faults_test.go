@@ -41,6 +41,9 @@ type faultStore struct {
 	hideAcks string
 	// failWriteAt: creating that chunk fails for good (not transient).
 	failWriteAt int
+	// eioJobReads: after the ENOSPC fault, this many GetJob calls fail with
+	// EIO (the share hiccups while the source waits for room).
+	eioJobReads int
 	// endsLost: a job's end status is not stored (over ssh, the link
 	// down); endsRefused counts the attempts.
 	endsLost    bool
@@ -104,6 +107,19 @@ func (w *capWriter) Commit(meta []byte) error {
 func (w *capWriter) Abort() {
 	w.ChunkWriter.Abort()
 	w.done()
+}
+
+func (f *faultStore) GetJob(ctx context.Context, id string) (*api.Job, error) {
+	f.mu.Lock()
+	fail := f.noSpaceHit && f.eioJobReads > 0
+	if fail {
+		f.eioJobReads--
+	}
+	f.mu.Unlock()
+	if fail {
+		return nil, &os.PathError{Op: "read", Path: "job.json", Err: syscall.EIO}
+	}
+	return f.Dir.GetJob(ctx, id)
 }
 
 func (f *faultStore) PutStatus(ctx context.Context, id string, st *api.JobStatus) error {
@@ -234,6 +250,37 @@ func TestShareFullRetries(t *testing.T) {
 	}
 	if !fs.noSpaceHit {
 		t.Fatal("fault never injected")
+	}
+	sameTree(t, filepath.Join(mcfg.Roots[0].Path, "tree"), filepath.Join(sroot, "tree"))
+}
+
+// A soft-mount error while the source waits for room is ridden out like
+// the ones in the other waits; it failed the job (review 2026-11-06).
+func TestShareFullWaitRidesOutEIO(t *testing.T) {
+	oldWait := noSpaceWait
+	t.Cleanup(func() { noSpaceWait = oldWait })
+	noSpaceWait = 200 * time.Millisecond
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	master, fs := buildFaulty(t, mcfg)
+	fs.noSpaceAt = 2
+	fs.eioJobReads = 1
+	s1, sroot := node(t, share, "s1")
+	makeTree(t, mcfg.Roots[0].Path, 10, 600<<10)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tree"}, DstNodes: []string{"s1"}, DstRoot: "data"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The errors are the source's to meet: don't poll the job meanwhile.
+	waitUntil(t, func() bool {
+		fs.mu.Lock()
+		defer fs.mu.Unlock()
+		return fs.noSpaceHit && fs.eioJobReads == 0
+	}, "the errors injected")
+	if j := waitJob(t, master, id, 30*time.Second); j.State != api.JobDone {
+		t.Fatalf("state %s: %+v", j.State, j.Participants)
 	}
 	sameTree(t, filepath.Join(mcfg.Roots[0].Path, "tree"), filepath.Join(sroot, "tree"))
 }
