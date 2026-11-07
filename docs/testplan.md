@@ -618,6 +618,8 @@ the old sources on the VM) and passes on the new.
 | (found while checking) `ServeSocket` never closed the old listener when it listened on the path again: a descriptor per recreation | Closed, without unlinking the new socket | `TestSocketRecreationClosesOldListener` |
 | A failing read before the chunk's magic was reported as "not an fkbr chunk" | The read error is kept; a short or foreign chunk still gets the old message | `TestMagicReadErrorKept` |
 
+| (round 3) A node that left the list and came back (an unreadable registry entry that healed) lost its `@dest` mark | The TUI parks the mark of a node that is gone and restores it when the node returns; `@dest` never names a node that is not listed | `TestNodeGoneAndBackKeepsDestMark` |
+
 One existing test changed: the `TestMounts` line for a mount "set to 1 s"
 listed only `acregmin=1,acdirmin=1`. A kernel prints only options that
 differ from its defaults, so that line means `acdirmax=60`; it now lists

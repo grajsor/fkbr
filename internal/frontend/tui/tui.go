@@ -150,6 +150,9 @@ type model struct {
 	// dest holds the nodes marked in the node list: "@dest" in the copy
 	// and sync dialogs. It lasts as long as the TUI.
 	dest map[string]bool
+	// destGone keeps the marks of nodes that left the list, so a node that
+	// comes back (an unreadable registry entry that heals) is marked again.
+	destGone map[string]bool
 	// Header animation, spinner and marquee (anim.go).
 	spin       int
 	anim       animPhase
@@ -167,7 +170,7 @@ func newModel(ctx context.Context, c api.Client) *model {
 		ctx: ctx, c: c, st: newStyles(""),
 		panes: [2]*pane{newPane(), newPane()},
 		nodes: map[string]api.Node{}, jobs: map[string]api.Job{},
-		moves: map[string]moveInfo{}, dest: map[string]bool{},
+		moves: map[string]moveInfo{}, dest: map[string]bool{}, destGone: map[string]bool{},
 	}
 }
 
@@ -455,12 +458,19 @@ func (m *model) applyEvent(ev api.Event) tea.Cmd {
 	case api.EventNode:
 		if ev.Node != nil {
 			m.nodes[ev.Node.ID] = *ev.Node
+			if m.destGone[ev.Node.ID] {
+				delete(m.destGone, ev.Node.ID)
+				m.dest[ev.Node.ID] = true
+			}
 			m.syncNodePanes()
 		}
 	case api.EventNodeGone:
 		if n, ok := m.nodes[ev.NodeID]; ok && !n.Self {
 			delete(m.nodes, ev.NodeID)
-			delete(m.dest, ev.NodeID)
+			if m.dest[ev.NodeID] {
+				delete(m.dest, ev.NodeID)
+				m.destGone[ev.NodeID] = true
+			}
 			m.syncNodePanes()
 		}
 	case api.EventScan:

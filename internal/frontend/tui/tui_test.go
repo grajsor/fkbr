@@ -1757,3 +1757,28 @@ func TestNodeGoneEvent(t *testing.T) {
 		t.Error("this host's own node was removed")
 	}
 }
+
+// A node that goes and comes back (its registry entry was unreadable for
+// a moment) is marked @dest again; while it is gone @dest does not name it.
+func TestNodeGoneAndBackKeepsDestMark(t *testing.T) {
+	h := newHarness(t)
+	back := h.m.nodes["s1"]
+	h.m.dest["s1"] = true
+	h.m.applyEvent(api.Event{Type: api.EventNodeGone, NodeID: "s1"})
+	if h.m.dest["s1"] {
+		t.Fatal("@dest still names a node that is gone")
+	}
+	h.m.applyEvent(api.Event{Type: api.EventNode, Node: &back})
+	if !h.m.dest["s1"] {
+		t.Error("the mark did not come back with the node")
+	}
+	// a node never marked stays unmarked
+	h.m.applyEvent(api.Event{Type: api.EventNodeGone, NodeID: "s1"})
+	h.m.applyEvent(api.Event{Type: api.EventNode, Node: &back})
+	delete(h.m.dest, "s1")
+	h.m.applyEvent(api.Event{Type: api.EventNodeGone, NodeID: "s1"})
+	h.m.applyEvent(api.Event{Type: api.EventNode, Node: &back})
+	if h.m.dest["s1"] {
+		t.Error("an unmarked node came back marked")
+	}
+}
