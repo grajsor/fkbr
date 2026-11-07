@@ -1708,3 +1708,22 @@ func TestSettingsNumbers(t *testing.T) {
 		}
 	}
 }
+
+// A finished job with a note, an error or a skip is drawn in the warning
+// colour; a clean one is not.
+func TestJobHasNotes(t *testing.T) {
+	clean := &api.Job{Participants: []api.JobStatus{{Role: api.RoleSource}, {Role: api.RoleTarget}}}
+	if jobHasNotes(clean) {
+		t.Error("clean job has notes")
+	}
+	for name, st := range map[string]api.JobStatus{
+		"note":    {Problems: []string{"12:00:00 2 files have ACLs or extended attributes; they are not copied"}},
+		"error":   {Errors: 1},
+		"skipped": {Skipped: 1},
+	} {
+		j := &api.Job{Participants: []api.JobStatus{{Role: api.RoleSource}, st}}
+		if !jobHasNotes(j) {
+			t.Errorf("%s: not flagged", name)
+		}
+	}
+}

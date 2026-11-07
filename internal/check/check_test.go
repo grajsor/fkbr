@@ -116,3 +116,43 @@ func TestShareModes(t *testing.T) {
 		t.Fatalf("closed dir not reported: %+v", c.res)
 	}
 }
+
+// A state dir on tmpfs loses its records at a reboot: the ssh home node's
+// jobs and the own jobs of root local. That is a warning where the swarm
+// keeps its records there, information elsewhere, and nothing on disk.
+func TestStateDirOnTmpfs(t *testing.T) {
+	level := func(cfg *config.Config, fsType int64) (Level, string) {
+		c := &checker{cfg: cfg}
+		c.stateFS(fsType)
+		for _, r := range c.res {
+			if r.Area == "state_dir" {
+				return r.Level, r.Msg
+			}
+		}
+		return -1, ""
+	}
+	plain := &config.Config{StateDir: "/tmp/fkbr-x"}
+	home := &config.Config{StateDir: "/tmp/fkbr-x", Home: true}
+	linked := &config.Config{StateDir: "/tmp/fkbr-x", SSH: []string{"h1"}}
+	for _, tc := range []struct {
+		name string
+		cfg  *config.Config
+		fs   int64
+		want Level
+	}{
+		{"disk", plain, 0xEF53, OK},
+		{"disk, ssh home", home, 0xEF53, OK},
+		{"tmpfs, share node", plain, tmpfsMagic, Info},
+		{"ramfs, share node", plain, ramfsMagic, Info},
+		{"tmpfs, ssh home", home, tmpfsMagic, Warn},
+		{"tmpfs, hosts linked", linked, tmpfsMagic, Warn},
+	} {
+		got, msg := level(tc.cfg, tc.fs)
+		if got != tc.want {
+			t.Errorf("%s: %s, want %s (%q)", tc.name, got, tc.want, msg)
+		}
+	}
+	if _, msg := level(home, tmpfsMagic); !strings.Contains(msg, "state") || !strings.Contains(msg, "reboot") {
+		t.Errorf("the warning should say what is lost at a reboot: %q", msg)
+	}
+}

@@ -569,6 +569,34 @@ none is built), and the other bench notes (home-node ceilings, the `StagedBytes`
 lock, directory fsync, scrollbar thumb, settings `Stat`, spinner repaint;
 reasons in the reply to the reviewer).
 
+## 24. Sixth pass of the second model's review (2026-11-07)
+
+The reviewer's ten suggestions were checked against the code. It had read
+only the docs, so most restated what is already recorded as known or
+decided. Five were worth doing (the xattr note after a question about it):
+
+| Found | Now | Test |
+|---|---|---|
+| `TestSparseExtents` made a 1 GiB file of holes and kept it twice; free without `-race`, 4.2 GB under it (the whole `bundle` package 5.7 GB, measured on the 8 GB lab VM), so `-race` could not run on a small box | 128 MiB, the same assertions | `TestSparseExtents` |
+| `docs/stability.md` said "over 330 tests" in one place and "over 390" in another | Both say over 390 | |
+| The user docs did not say what is not carried over (ACLs, xattrs, hard links, devices, `/proc`) | A short list in `operations.md` (Privileges); the code has no xattr or ACL handling | |
+| ACLs and extended attributes were dropped without a word | The source counts the files it reads that have any (`Flistxattr`, not `security.selinux`) and the job notes "N files have ACLs or extended attributes; they are not copied". Nothing is carried: no format change | `TestHasUncarried`, `TestCopyNotesUncarriedXattrs` (fails without the note; skips where `user.*` xattrs are not allowed); the F9 row of a finished job with notes, errors or skips is yellow (`TestJobHasNotes`) |
+| `fkbr check` did not mention a state dir in memory: an ssh home node's job records and the own jobs of root `local` are lost at a reboot | A warning where the swarm keeps its records there (home node, `ssh:` hosts), information elsewhere | `TestStateDirOnTmpfs` |
+
+`-race` on the Rocky 10 VM, now with 8 GB, at `cef42d3`: every package
+passes, the engine also in ssh mode, and `TestChunkSizesRamp` and
+`TestSparseExtents` too. No data race.
+
+Not done, with reasons: a docs gate for `make release` (it already fails
+at the `cp`, and the F1 help width is tested), caps on blobs and calls
+(section 20 lists why they stay), an in-repo chaos driver (the lab
+scripts hold addresses; the fault wrappers and loops are in the tests),
+the open `todo` rows (they need the NAS's owner or a lab slot), a `-strict`
+flag and carrying xattrs, ACLs or hard links (a protocol change, a separate decision),
+and a claim for the two-nodes-apply-one-plan race (known and narrow; the
+store does use `O_EXCL`, so a `mkdir` claim might work on NFS, but that
+needs a lab check first).
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

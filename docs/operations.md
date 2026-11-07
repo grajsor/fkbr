@@ -125,7 +125,10 @@ fkbr /mnt/nfs/xfer
 - **Runtime dir:** `-state DIR` overrides where the lock and socket go.
   It must belong to the user running fkbr and not be writable by others;
   fkbr refuses one that isn't (another user could have made the default
-  `/tmp/fkbr-<uid>-<node>` first).
+  `/tmp/fkbr-<uid>-<node>` first). Where `/tmp` is in memory (tmpfs) a
+  reboot loses what is kept there: an ssh swarm's job records and the own
+  jobs of root `local`. `fkbr check` says so; point `-state` at a local
+  disk to keep them.
 
 **The TUI is the node.** While a TUI runs, it does all of this node's work:
 - heartbeats
@@ -347,6 +350,18 @@ Job summaries report entries whose ownership or setuid bits could not be
 applied, and how many had setuid/setgid left off because `allow_setid` is
 off.
 
+**Not carried over** (fkbr is not `rsync -aHAX`):
+- ACLs and extended attributes (file capabilities, `user.*`) are not
+  copied; the new file gets the target's defaults. The source counts the
+  files that have some, and the job says so in its notes ("N files have
+  ACLs or extended attributes; they are not copied"). SELinux labels are
+  not counted: every file has one on an SELinux host, and the target gives
+  a new file the label its own policy says.
+- Hard links arrive as separate files.
+- Devices, fifos and sockets are skipped and reported. Files under `/proc`
+  arrive empty, as with tar and rsync.
+- A change of only a mode or mtime sends the whole file again.
+
 ## TUI
 
 The left pane starts in the directory you started in (root `files`), the
@@ -365,7 +380,7 @@ all keys.
 | F4 | sync: make the other side match this pane (plan shown first). Nothing selected: the whole directory. Selected folders: each into a folder of the same name; selected files are copied. Mirror (Ctrl+O) deletes only inside what is synced |
 | F5 / F6 | copy / move the selection. The destination defaults to `@dest` while nodes are marked, else to the other pane; type `node` or `n1,n2`, or press Ctrl+A for every node (`@all`). Marked nodes that are offline are detached, to catch up later, as with `@all` |
 | F7 / F8 | make directory / delete (asks first) on whichever node the pane shows |
-| F9 | jobs panel with progress and ETA: Enter for details (time elapsed, each node's state, time-stamped notes), `c` cancel, `u` catch up |
+| F9 | jobs panel with progress and ETA: Enter for details (time elapsed, each node's state, time-stamped notes; a finished job that has notes, errors or skips is drawn in yellow), `c` cancel, `u` catch up |
 | F10, `q` | quit; if this TUI is the node and it has running jobs, it asks first (its part pauses and resumes the next time) |
 | F11, `o` | settings, kept in the config file: Enter or ← → changes one, `d` sets the default, Ctrl+S saves. Colours, theme and mouse show as you pick them (Ctrl+X on leaving puts them back), the TUI's other settings apply when saved, the node's when it starts again (`o` where the terminal takes F11 for full screen) |
 | F1, `?` | help: every key, how sync works, and this node's log file |

@@ -260,7 +260,11 @@ func TestSparseExtents(t *testing.T) {
 	s := &memSink{}
 	w := NewWriter(s, 64<<10, false)
 	a, afull := sparseItem("holes", 4<<20, []Extent{{100 << 10, 150 << 10}, {3 << 20, 10 << 10}})
-	b, bfull := sparseItem("allhole", 1<<30, nil)
+	// A file of holes only. 128 MiB is many 4 MiB read windows and zero
+	// blocks; the test keeps it twice, and the race detector counts every
+	// page (1 GiB took 4 GB of memory under -race).
+	const holes = 128 << 20
+	b, bfull := sparseItem("allhole", holes, nil)
 	c, cfull := sparseItem("dataend", 1<<20, []Extent{{1<<20 - 4096, 4096}})
 	for _, it := range []Item{a, b, c} {
 		must(t, w.Add(it))
@@ -302,7 +306,7 @@ func TestSparseExtents(t *testing.T) {
 	if stored > 5*zeroBlock+16<<10 {
 		t.Errorf("%d bytes in chunks for 164 KiB of data", stored)
 	}
-	if want := int64(4<<20 + 1<<30 + 1<<20); w.Bytes != want {
+	if want := int64(4<<20 + holes + 1<<20); w.Bytes != want {
 		t.Errorf("Bytes %d, want %d (holes count as done)", w.Bytes, want)
 	}
 }

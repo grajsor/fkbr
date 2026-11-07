@@ -1444,6 +1444,19 @@ func fitLeft(s string, w int) string {
 	return "…" + string(r[len(r)-w+1:])
 }
 
+// jobHasNotes reports whether any participant of the job left a note, an
+// error or a skip: a finished job like that is drawn in the warning
+// colour instead of the dim one, so it is seen in the list (the details
+// have the text).
+func jobHasNotes(j *api.Job) bool {
+	for _, p := range j.Participants {
+		if len(p.Problems) > 0 || p.Errors > 0 || p.Skipped > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *model) renderJobs(h int) string {
 	inner := m.width - 2
 	var lines []string
@@ -1462,7 +1475,7 @@ func (m *model) renderJobs(h int) string {
 		switch {
 		case j.State == api.JobFailed, j.State == api.JobCancelled:
 			s = m.st.err
-		case j.State == api.JobPartial:
+		case j.State == api.JobPartial, j.State == api.JobDone && jobHasNotes(&j):
 			s = m.st.warn
 		case j.State == api.JobDone:
 			s = m.st.dim

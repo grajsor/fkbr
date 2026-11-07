@@ -103,7 +103,11 @@ func (c *checker) roots() {
 	}
 }
 
-const nfsSuperMagic = 0x6969
+const (
+	nfsSuperMagic = 0x6969
+	tmpfsMagic    = 0x01021994
+	ramfsMagic    = 0x858458f6
+)
 
 func (c *checker) stateDir() {
 	if err := localfs.PrivateDir(c.cfg.StateDir); err != nil {
@@ -111,11 +115,31 @@ func (c *checker) stateDir() {
 		return
 	}
 	var st syscall.Statfs_t
-	if err := syscall.Statfs(c.cfg.StateDir, &st); err == nil && st.Type == nfsSuperMagic {
-		c.add(Fail, "state_dir", "%s is on NFS; it must be local (worker lock, socket)", c.cfg.StateDir)
+	if err := syscall.Statfs(c.cfg.StateDir, &st); err != nil {
+		c.add(OK, "state_dir", "%s on local storage", c.cfg.StateDir)
 		return
 	}
-	c.add(OK, "state_dir", "%s on local storage", c.cfg.StateDir)
+	c.stateFS(int64(st.Type))
+}
+
+// stateFS judges the state dir by the type of the filesystem it is on.
+func (c *checker) stateFS(fsType int64) {
+	dir := c.cfg.StateDir
+	switch fsType {
+	case nfsSuperMagic:
+		c.add(Fail, "state_dir", "%s is on NFS; it must be local (worker lock, socket)", dir)
+	case tmpfsMagic, ramfsMagic:
+		// What lives only here: the records of an ssh swarm's jobs on its
+		// home node, and the own jobs of root local. A share node's jobs
+		// are on the share.
+		if c.cfg.Home || len(c.cfg.SSH) > 0 {
+			c.add(Warn, "state_dir", "%s is in memory (tmpfs): a reboot loses this node's ssh job records; use -state on a local disk to keep them", dir)
+		} else {
+			c.add(Info, "state_dir", "%s is in memory (tmpfs): a job on root local does not survive a reboot", dir)
+		}
+	default:
+		c.add(OK, "state_dir", "%s on local storage", dir)
+	}
 }
 
 func (c *checker) share(mounts []mountinfo.Mount) {

@@ -256,7 +256,7 @@ Beside the random runs, single cases aimed at one weak spot each
 
 `go test ./...` runs real nodes on temporary directories, about 2 min:
 
-- **over 330 tests**, many of them found by the runs above;
+- **over 390 tests**, many of them found by the runs above;
 - the same engine tests again with every node linked as over ssh
   (`FKBR_TEST_TRANSPORT=ssh`), and both under the race detector;
 - **model tests:** random trees, options and moves, checked against a

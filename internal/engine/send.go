@@ -12,6 +12,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -37,6 +38,10 @@ type sender struct {
 	// chunks rebuilt after a restart lost them from memory.
 	applied   map[int]string
 	lastCheck time.Time
+	// uncarried counts the files read that have ACLs or extended
+	// attributes, which are not carried (xattr.go); the prefetch workers
+	// add to it.
+	uncarried atomic.Int64
 
 	// Fan-out bookkeeping: dropped targets, last seen ack counts and when
 	// each target last made progress, and node liveness (refreshed lazily).
@@ -347,6 +352,7 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 			if err != nil {
 				return nil, err
 			}
+			s.countUncarried(f)
 			if r.ent.Size <= prefetchMaxFile {
 				return f, nil
 			}
@@ -391,6 +397,9 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 	}
 	n, err := w.Close()
 	s.status.st.Files, s.status.st.Bytes, s.status.st.Chunks = w.Files, w.Bytes, n
+	if c := s.uncarried.Load(); c > 0 && err == nil {
+		s.status.note("%d files have ACLs or extended attributes; they are not copied (the new files get the target's defaults)", c)
+	}
 	return n, err
 }
 
@@ -413,7 +422,13 @@ func (s *sender) walkSource(ctx context.Context, recs chan<- walkRec, stop <-cha
 	emit := func(r walkRec) error {
 		if r.err == nil && r.problem == "" && r.ent.Type == api.TypeFile && r.ent.Size <= prefetchMaxFile {
 			rel := r.rel
-			if r.pre = pf.start(r.ent.Size, func() (*os.File, error) { return e.fs.Open(req.SrcRoot, rel) }, stop); r.pre == nil {
+			if r.pre = pf.start(r.ent.Size, func() (*os.File, error) {
+				f, err := e.fs.Open(req.SrcRoot, rel)
+				if err == nil {
+					s.countUncarried(f)
+				}
+				return f, err
+			}, stop); r.pre == nil {
 				return errWalkStopped
 			}
 		}
