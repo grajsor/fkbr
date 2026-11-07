@@ -603,6 +603,14 @@ func (w *statusWriter) finishThen(ctx context.Context, state api.JobState, err e
 	return err
 }
 
+// fail ends a job that failed before it staged anything (a setup check):
+// finishThen with nothing to clean. A status that cannot be recorded must
+// not park the request in failed/, where nothing claims it and the job
+// reads as running for good.
+func (w *statusWriter) fail(ctx context.Context, err error) error {
+	return w.finishThen(ctx, api.JobFailed, err, func() {})
+}
+
 // errEndLost: the job's end could not be recorded within transientBudget.
 // The request is neither removed nor parked in failed/.
 var errEndLost = errors.New("the job's end was not recorded")

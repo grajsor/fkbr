@@ -67,7 +67,7 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 		return err
 	}
 	if err := e.checkOwn(job, api.RoleSource); err != nil {
-		return e.newStatus(id, api.RoleSource).finish(ctx, api.JobFailed, err)
+		return e.newStatus(id, api.RoleSource).fail(ctx, err)
 	}
 	s := &sender{
 		e: e, job: job, status: e.newStatus(id, api.RoleSource),
@@ -92,22 +92,22 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 		s.resumeFrom = prev.Chunks
 	}
 	if job.Request.SrcNode != e.Self() {
-		return s.status.finish(ctx, api.JobFailed, fmt.Errorf("job source is %s, not %s", job.Request.SrcNode, e.Self()))
+		return s.status.fail(ctx, fmt.Errorf("job source is %s, not %s", job.Request.SrcNode, e.Self()))
 	}
 	req := job.Request
 	if req.Move && sameRootTarget(req, req.DstNodes) {
 		if err := e.checkMoveHere(req); err != nil {
-			return s.status.finish(ctx, api.JobFailed, err)
+			return s.status.fail(ctx, err)
 		}
 	}
 	if req.Move && slices.Contains(req.DstNodes, e.Self()) && req.DstRoot != req.SrcRoot {
 		// Submitted elsewhere, Submit here did not see it.
 		if err := e.moveAcrossRoots(&req); err != nil {
-			return s.status.finish(ctx, api.JobFailed, err)
+			return s.status.fail(ctx, err)
 		}
 	}
 	if err := e.missingPaths(req); err != nil {
-		return s.status.finish(ctx, api.JobFailed, err)
+		return s.status.fail(ctx, err)
 	}
 	what := summary(req.Paths, 3)
 	if req.SyncPlan != "" {

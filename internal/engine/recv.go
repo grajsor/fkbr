@@ -28,7 +28,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 		return err
 	}
 	if err := e.checkOwn(job, api.RoleTarget); err != nil {
-		return e.newStatus(id, api.RoleTarget).finish(ctx, api.JobFailed, err)
+		return e.newStatus(id, api.RoleTarget).fail(ctx, err)
 	}
 	status := e.newStatus(id, api.RoleTarget)
 	if prev := ownStatus(job, e.Self(), api.RoleTarget); prev != nil {
@@ -40,16 +40,16 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	}
 	req := job.Request
 	if !slices.Contains(req.DstNodes, e.Self()) {
-		return status.finish(ctx, api.JobFailed, fmt.Errorf("%s is not a target of this job", e.Self()))
+		return status.fail(ctx, fmt.Errorf("%s is not a target of this job", e.Self()))
 	}
 	// The receiver enforces its own write policy; the initiator's check at
 	// submit time is only a courtesy.
 	if err := e.acceptWrite(ctx, job.Initiator); err != nil {
-		return status.finish(ctx, api.JobFailed, err)
+		return status.fail(ctx, err)
 	}
 	root, err := e.fs.WritableRoot(req.DstRoot)
 	if err != nil {
-		return status.finish(ctx, api.JobFailed, err)
+		return status.fail(ctx, err)
 	}
 	_, noModes := localfs.Limits(e.dstPath(req.DstRoot, req.DstDir))
 	// Where the destination really is: a link in the root to the share must
@@ -67,7 +67,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 		Hide:       e.shareIn(req.DstRoot),
 	})
 	if err != nil {
-		return status.finish(ctx, api.JobFailed, err)
+		return status.fail(ctx, err)
 	}
 
 	abort := func() { rcv.Abort() }

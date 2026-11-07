@@ -189,7 +189,9 @@ func TestShareCheckStaysInTheShare(t *testing.T) {
 		if r.Level == OK && strings.Contains(r.Msg, "writable") {
 			t.Errorf("reported writable through a link: %+v", c.res)
 		}
-		if strings.Contains(r.Msg, "99") {
+		// The old code printed "share uses protocol 99". Match that, not
+		// "99": messages carry the temp dir, whose random suffix may too.
+		if strings.Contains(r.Msg, "protocol 99") {
 			t.Errorf("printed a file from outside the share: %+v", r)
 		}
 	}

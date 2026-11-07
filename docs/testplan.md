@@ -650,6 +650,13 @@ tests pass on both, as they cover gaps).
 | `safetext` let invisible format characters through (zero-width space, word joiner, BOM, soft hyphen, tags, U+2028/9): "trusted<ZWSP>host" read as another name | Category Cf, Zl and Zp become `?`, except the joiner and non-joiner (emoji sequences, Persian and Indic scripts). A BOM at the start of a viewed file now shows as `?` | `TestCleanInvisibleFormat` |
 | Coverage only: `atomicfile.Write`, `id.At`/`New`, `NewReader`'s error branches, `remote.Listen` over a stale socket had no tests | Tests added, no code change. The review's `id.At` with a negative time cannot happen (the share clock is after 1970); its "Chmod failure leaves the socket" is wrong (`Close` unlinks it) | `TestWrite*`, `TestAtShapeAndOrder`, `TestNewIsUnique`, `TestNewReaderErrors`, `TestListenReplacesStaleSocket` |
 
+A reread of the same pass found two more (both fixed, run on the Rocky 10 VM):
+
+| Found | Now | Test |
+|---|---|---|
+| `TestShareCheckStaysInTheShare` looked for `99` in every message; messages carry the temp dir, whose random suffix can hold it (54 failures in 400 runs) | It looks for `protocol 99`, what the old code printed | the same test (400 runs, 0 failures) |
+| The setup checks of a job (not a target, write policy, root, missing path, wrong source) ended it with one try to record `failed`; a lost status parked the request in `failed/` and the job read as running for good | They go through `statusWriter.fail` (`finishThen`, nothing to clean): the request stays claimed | `TestSetupFailureWithLostEndKeepsTheRequest` (fails on the old code) |
+
 Left as it is: the world-connectable moment between `net.Listen` and
 `Chmod` of the daemon socket (the state dir is private, nobody else can
 reach the socket's folder); `shareModes` still lists the share with

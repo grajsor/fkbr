@@ -68,3 +68,28 @@ func TestEndLostKeepsTheRequest(t *testing.T) {
 		t.Fatalf("the request is not left claimed in cur/: %v", cur)
 	}
 }
+
+// A job that fails in its setup checks (here: a source path that is not
+// there) while its end cannot be recorded must leave the request claimed
+// too, like any other lost end: parked in failed/ it would read as running
+// for good, with nothing to claim it.
+func TestSetupFailureWithLostEndKeepsTheRequest(t *testing.T) {
+	shortTransient(t, time.Second)
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	master, fs := buildFaulty(t, mcfg)
+	fs.endsLost = true
+	other, _ := node(t, share, "other")
+	runWorker(t, master)
+	runWorker(t, other)
+	if _, err := other.Submit(context.Background(), api.TransferRequest{SrcNode: "master", SrcRoot: "data", Paths: []string{"gone"}, DstNodes: []string{"other"}, DstRoot: "data"}); err != nil {
+		t.Fatal(err)
+	}
+	waitUntil(t, func() bool { return fs.refused() > 1 }, "the end refused again after a retry")
+	time.Sleep(4 * time.Second) // the budget (1 s) is spent
+	cur, _ := filepath.Glob(filepath.Join(share, "inbox", "master", "cur", "*.json"))
+	failed, _ := filepath.Glob(filepath.Join(share, "inbox", "master", "failed", "*.json"))
+	if len(failed) != 0 || len(cur) != 1 {
+		t.Fatalf("request: cur %v, failed %v; want it left claimed", cur, failed)
+	}
+}
