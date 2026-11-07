@@ -3,6 +3,7 @@ package engine
 import (
 	"os"
 	"strings"
+	"sync/atomic"
 
 	"golang.org/x/sys/unix"
 )
@@ -45,9 +46,9 @@ func hasUncarried(f *os.File) bool {
 	return false
 }
 
-// countUncarried counts f when it has attributes that are not carried.
-func (s *sender) countUncarried(f *os.File) {
+// countUncarried adds 1 to n when f has attributes that are not carried.
+func countUncarried(f *os.File, n *atomic.Int64) {
 	if hasUncarried(f) {
-		s.uncarried.Add(1)
+		n.Add(1)
 	}
 }

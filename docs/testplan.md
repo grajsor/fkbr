@@ -597,6 +597,40 @@ and a claim for the two-nodes-apply-one-plan race (known and narrow; the
 store does use `O_EXCL`, so a `mkdir` claim might work on NFS, but that
 needs a lab check first).
 
+## 25. Seventh pass of the second model's review (2026-11-07)
+
+The reviewer ran ten probes against `a29bf38`. Each was reproduced on the
+Rocky 10 VM and fixed with a test that fails on the old code (run against
+the old sources on the VM) and passes on the new.
+
+| Found | Now | Test |
+|---|---|---|
+| `PruneBlobs` aged a blob folder by its own mtime, which the NFS refresh trick bumps on every read: a read plan was never pruned | Age is the newest entry; a folder with none (a blob being written) counts by its own mtime, so a fresh empty folder is not taken for an old orphan | `TestPruneBlobsIgnoresReadRefresh`, `TestPruneBlobsKeepsFreshEmptyFolder` |
+| `Fetch` dropped its claim when moving a bad request to `failed/` failed, and the request stayed in `cur/` unseen | The claim stays and the error is returned; a request already gone is not an error | `TestFetchKeepsClaimWhenParkFails` |
+| `CachesAttributes` read only the two minimum timeouts and let `lookupcache=positive` hide a long cache | The four timeouts as the kernel lists them (unlisted ones at its defaults 3/60/30/60, `actimeo` too), the maximum counts; `noac` still wins. Checked on the real `/shared` mount (all four 1800): true | `TestCachesAttributesTimeouts` |
+| A sync deleted a file or folder on a FAT-like target to install a symlink it cannot store | The source entry is refused before any delete, in a sync or a copy plan; a folder keeps what is in it | `TestPlanRefusesSymlinkOverEntryOnNoSymlinkTarget` |
+| The ACL/xattr note counted a file once per retry of the send | The count is local to one attempt | `TestUncarriedNoteCountsOnceAcrossRetry` |
+| A node forgotten from the registry stayed in every TUI's list | `node_gone` event (`EventNodeGone`, `NodeID`); the TUI drops the node and its `@dest` mark, never its own. An older frontend ignores it | `TestForgottenNodeBroadcastsRemoval`, `TestNodeGoneEvent` |
+| `ParseByteSize` wrapped around (`9223372036854775807KiB` was -1024); F11 took `99999d` | An error; times are at most ten years (`config.MaxDuration`, in `Validate` and F11) | `TestParseByteSizeOverflow`, `TestParseDurationsBounded`, `TestDurValueRange` |
+| Settings after a `---` in the config file were ignored, unchecked | More than one YAML document is an error | `TestParseSecondDocumentRefused` |
+| `Subscribe` failed with an empty message | The status text, as in `call` | `TestSubscribeErrorHasAMessage` |
+| `fkbr check` printed through `fmt.Printf`, past the cleaning of `stdout()` | `runCheck` writes to the writer it gets | `TestRunCheckWritesThroughItsWriter` |
+| (found while checking) `ServeSocket` never closed the old listener when it listened on the path again: a descriptor per recreation | Closed, without unlinking the new socket | `TestSocketRecreationClosesOldListener` |
+| A failing read before the chunk's magic was reported as "not an fkbr chunk" | The read error is kept; a short or foreign chunk still gets the old message | `TestMagicReadErrorKept` |
+
+One existing test changed: the `TestMounts` line for a mount "set to 1 s"
+listed only `acregmin=1,acdirmin=1`. A kernel prints only options that
+differ from its defaults, so that line means `acdirmax=60`; it now lists
+all four, as a kernel does for 1 s.
+
+On the Rocky 10 VM at this tree: `go test ./...`, the engine in ssh mode
+and `-race` on store, api/remote, engine, inventory, mountinfo, config
+and cmd/fkbr pass.
+
+Left as they are: `do()` in sshlink ignores its drain error (no caller
+can reach a coded reset there), the Makefile's `bin/fkbr` on other
+architectures, and the editor's byte/rune find.
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

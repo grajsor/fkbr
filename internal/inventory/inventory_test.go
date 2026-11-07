@@ -598,3 +598,32 @@ func TestEachEntryClosesReader(t *testing.T) {
 type closerFunc func() error
 
 func (f closerFunc) Close() error { return f() }
+
+// A symlink that would replace a file or folder the target holds is
+// refused like a new one: nothing is deleted first, nothing in the folder
+// is mirrored away, and a type change FAT can store still happens.
+func TestPlanRefusesSymlinkOverEntryOnNoSymlinkTarget(t *testing.T) {
+	h := Header{Node: "fat", Names: &api.NameRules{FS: "vfat", Fold: true, NoSymlinks: true}}
+	link := func(p string) Entry { return Entry{P: p, T: TypeSymlink, L: "fine", M: t0} }
+	for _, mirror := range []bool{false, true} {
+		s := newSink()
+		st, err := Plan(snap(t, dir("."), link("d"), dir("e"), file("e/in", 1), link("f")),
+			[]Target{{Node: "fat", Snap: snapH(t, h, dir("."), dir("d"), file("d/keep", 1), file("e", 1), file("f", 1))}},
+			PlanOptions{Mirror: mirror}, s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(s.deletes[0], ","); got != "e" {
+			t.Errorf("mirror=%v: deletes %q, want only e (a file for a folder)", mirror, got)
+		}
+		if s.copies["f"] != 0 || s.copies["d"] != 0 {
+			t.Errorf("mirror=%v: symlinks planned: %v", mirror, s.copies)
+		}
+		if s.copies["e"] == 0 || s.copies["e/in"] == 0 {
+			t.Errorf("mirror=%v: the storable type change was lost: %v", mirror, s.copies)
+		}
+		if st.Targets[0].Refused != 2 {
+			t.Errorf("mirror=%v: refused %d, want 2", mirror, st.Targets[0].Refused)
+		}
+	}
+}

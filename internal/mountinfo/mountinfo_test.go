@@ -5,9 +5,13 @@ import (
 	"testing"
 )
 
+// The "good dir" line lists all four timeouts, as a kernel does for a
+// mount set to 1 s: it prints only options that differ from the defaults,
+// so acdirmin=1 alone would leave acdirmax at 60 s (see
+// TestCachesAttributesTimeouts).
 const sample = `22 1 8:2 / / rw,relatime shared:1 - ext4 /dev/sda2 rw
 95 22 0:50 / /mnt/share rw,noatime - nfs nas:/export/share rw,vers=3,acregmin=1800,acregmax=1800,acdirmin=1800,acdirmax=1800,hard,nolock
-96 22 0:51 / /mnt/good\040dir rw - nfs4 srv:/x rw,vers=4.1,hard,acregmin=1,acdirmin=1,lookupcache=pos
+96 22 0:51 / /mnt/good\040dir rw - nfs4 srv:/x rw,vers=4.1,hard,acregmin=1,acregmax=1,acdirmin=1,acdirmax=1,lookupcache=pos
 97 22 0:52 / /mnt/noac rw - nfs srv:/y rw,vers=3,noac
 `
 
@@ -41,5 +45,33 @@ func TestAutofsOvermount(t *testing.T) {
 	}
 	if !m.CachesAttributes() {
 		t.Error("default NFS attribute caching (acdirmin=30) not detected")
+	}
+}
+
+// Seventh review pass: the maximum timeouts, actimeo and the kernel's
+// defaults count; lookupcache=positive does not hide a long attribute
+// cache.
+func TestCachesAttributesTimeouts(t *testing.T) {
+	for _, c := range []struct {
+		opts string
+		want bool
+	}{
+		{"actimeo=1,hard,lookupcache=positive", false},
+		{"acregmin=1,acregmax=1,acdirmin=1,acdirmax=1,hard,lookupcache=positive", false},
+		{"actimeo=1800,hard,lookupcache=positive", true},
+		{"acdirmin=1,acdirmax=60,acregmin=1,acregmax=60,lookupcache=pos", true},
+		{"hard,lookupcache=positive", true}, // defaults: 30 s for folders
+		{"hard,lookupcache=none", true},
+		{"actimeo=0,lookupcache=none", false},
+		{"actimeo=1800,noac", false},
+	} {
+		line := "95 22 0:50 / /mnt/share rw - nfs nas:/x rw,vers=3," + c.opts
+		m := For(Parse(strings.NewReader(line)), "/mnt/share/fkbr")
+		if m == nil {
+			t.Fatalf("%s: no mount", c.opts)
+		}
+		if got := m.CachesAttributes(); got != c.want {
+			t.Errorf("%s: CachesAttributes=%v want %v", c.opts, got, c.want)
+		}
 	}
 }

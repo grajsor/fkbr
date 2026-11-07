@@ -286,8 +286,8 @@ func durLoad(get func(*config.Config) time.Duration) func(*config.Config) string
 func durValue(least time.Duration) func(string) (any, error) {
 	return func(v string) (any, error) {
 		d, err := parseDur(v)
-		if err != nil || d < least {
-			return nil, fmt.Errorf("a time of at least %s, such as 10m, 1h or 2d", shortDur(least))
+		if err != nil || d < least || d > config.MaxDuration {
+			return nil, fmt.Errorf("a time of at least %s and at most 10 years, such as 10m, 1h or 2d", shortDur(least))
 		}
 		return shortDur(d), nil
 	}
@@ -296,6 +296,9 @@ func durValue(least time.Duration) func(string) (any, error) {
 func parseDur(v string) (time.Duration, error) {
 	if days, ok := strings.CutSuffix(v, "d"); ok {
 		n, err := strconv.Atoi(days)
+		if err == nil && (n < 0 || n > int(config.MaxDuration/(24*time.Hour))) {
+			return 0, fmt.Errorf("%q is out of range", v)
+		}
 		return time.Duration(n) * 24 * time.Hour, err
 	}
 	return time.ParseDuration(v)

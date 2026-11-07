@@ -92,10 +92,26 @@ func Of(path string) *Mount {
 
 func (m *Mount) IsNFS() bool { return strings.HasPrefix(m.FSType, "nfs") }
 
+// Kernel defaults of the NFS attribute cache timeouts, in seconds. The
+// kernel lists an option only when it differs from these.
+var attrDefaults = map[string]int{"acregmin": 3, "acregmax": 60, "acdirmin": 30, "acdirmax": 60}
+
+// attrTimeout is the mount's timeout for one ac* option: as listed, else
+// from actimeo (which sets all four), else the kernel's default.
+func (m *Mount) attrTimeout(k string) int {
+	for _, key := range []string{k, "actimeo"} {
+		if n, err := strconv.Atoi(m.Opts[key]); err == nil {
+			return n
+		}
+	}
+	return attrDefaults[k]
+}
+
 // CachesAttributes reports whether an NFS mount caches attributes or
 // lookups long enough that other clients' changes can stay invisible:
-// attribute timeouts above 3 s, or negative lookups cached (lookupcache
-// other than positive/none).
+// attribute timeouts above 3 s (the maximum counts: a directory that
+// stays unchanged is revalidated ever more rarely, up to it), or negative
+// lookups cached (lookupcache other than positive/none).
 func (m *Mount) CachesAttributes() bool {
 	if !m.IsNFS() {
 		return false
@@ -103,8 +119,8 @@ func (m *Mount) CachesAttributes() bool {
 	if _, ok := m.Opts["noac"]; ok {
 		return false
 	}
-	for _, k := range []string{"acdirmin", "acregmin"} {
-		if n, err := strconv.Atoi(m.Opts[k]); err == nil && n > 3 {
+	for k := range attrDefaults {
+		if m.attrTimeout(k) > 3 {
 			return true
 		}
 	}

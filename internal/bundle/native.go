@@ -112,7 +112,13 @@ func (n *nativeEntries) close() error {
 func readNative(r io.Reader, fn func(h *Header, data io.Reader) error) error {
 	br := bufio.NewReaderSize(r, 64<<10)
 	magic := make([]byte, len(nativeMagic))
-	if _, err := io.ReadFull(br, magic); err != nil || string(magic) != nativeMagic {
+	if _, err := io.ReadFull(br, magic); err != nil {
+		if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+			return errors.New("not an fkbr chunk")
+		}
+		return fmt.Errorf("reading the chunk: %w", err) // a failing read is not a verdict
+	}
+	if string(magic) != nativeMagic {
 		return errors.New("not an fkbr chunk")
 	}
 	prev := ""

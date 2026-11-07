@@ -142,6 +142,16 @@ func (e *Engine) pollEvents(ctx context.Context, nodes []api.Node, jobs []api.Jo
 				e.broadcast(api.Event{Type: api.EventNode, Time: now, Node: &nodes[i]})
 			}
 		}
+		here := map[string]bool{}
+		for _, n := range nodes {
+			here[n.ID] = true
+		}
+		for id := range seenNodes {
+			if !here[id] {
+				delete(seenNodes, id)
+				e.broadcast(api.Event{Type: api.EventNodeGone, Time: now, NodeID: id})
+			}
+		}
 		present := map[string]bool{}
 		for i, j := range jobs {
 			present[j.ID] = true

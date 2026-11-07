@@ -257,3 +257,44 @@ func TestBadFileNamed(t *testing.T) {
 		t.Errorf("err %v", err)
 	}
 }
+
+// Seventh review pass: sizes that overflow, a second YAML document, and
+// times beyond ten years are refused, not wrapped or ignored.
+func TestParseByteSizeOverflow(t *testing.T) {
+	for _, in := range []string{"18014398509481984KiB", "9223372036854775807KiB", "9000000000000000000G", "9223372036854775807T"} {
+		if got, err := ParseByteSize(in); err == nil {
+			t.Errorf("ParseByteSize(%q) = %d, nil; want an error", in, got)
+		}
+	}
+	if got, err := ParseByteSize("8191T"); err != nil || got != 8191<<40 {
+		t.Errorf("8191T: %d, %v", got, err)
+	}
+}
+
+func TestParseSecondDocumentRefused(t *testing.T) {
+	first := "node_id: alpha\nnfs_root: /x\nstate_dir: /s\n"
+	for name, y := range map[string]string{
+		"second document": first + "---\naccept_writes_from: [trusted]\n",
+		"unknown key too": first + "---\nbogus_key: 1\n",
+	} {
+		if _, err := Parse([]byte(y)); err == nil || !strings.Contains(err.Error(), "more than one YAML document") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	// a leading --- and comments are fine
+	if _, err := Parse([]byte("---\n# c\n" + first)); err != nil {
+		t.Errorf("leading ---: %v", err)
+	}
+}
+
+func TestParseDurationsBounded(t *testing.T) {
+	first := "node_id: a\nnfs_root: /x\nstate_dir: /s\n"
+	for _, k := range []string{"keep_done: 100000h", "forget_after: 100000h", "offline_after: 100000h"} {
+		if _, err := Parse([]byte(first + k + "\n")); err == nil {
+			t.Errorf("%s accepted", k)
+		}
+	}
+	if _, err := Parse([]byte(first + "keep_done: 8760h\n")); err != nil {
+		t.Errorf("a year: %v", err)
+	}
+}

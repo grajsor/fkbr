@@ -39,6 +39,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -310,17 +311,22 @@ func ServeSocket(ctx context.Context, l net.Listener, path string, mode os.FileM
 		BaseContext:       func(net.Listener) context.Context { return ctx },
 	}
 	errc := make(chan error, 1)
-	serve := func(l net.Listener) {
+	// serve returns the flag that marks l as closed on purpose: its
+	// Serve then ends with an error that is not a failure.
+	serve := func(l net.Listener) *atomic.Bool {
+		retired := new(atomic.Bool)
 		go func() {
-			if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := srv.Serve(l); err != nil && !errors.Is(err, http.ErrServerClosed) && !retired.Load() {
 				select {
 				case errc <- err:
 				default:
 				}
 			}
 		}()
+		return retired
 	}
-	serve(l)
+	retired := serve(l)
+	serving := l
 
 	var check <-chan time.Time
 	ino := socketInode(path)
@@ -343,7 +349,15 @@ func ServeSocket(ctx context.Context, l net.Listener, path string, mode os.FileM
 				}
 				log.Info("api socket recreated", "socket", path)
 				ino, lastTouch = socketInode(path), time.Now()
-				serve(nl)
+				// The old listener would hold its descriptor for good;
+				// closing it must not unlink the new socket's path.
+				retired.Store(true)
+				if ul, ok := serving.(*net.UnixListener); ok {
+					ul.SetUnlinkOnClose(false)
+				}
+				serving.Close()
+				serving = nl
+				retired = serve(nl)
 			} else if time.Since(lastTouch) >= SocketTouchInterval {
 				now := time.Now()
 				os.Chtimes(path, now, now)

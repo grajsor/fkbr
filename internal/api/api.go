@@ -218,18 +218,23 @@ const (
 	EventJob  EventType = "job"  // a job was created or changed
 	// EventJobGone is sent when a job record disappears (pruned).
 	EventJobGone EventType = "job_gone"
+	// EventNodeGone is sent when a node leaves the registry (forgotten,
+	// pruned or left); NodeID names it. Older frontends ignore it and
+	// keep the node listed until they restart.
+	EventNodeGone EventType = "node_gone"
 	// EventScan reports sync scan progress (only from the engine planning).
 	EventScan EventType = "scan"
 )
 
 // Event carries a snapshot of the node or job that changed.
 type Event struct {
-	Type  EventType     `json:"type"`
-	Time  time.Time     `json:"time"`
-	Node  *Node         `json:"node,omitempty"`
-	Job   *Job          `json:"job,omitempty"`
-	JobID string        `json:"job_id,omitempty"`
-	Scan  *ScanProgress `json:"scan,omitempty"`
+	Type   EventType     `json:"type"`
+	Time   time.Time     `json:"time"`
+	Node   *Node         `json:"node,omitempty"`
+	Job    *Job          `json:"job,omitempty"`
+	JobID  string        `json:"job_id,omitempty"`
+	NodeID string        `json:"node_id,omitempty"`
+	Scan   *ScanProgress `json:"scan,omitempty"`
 }
 
 // Client is what frontends hold: an in-process engine or a remote daemon.

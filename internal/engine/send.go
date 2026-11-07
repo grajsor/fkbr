@@ -38,10 +38,6 @@ type sender struct {
 	// chunks rebuilt after a restart lost them from memory.
 	applied   map[int]string
 	lastCheck time.Time
-	// uncarried counts the files read that have ACLs or extended
-	// attributes, which are not carried (xattr.go); the prefetch workers
-	// add to it.
-	uncarried atomic.Int64
 
 	// Fan-out bookkeeping: dropped targets, last seen ack counts and when
 	// each target last made progress, and node liveness (refreshed lazily).
@@ -318,6 +314,11 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 		s.status.st.Phase = fmt.Sprintf("resuming after chunk %d", s.resumeFrom)
 	}
 	s.status.put(ctx, true)
+	// uncarried counts the files read in this attempt that have ACLs or
+	// extended attributes, which are not carried (xattr.go); the prefetch
+	// workers add to it. Local, so a retried produce counts afresh and a
+	// worker left over from a failed attempt adds to the old count.
+	var uncarried atomic.Int64
 	sink := &shareSink{s: s, ctx: ctx}
 	w := bundle.NewWriter(sink, int64(e.cfg.Transfer.ChunkSize), req.Compress)
 	sink.w = w
@@ -333,7 +334,7 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 	var walkErr error
 	go func() {
 		defer close(recs)
-		walkErr = s.walkSource(ctx, recs, stop, pf)
+		walkErr = s.walkSource(ctx, recs, stop, pf, &uncarried)
 	}()
 	add := func(r walkRec) error {
 		switch {
@@ -352,7 +353,7 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 			if err != nil {
 				return nil, err
 			}
-			s.countUncarried(f)
+			countUncarried(f, &uncarried)
 			if r.ent.Size <= prefetchMaxFile {
 				return f, nil
 			}
@@ -397,7 +398,7 @@ func (s *sender) produce(ctx context.Context) (int, error) {
 	}
 	n, err := w.Close()
 	s.status.st.Files, s.status.st.Bytes, s.status.st.Chunks = w.Files, w.Bytes, n
-	if c := s.uncarried.Load(); c > 0 && err == nil {
+	if c := uncarried.Load(); c > 0 && err == nil {
 		s.status.note("%d files have ACLs or extended attributes; they are not copied (the new files get the target's defaults)", c)
 	}
 	return n, err
@@ -417,7 +418,7 @@ var errWalkStopped = errors.New("walk stopped")
 // walkSource walks the job's paths in the bundle's order and sends every
 // entry to recs, starting reads of small files on the way. It returns when
 // done or when stop is closed.
-func (s *sender) walkSource(ctx context.Context, recs chan<- walkRec, stop <-chan struct{}, pf *prefetcher) error {
+func (s *sender) walkSource(ctx context.Context, recs chan<- walkRec, stop <-chan struct{}, pf *prefetcher, uncarried *atomic.Int64) error {
 	e, req := s.e, s.job.Request
 	emit := func(r walkRec) error {
 		if r.err == nil && r.problem == "" && r.ent.Type == api.TypeFile && r.ent.Size <= prefetchMaxFile {
@@ -425,7 +426,7 @@ func (s *sender) walkSource(ctx context.Context, recs chan<- walkRec, stop <-cha
 			if r.pre = pf.start(r.ent.Size, func() (*os.File, error) {
 				f, err := e.fs.Open(req.SrcRoot, rel)
 				if err == nil {
-					s.countUncarried(f)
+					countUncarried(f, uncarried)
 				}
 				return f, err
 			}, stop); r.pre == nil {

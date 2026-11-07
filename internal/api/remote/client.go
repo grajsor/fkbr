@@ -238,7 +238,9 @@ func (c *Client) Subscribe(ctx context.Context) (<-chan api.Event, error) {
 	if resp.StatusCode != http.StatusOK {
 		defer resp.Body.Close()
 		var we wireError
-		json.NewDecoder(resp.Body).Decode(&we)
+		if json.NewDecoder(resp.Body).Decode(&we) != nil || we.Error == "" {
+			return nil, fmt.Errorf("daemon: %s", resp.Status)
+		}
 		return nil, decodeError(we)
 	}
 	ch := make(chan api.Event, 256)

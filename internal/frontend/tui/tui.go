@@ -457,6 +457,12 @@ func (m *model) applyEvent(ev api.Event) tea.Cmd {
 			m.nodes[ev.Node.ID] = *ev.Node
 			m.syncNodePanes()
 		}
+	case api.EventNodeGone:
+		if n, ok := m.nodes[ev.NodeID]; ok && !n.Self {
+			delete(m.nodes, ev.NodeID)
+			delete(m.dest, ev.NodeID)
+			m.syncNodePanes()
+		}
 	case api.EventScan:
 		if s := ev.Scan; s != nil && !s.Done {
 			text := fmt.Sprintf("scanning %s: %d entries, %s", s.Node, s.Entries, humanSize(s.Bytes))

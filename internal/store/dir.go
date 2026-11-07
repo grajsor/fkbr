@@ -517,28 +517,50 @@ func (m *Dir) Fetch(_ context.Context) ([]*transport.Message, error) {
 		}
 		if err != nil {
 			if m.claimed[n]++; m.claimed[n] >= maxReadTries {
-				m.fs.Rename(p, m.path(m.inbox(m.self, "failed"), n))
-				delete(m.claimed, n)
+				if perr := m.park(p, n); perr != nil {
+					errs = append(errs, perr) // still claimed; parked next time
+				} else {
+					delete(m.claimed, n)
+				}
 			}
 			errs = append(errs, err)
 			continue
 		}
-		delete(m.claimed, n)
 		var msg transport.Message
 		// From and ID name the reply folder: a forged "../" in them would
 		// reach outside the share's folder (security audit 2026-10-22).
 		if err := json.Unmarshal(data, &msg); err != nil || msg.ID+".json" != n ||
 			!config.ValidID(msg.ID) || !config.ValidID(msg.From) || !config.ValidID(msg.To) {
 			// Unreadable or renamed: park it where an operator can look.
-			m.fs.Rename(p, m.path(m.inbox(m.self, "failed"), n))
+			// If that fails the claim stays, and the error makes layout()
+			// below put a missing failed/ back: it is parked next time.
+			if perr := m.park(p, n); perr != nil {
+				errs = append(errs, perr)
+				continue
+			}
+			delete(m.claimed, n)
 			continue
 		}
+		delete(m.claimed, n)
 		out = append(out, &msg)
 	}
 	if len(errs) > 0 {
 		m.layout() // the inbox may have been removed under us
 	}
 	return out, errors.Join(errs...)
+}
+
+// park moves a claimed request that cannot be used to failed/. A request
+// already gone counts as parked.
+func (m *Dir) park(p, n string) error {
+	err := m.fs.Rename(p, m.path(m.inbox(m.self, "failed"), n))
+	if errors.Is(err, fs.ErrNotExist) {
+		// The request, or failed/ itself?
+		if _, serr := m.fs.Lstat(p); errors.Is(serr, fs.ErrNotExist) {
+			return nil
+		}
+	}
+	return err
 }
 
 // pruneOrphanData removes this node's staged data for jobs whose record is

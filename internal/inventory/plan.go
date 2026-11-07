@@ -339,8 +339,11 @@ func (p *planner) step(path string) (err error) {
 			}
 			p.refusedDir[i] = ""
 		}
+		// A source entry the target cannot hold is refused whether the
+		// target has nothing there or an entry of another type that the
+		// plan would delete first (a symlink for a file on FAT).
 		why := ""
-		if s != nil && d == nil {
+		if s != nil && (d == nil || d.T != s.T && d.T != TypeError) {
 			why = p.cannotStore(i, path, s)
 		}
 		// What the folder will hold on the target: the source's entry, or
@@ -352,6 +355,9 @@ func (p *planner) step(path string) (err error) {
 		switch {
 		case why != "":
 			p.refuse(i, path, s, why)
+			if d != nil && d.T == TypeDir && s.T != TypeDir {
+				p.refusedDir[i] = path // what is in the folder stays too
+			}
 			continue
 		case s == nil && d == nil:
 			// unreadable/special source entry absent on target

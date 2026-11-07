@@ -130,3 +130,24 @@ func FuzzReadNative(f *testing.F) {
 		})
 	})
 }
+
+type failingReader struct{ err error }
+
+func (r failingReader) Read([]byte) (int, error) { return 0, r.err }
+
+// A read that fails before the magic is that error (a share I/O error is
+// retried by the engine), not the verdict "not an fkbr chunk"; a short or
+// foreign chunk still is.
+func TestMagicReadErrorKept(t *testing.T) {
+	want := errors.New("stale file handle")
+	err := Read(failingReader{want}, false, func(*Header, io.Reader) error { return nil })
+	if !errors.Is(err, want) {
+		t.Errorf("got %v, want it to wrap %v", err, want)
+	}
+	for _, in := range []string{"", "FK", "XXXXXXXX"} {
+		err := Read(strings.NewReader(in), false, func(*Header, io.Reader) error { return nil })
+		if err == nil || !strings.Contains(err.Error(), "not an fkbr chunk") {
+			t.Errorf("%q: %v", in, err)
+		}
+	}
+}

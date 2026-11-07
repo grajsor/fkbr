@@ -147,17 +147,17 @@ func (m *Dir) PruneBlobs(ctx context.Context, maxAge time.Duration) error {
 	return errors.Join(errs...)
 }
 
-// newestMtime is the latest mtime of dir and its direct entries.
+// newestMtime is the latest mtime of dir's entries (the NFS refresh's
+// ".r-" probes do not count). A folder with none is one being written (a
+// blob is renamed in after its folder is made): its own mtime then. Not
+// the folder's when there are entries: a refresh bumps it on every read,
+// which would keep an old plan alive for as long as it is looked at.
 func (m *Dir) newestMtime(dir string) time.Time {
-	var newest time.Time
+	if t := m.newestEntry(dir); !t.IsZero() {
+		return t
+	}
 	if fi, err := m.fs.Stat(dir); err == nil {
-		newest = fi.ModTime()
+		return fi.ModTime()
 	}
-	des, _ := m.fs.ReadDir(dir)
-	for _, de := range des {
-		if fi, err := de.Info(); err == nil && fi.ModTime().After(newest) {
-			newest = fi.ModTime()
-		}
-	}
-	return newest
+	return time.Time{}
 }

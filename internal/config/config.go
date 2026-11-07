@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -204,8 +205,15 @@ func ParseByteSize(s string) (ByteSize, error) {
 	if err != nil || v < 0 {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
+	if v > math.MaxInt64/mult {
+		return 0, fmt.Errorf("size %q is too large", s)
+	}
 	return ByteSize(v * mult), nil
 }
+
+// MaxDuration is the longest time a setting may name (ten years): it
+// keeps "99999d" from wrapping around or meaning "never".
+const MaxDuration = 10 * 365 * 24 * time.Hour
 
 var idRE = regexp.MustCompile(`^[a-z0-9][a-z0-9_.-]{0,62}$`)
 
@@ -295,6 +303,14 @@ func decode(data []byte) (*Config, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 	if err := dec.Decode(&c); err != nil && err != io.EOF {
+		return nil, fmt.Errorf("config: %w", err)
+	}
+	// What follows a "---" would be dropped without a word (and escape the
+	// strict key check): refuse it.
+	var more yaml.Node
+	if err := dec.Decode(&more); err == nil {
+		return nil, fmt.Errorf("config: more than one YAML document (a stray ---?): only the first would be read")
+	} else if err != io.EOF {
 		return nil, fmt.Errorf("config: %w", err)
 	}
 	if c.NFSRoot != "" && len(c.SSH) > 0 {
@@ -547,6 +563,14 @@ func (c *Config) Validate() error {
 		seen[r.ID] = true
 		if !filepath.IsAbs(r.Path) {
 			errs = append(errs, fmt.Errorf("roots[%d].path %q: must be an absolute path", i, r.Path))
+		}
+	}
+	for _, d := range []struct {
+		key string
+		v   time.Duration
+	}{{"heartbeat_interval", c.HeartbeatInterval}, {"offline_after", c.OfflineAfter}, {"forget_after", c.ForgetAfter}, {"keep_done", c.KeepDone}, {"transfer.detach_after", c.Transfer.DetachAfter}} {
+		if d.v > MaxDuration {
+			errs = append(errs, fmt.Errorf("%s (%s) is more than ten years", d.key, d.v))
 		}
 	}
 	if c.OfflineAfter <= c.HeartbeatInterval {

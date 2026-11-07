@@ -293,7 +293,7 @@ func run() error {
 	case "daemon":
 		return daemon(ctx, cfg, log)
 	case "check":
-		return runCheck(ctx, cfg)
+		return runCheck(ctx, cfg, stdout())
 	case "tui":
 		opts := tui.Options{Colors: *colors, Theme: *theme, Version: version, NoMouse: !*mouse, StartInDirs: true,
 			ConfigPath: cfg.ConfigPath, Overridden: overridden(shareArg != "" || *share != ""),
@@ -684,15 +684,16 @@ func runTUI(ctx context.Context, cfg *config.Config, forceLocal bool, opts tui.O
 	return terr
 }
 
-// runCheck prints the environment checks; any FAIL makes it exit non-zero.
-func runCheck(ctx context.Context, cfg *config.Config) error {
+// runCheck writes the environment checks to w (stdout(): cleaned on a
+// terminal); any FAIL makes it exit non-zero.
+func runCheck(ctx context.Context, cfg *config.Config, w io.Writer) error {
 	mi, err := os.Open("/proc/self/mountinfo")
 	if err == nil {
 		defer mi.Close()
 	}
 	fails := 0
 	for _, r := range check.Run(ctx, cfg, mi) {
-		fmt.Printf("%-4s  %-11s %s\n", r.Level, r.Area, r.Msg)
+		fmt.Fprintf(w, "%-4s  %-11s %s\n", r.Level, r.Area, r.Msg)
 		if r.Level == check.Fail {
 			fails++
 		}
@@ -705,7 +706,7 @@ func runCheck(ctx context.Context, cfg *config.Config) error {
 		for _, h := range hosts {
 			v, err := sshlink.Probe(ctx, h, sshlink.SessionOptions{Bin: cfg.SSHBin})
 			if err != nil {
-				fmt.Printf("%-4s  %-11s %s\n", check.Fail, "ssh", safetext.Clean(h.String()+": "+err.Error()))
+				fmt.Fprintf(w, "%-4s  %-11s %s\n", check.Fail, "ssh", safetext.Clean(h.String()+": "+err.Error()))
 				fails++
 				continue
 			}
@@ -718,7 +719,7 @@ func runCheck(ctx context.Context, cfg *config.Config) error {
 			if lvl == check.Fail {
 				fails++
 			}
-			fmt.Printf("%-4s  %-11s %s\n", lvl, "ssh", safetext.Clean(h.String()+": "+v+note))
+			fmt.Fprintf(w, "%-4s  %-11s %s\n", lvl, "ssh", safetext.Clean(h.String()+": "+v+note))
 		}
 	}
 	if fails > 0 {

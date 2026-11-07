@@ -1727,3 +1727,33 @@ func TestJobHasNotes(t *testing.T) {
 		}
 	}
 }
+
+// A time in the settings dialog beyond ten years (or one that wraps
+// around in days) is refused, not saved as a huge or negative keep_done.
+func TestDurValueRange(t *testing.T) {
+	dv := durValue(time.Minute)
+	for _, in := range []string{"100000000d", "99999d", "-3d", "9223372036854775807d", "4000d"} {
+		if v, err := dv(in); err == nil {
+			t.Errorf("durValue(%q) accepted %v", in, v)
+		}
+	}
+	for in, want := range map[string]string{"2d": "48h", "90m": "1h30m", "3650d": "87600h"} {
+		if v, err := dv(in); err != nil || v != want {
+			t.Errorf("durValue(%q) = %v, %v; want %s", in, v, err, want)
+		}
+	}
+}
+
+// A node_gone event takes the node out of the list (not this host's own).
+func TestNodeGoneEvent(t *testing.T) {
+	h := newHarness(t)
+	h.m.dest["s1"] = true
+	h.m.applyEvent(api.Event{Type: api.EventNodeGone, NodeID: "s1"})
+	if _, ok := h.m.nodes["s1"]; ok || h.m.dest["s1"] {
+		t.Errorf("s1 still there: nodes %v dest %v", h.m.nodes, h.m.dest)
+	}
+	h.m.applyEvent(api.Event{Type: api.EventNodeGone, NodeID: "master"})
+	if _, ok := h.m.nodes["master"]; !ok {
+		t.Error("this host's own node was removed")
+	}
+}

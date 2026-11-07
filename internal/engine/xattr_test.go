@@ -89,3 +89,41 @@ func TestCopyNotesUncarriedXattrs(t *testing.T) {
 		}
 	}
 }
+
+// A produce that is retried (a transient chunk-write error) walks the
+// source again; the note still counts each file once.
+func TestUncarriedNoteCountsOnceAcrossRetry(t *testing.T) {
+	shortTransient(t, 10*time.Second)
+	share := t.TempDir()
+	mcfg := nodeCfg(t, share, "master")
+	master, fs := buildFaulty(t, mcfg)
+	fs.eioWriteAt = 0 // one transient failure: produce runs twice
+	s1, _ := node(t, share, "s1")
+	tagged := filepath.Join(mcfg.Roots[0].Path, "tagged")
+	if err := os.WriteFile(tagged, []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setUserXattr(t, tagged)
+	runWorker(t, master)
+	runWorker(t, s1)
+	id, err := master.Submit(context.Background(), api.TransferRequest{SrcRoot: "data", Paths: []string{"tagged"}, DstNodes: []string{"s1"}, DstRoot: "data", DstDir: "in"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, master, id, 30*time.Second)
+	if j.State != api.JobDone {
+		t.Fatalf("job: %s %+v", j.State, j.Participants)
+	}
+	if !fs.eioWriteHit {
+		t.Fatal("fault never injected: no retry happened")
+	}
+	var notes string
+	for _, p := range j.Participants {
+		if p.Role == api.RoleSource {
+			notes = strings.Join(p.Problems, "\n")
+		}
+	}
+	if !strings.Contains(notes, "1 files have ACLs") {
+		t.Errorf("source note across the retry: %q", notes)
+	}
+}
