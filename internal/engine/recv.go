@@ -90,7 +90,9 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	case errors.Is(err, errDetached):
 		// An orderly outcome, not a failure of this request.
 		log.Warn("detached by the source; nothing installed", "after_chunks", status.st.Chunks)
-		status.finishThen(ctx, api.JobDetached, fmt.Errorf("%w; run '%s catchup %s'", err, product.Name, id), abort)
+		if ferr := status.finishThen(ctx, api.JobDetached, fmt.Errorf("%w; run '%s catchup %s'", err, product.Name, id), abort); errors.Is(ferr, errEndLost) {
+			return errEndLost
+		}
 		return nil
 	case errors.Is(err, errCancelled):
 		return status.finishThen(ctx, api.JobCancelled, nil, abort)
@@ -119,7 +121,7 @@ func (e *Engine) runReceive(ctx context.Context, id string) error {
 	if res.OwnerNotPreserved > 0 {
 		status.note("ownership not preserved on %d entries (needs root or CAP_CHOWN)", res.OwnerNotPreserved)
 	}
-	return status.finish(ctx, api.JobDone, nil)
+	return status.finishThen(ctx, api.JobDone, nil, func() {})
 }
 
 // consume applies chunks in order until the source has published them all.

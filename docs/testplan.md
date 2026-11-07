@@ -633,6 +633,28 @@ Left as they are: `do()` in sshlink ignores its drain error (no caller
 can reach a coded reset there), the Makefile's `bin/fkbr` on other
 architectures, and the editor's byte/rune find.
 
+## 26. Eighth pass of the second model's review (2026-11-07)
+
+A read-only review of `998df32` (nothing was run on the reviewer's side).
+Each finding was checked in the source first; the tests below were run
+against the old sources on the Rocky 10 VM and fail there (the coverage
+tests pass on both, as they cover gaps).
+
+| Found | Now | Test |
+|---|---|---|
+| `fkbr check` used plain `os.*` on `tmp/` and `protocol-version`: a symlink put there by a share writer made it write, read back and delete files outside the share (and print one), and report "writable" | Everything in `check.share()` goes through an `os.Root` on the share; a link out of it is a failure, not followed | `TestShareCheckStaysInTheShare`, `TestShareCheckWritable` |
+| A `COMPLETE` marker with a parse error, a negative or a huge count was taken as the chunk total (`Atoi` error dropped) | Anything but a count from 1 to 2^31-1 is no marker (0: not complete, targets wait) | `TestCompleteMarkerMustBeACount` |
+| The source (and the target) made one try to record `done` after the staged data was already gone; a lost status left the job running for good | `finishThen` also on success: the end first, retried for the transient budget, the data after it | `TestSourceDoneEndLostRetries` |
+| `finishThen` kept the data "for the next run" when the end stayed lost, but the request was parked in `failed/` (or removed): no next run | It returns `errEndLost`; `startJob` leaves the request claimed in `cur/`, so a restart resumes | `TestEndLostKeepsTheRequest` |
+| A snapshot header with `mtime_step` near MaxInt64 (x 1e9 wraps), a negative step or min above max was accepted | `NewReader` refuses a step outside 0..1 day and min above max | `TestReaderRefusesBadHeaderNumbers` |
+| `safetext` let invisible format characters through (zero-width space, word joiner, BOM, soft hyphen, tags, U+2028/9): "trusted<ZWSP>host" read as another name | Category Cf, Zl and Zp become `?`, except the joiner and non-joiner (emoji sequences, Persian and Indic scripts). A BOM at the start of a viewed file now shows as `?` | `TestCleanInvisibleFormat` |
+| Coverage only: `atomicfile.Write`, `id.At`/`New`, `NewReader`'s error branches, `remote.Listen` over a stale socket had no tests | Tests added, no code change. The review's `id.At` with a negative time cannot happen (the share clock is after 1970); its "Chmod failure leaves the socket" is wrong (`Close` unlinks it) | `TestWrite*`, `TestAtShapeAndOrder`, `TestNewIsUnique`, `TestNewReaderErrors`, `TestListenReplacesStaleSocket` |
+
+Left as it is: the world-connectable moment between `net.Listen` and
+`Chmod` of the daemon socket (the state dir is private, nobody else can
+reach the socket's folder); `shareModes` still lists the share with
+`os.ReadDir` (it reads names only and never follows a link).
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

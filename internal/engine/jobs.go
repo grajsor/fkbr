@@ -506,6 +506,10 @@ func (e *Engine) startJob(ctx context.Context, m *transport.Message) {
 			log.Info("job interrupted; will resume on restart")
 			return
 		}
+		if errors.Is(err, errEndLost) {
+			log.Warn("job's end not recorded; request kept, it resumes on restart", "err", err)
+			return
+		}
 		if err != nil {
 			log.Warn("job failed", "err", err)
 		} else {
@@ -592,9 +596,16 @@ func (w *statusWriter) finishThen(ctx context.Context, state api.JobState, err e
 		clean()
 	} else {
 		w.e.log.Warn("job's end not recorded; its staged data is kept for the next run", "job", w.job, "state", state)
+		// startJob then leaves the request claimed, so a restart is that
+		// next run (a request finished or parked now would never come back).
+		err = errors.Join(err, errEndLost)
 	}
 	return err
 }
+
+// errEndLost: the job's end could not be recorded within transientBudget.
+// The request is neither removed nor parked in failed/.
+var errEndLost = errors.New("the job's end was not recorded")
 
 // markQueued publishes that this node has the job but waits for a free
 // slot (transfer.max_jobs), so nobody takes the wait for a stall. A job

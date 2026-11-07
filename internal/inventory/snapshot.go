@@ -45,6 +45,22 @@ type Header struct {
 	Names *api.NameRules `json:"names,omitempty"`
 }
 
+// maxMtimeStep bounds Header.MtimeStep (seconds; FAT: 2). The planner
+// multiplies it by 1e9, which wraps for anything near MaxInt64.
+const maxMtimeStep = 24 * 3600
+
+// check refuses a header no scan writes: the planner decides what to copy
+// and delete from these numbers.
+func (h *Header) check() error {
+	if h.MtimeStep < 0 || h.MtimeStep > maxMtimeStep {
+		return fmt.Errorf("snapshot header: mtime_step %d out of range", h.MtimeStep)
+	}
+	if h.MtimeMin != 0 && h.MtimeMax != 0 && h.MtimeMin > h.MtimeMax {
+		return fmt.Errorf("snapshot header: mtime_min %d is above mtime_max %d", h.MtimeMin, h.MtimeMax)
+	}
+	return nil
+}
+
 // storable is mtime m as the scanned filesystem would store it.
 func (h *Header) storable(m int64) int64 {
 	if h.MtimeMax != 0 && m > h.MtimeMax {
@@ -177,6 +193,10 @@ func NewReader(r io.Reader) (*Reader, error) {
 	if rd.Header.Version != snapshotVersion {
 		zr.Close()
 		return nil, fmt.Errorf("snapshot version %d not supported", rd.Header.Version)
+	}
+	if err := rd.Header.check(); err != nil {
+		zr.Close()
+		return nil, err
 	}
 	return rd, nil
 }

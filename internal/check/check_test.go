@@ -156,3 +156,61 @@ func TestStateDirOnTmpfs(t *testing.T) {
 		t.Errorf("the warning should say what is lost at a reboot: %q", msg)
 	}
 }
+
+// The share is writable by everyone: a symlink where tmp/ or
+// protocol-version stands must not take check out of it (it wrote, read
+// and deleted files there, and reported "writable").
+func TestShareCheckStaysInTheShare(t *testing.T) {
+	base := t.TempDir()
+	share, outside := filepath.Join(base, "share"), filepath.Join(base, "outside")
+	for _, d := range []string{share, outside} {
+		os.Mkdir(d, 0o755)
+	}
+	secret := filepath.Join(outside, "secret")
+	os.WriteFile(secret, []byte("99\n"), 0o600)
+	keep := filepath.Join(outside, ".check-n1")
+	os.WriteFile(keep, []byte("mine"), 0o600)
+	if err := os.Symlink(outside, filepath.Join(share, "tmp")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, filepath.Join(share, "protocol-version")); err != nil {
+		t.Fatal(err)
+	}
+	c := &checker{cfg: &config.Config{NodeID: "n1", NFSRoot: share}}
+	c.share(nil)
+	if b, err := os.ReadFile(keep); err != nil || string(b) != "mine" {
+		t.Errorf("a file outside the share was touched: %q, %v", b, err)
+	}
+	des, _ := os.ReadDir(outside)
+	if len(des) != 2 {
+		t.Errorf("files appeared outside the share: %v", des)
+	}
+	for _, r := range c.res {
+		if r.Level == OK && strings.Contains(r.Msg, "writable") {
+			t.Errorf("reported writable through a link: %+v", c.res)
+		}
+		if strings.Contains(r.Msg, "99") {
+			t.Errorf("printed a file from outside the share: %+v", r)
+		}
+	}
+}
+
+// A healthy share still passes, and check leaves nothing behind.
+func TestShareCheckWritable(t *testing.T) {
+	share := t.TempDir()
+	c := &checker{cfg: &config.Config{NodeID: "n1", NFSRoot: share}}
+	c.share(nil)
+	ok := false
+	for _, r := range c.res {
+		if r.Level == Fail {
+			t.Errorf("fail on a healthy share: %+v", r)
+		}
+		ok = ok || strings.Contains(r.Msg, "atomic rename-over works")
+	}
+	if !ok {
+		t.Errorf("no writable result: %+v", c.res)
+	}
+	if des, _ := os.ReadDir(filepath.Join(share, "tmp")); len(des) != 0 {
+		t.Errorf("left behind: %v", des)
+	}
+}

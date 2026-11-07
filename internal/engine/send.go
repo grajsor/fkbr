@@ -128,12 +128,14 @@ func (e *Engine) runSend(ctx context.Context, id string) error {
 	case err != nil:
 		return s.status.finishThen(ctx, api.JobFailed, err, func() { s.removeData(ctx) })
 	}
-	s.removeData(ctx) // every active target has it all
 	took := time.Since(s.start)
 	st := s.status.st
 	s.log.Info("send done", "files", st.Files, "bytes", size(st.Bytes), "chunks", st.Chunks, "stored", size(s.stored),
 		"targets", summary(s.active(), 8), "detached", len(s.detached), "took", took.Round(time.Millisecond), "rate", rate(st.Bytes, took))
-	return s.status.finish(ctx, api.JobDone, nil)
+	// Every active target has it all. The end first, then the data, as when
+	// the job fails: a done status that was lost with the data already gone
+	// left the job running for good.
+	return s.status.finishThen(ctx, api.JobDone, nil, func() { s.removeData(ctx) })
 }
 
 // removeData removes the job's staged chunks.

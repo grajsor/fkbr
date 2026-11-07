@@ -70,6 +70,10 @@ func checkJobNames(id string, j *api.Job) error {
 // such a job, so pruning removes it once it is old.
 var errBadRecord = errors.New("bad job record")
 
+// maxTotalChunks bounds the count in a COMPLETE marker (256 TiB in 1 MiB
+// chunks is 2^28).
+const maxTotalChunks = 1<<31 - 1
+
 func chunkName(seq int, ext string) string { return fmt.Sprintf("%08d%s", seq, ext) }
 
 func (m *Dir) CreateJob(_ context.Context, job *api.Job) error {
@@ -128,7 +132,11 @@ func (m *Dir) GetJob(_ context.Context, id string) (*api.Job, error) {
 	}
 	// Markers appear later, so look for them by listing (see listed.go).
 	if b, err := m.readListed(dir, "COMPLETE"); err == nil {
-		job.TotalChunks, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		// A marker that is not a plain count is no marker: 0 means "not
+		// complete yet" (targets keep waiting), never a count to act on.
+		if n, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil && n > 0 && n <= maxTotalChunks {
+			job.TotalChunks = n
+		}
 	}
 	if ok, _ := m.listed(dir, "CANCEL"); ok {
 		job.Cancelled = true

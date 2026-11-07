@@ -37,3 +37,26 @@ func TestScreen(t *testing.T) {
 		t.Errorf("Screen:\n got %q\nwant %q", got, want)
 	}
 }
+
+// Invisible format characters let one name pass for another
+// ("trusted<ZWSP>host"); the joiner and non-joiner stay for emoji
+// sequences and the scripts that need them.
+func TestCleanInvisibleFormat(t *testing.T) {
+	for _, r := range []rune{'\u200b', '\u2060', '\ufeff', '\u00ad', '\u2028', '\u2029', '\U000e0067', '\u180e'} {
+		in := "a" + string(r) + "b"
+		if got := Clean(in); got != "a?b" {
+			t.Errorf("Clean(%+q) = %q", in, got)
+		}
+		if got := Text(in); got != "a?b" {
+			t.Errorf("Text(%+q) = %q", in, got)
+		}
+		if got := Screen(in); got != "a?b" {
+			t.Errorf("Screen(%+q) = %q", in, got)
+		}
+	}
+	for _, in := range []string{"👨\u200d👩\u200d👧", "می\u200cخواهم", "日本語", "e\u0301", "\ufe0f"} {
+		if got := Clean(in); got != in {
+			t.Errorf("Clean(%+q) = %q, should be kept", in, got)
+		}
+	}
+}

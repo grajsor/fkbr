@@ -1,8 +1,8 @@
 // Package safetext makes text from elsewhere (file names, a peer's registry
 // entry, error messages, file contents) safe to show on a terminal. Control
 // characters in it could clear the screen, retitle the window or write the
-// clipboard (OSC 52). Each such character, bidi control and invalid UTF-8
-// byte becomes "?", as with ls -q.
+// clipboard (OSC 52). Each such character, bidi control, invisible format
+// character and invalid UTF-8 byte becomes "?", as with ls -q.
 package safetext
 
 import (
@@ -28,7 +28,17 @@ func unsafe(r rune, size int, lines bool) bool {
 		return true
 	}
 	// Bidi controls reorder what follows ("Trojan Source" names).
-	return r == '؜' || r == '‎' || r == '‏' || r >= '‪' && r <= '‮' || r >= '⁦' && r <= '⁩'
+	if r == '؜' || r == '‎' || r == '‏' || r >= '‪' && r <= '‮' || r >= '⁦' && r <= '⁩' {
+		return true
+	}
+	// Other invisible format characters (zero-width space, word joiner, BOM,
+	// soft hyphen, tags) and line/paragraph separators make "trusted<ZWSP>host"
+	// read as another name. The joiner and non-joiner stay: emoji sequences
+	// and several scripts (Persian, Indic) cannot be written without them.
+	if r == '\u200c' || r == '\u200d' {
+		return false
+	}
+	return unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 }
 
 func clean(s string, lines bool) string {

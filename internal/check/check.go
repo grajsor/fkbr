@@ -18,8 +18,8 @@ import (
 	"time"
 
 	"fkbr/internal/api"
-	"fkbr/internal/atomicfile"
 	"fkbr/internal/config"
+	"fkbr/internal/id"
 	"fkbr/internal/localfs"
 	"fkbr/internal/mountinfo"
 	"fkbr/internal/product"
@@ -151,19 +151,28 @@ func (c *checker) share(mounts []mountinfo.Mount) {
 	if m := mountinfo.For(mounts, root); m != nil {
 		c.mountOptions(m)
 	}
-	// Atomic publish: write, rename over an existing name, read back.
-	tmp := filepath.Join(root, "tmp")
-	if err := os.Mkdir(tmp, 0o777); err == nil {
-		os.Chmod(tmp, 0o777) // as fkbr creates it, whatever the umask
+	// Every path below goes through an os.Root on the share: a writer of
+	// the (world-writable) share can put a symlink where tmp/ or
+	// protocol-version stand, and check must not follow it out.
+	rt, err := os.OpenRoot(root)
+	if err != nil {
+		c.add(Fail, "share", "cannot open %s: %v", root, err)
+		return
 	}
-	dest := filepath.Join(tmp, ".check-"+c.cfg.NodeID)
-	defer os.Remove(dest)
+	defer rt.Close()
+	// Atomic publish: write, rename over an existing name, read back.
+	if err := rt.Mkdir("tmp", 0o777); err == nil {
+		rt.Chmod("tmp", 0o777) // as fkbr creates it, whatever the umask
+	}
+	tmp := filepath.Join(root, "tmp")
+	dest := filepath.Join("tmp", ".check-"+c.cfg.NodeID)
+	defer rt.Remove(dest)
 	for i, content := range []string{"first", "second"} {
-		if err := atomicfile.Write(tmp, dest, []byte(content), 0o644); err != nil {
+		if err := publish(rt, "tmp", dest, []byte(content), 0o644); err != nil {
 			c.add(Fail, "share", "cannot write to %s: %v", tmp, err)
 			return
 		}
-		if got, err := os.ReadFile(dest); err != nil || string(got) != content {
+		if got, err := rt.ReadFile(dest); err != nil || string(got) != content {
 			c.add(Fail, "share", "rename-over not visible (write %d read %q, %v)", i, got, err)
 			return
 		}
@@ -171,7 +180,7 @@ func (c *checker) share(mounts []mountinfo.Mount) {
 	c.add(OK, "share", "writable; atomic rename-over works")
 	c.shareModes(root)
 
-	if b, err := os.ReadFile(filepath.Join(root, "protocol-version")); err == nil {
+	if b, err := rt.ReadFile("protocol-version"); err == nil {
 		if v := strings.TrimSpace(string(b)); v != strconv.Itoa(api.ProtocolVersion) {
 			c.add(Fail, "share", "share uses protocol %s, this binary speaks %d", v, api.ProtocolVersion)
 		} else {
@@ -183,12 +192,13 @@ func (c *checker) share(mounts []mountinfo.Mount) {
 
 	// Clock skew against the server: fkbr does not depend on it (liveness
 	// uses server mtimes), but skew confuses logs and job timestamps.
-	f, err := os.CreateTemp(tmp, ".skew-*")
+	skewName := filepath.Join("tmp", ".skew-"+id.New())
+	f, err := rt.OpenFile(skewName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		_, werr := f.Write([]byte("x"))
 		fi, serr := f.Stat()
 		f.Close()
-		os.Remove(f.Name())
+		rt.Remove(skewName)
 		if err := errors.Join(werr, serr); err != nil {
 			c.add(Warn, "clock", "could not measure the clock skew against the NFS server: %v", err)
 			return
@@ -200,6 +210,35 @@ func (c *checker) share(mounts []mountinfo.Mount) {
 		}
 		c.add(lvl, "clock", "local clock vs NFS server: %s (%s tolerates skew; keep NTP running for sane timestamps)", skew, product.Name)
 	}
+}
+
+// publish is atomicfile.Write inside root rt: a temp file in dir, synced,
+// then renamed over dest.
+func publish(rt *os.Root, dir, dest string, data []byte, perm os.FileMode) (err error) {
+	name := filepath.Join(dir, "."+filepath.Base(dest)+"."+id.New()+".tmp")
+	f, err := rt.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, perm)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			f.Close()
+			rt.Remove(name)
+		}
+	}()
+	if _, err = f.Write(data); err != nil {
+		return err
+	}
+	if err = f.Chmod(perm); err != nil {
+		return err
+	}
+	if err = f.Sync(); err != nil {
+		return err
+	}
+	if err = f.Close(); err != nil {
+		return err
+	}
+	return rt.Rename(name, dest)
 }
 
 func (c *checker) mountOptions(m *mountinfo.Mount) {
