@@ -131,10 +131,13 @@ func readNative(r io.Reader, fn func(h *Header, data io.Reader) error) error {
 			return fmt.Errorf("chunk truncated: %w", unexpected(err))
 		}
 		if kind == kindEnd {
-			if _, err := br.ReadByte(); err != io.EOF {
-				return errors.New("data after the end of the chunk")
+			switch _, err := br.ReadByte(); {
+			case err == io.EOF:
+				return nil
+			case err != nil:
+				return fmt.Errorf("reading the chunk: %w", err) // a failing read is not a verdict
 			}
-			return nil
+			return errors.New("data after the end of the chunk")
 		}
 		if kind != kindDir && kind != kindSymlink && kind != kindFile {
 			return fmt.Errorf("unknown entry kind %#x", kind)

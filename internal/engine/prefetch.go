@@ -75,7 +75,9 @@ func (p *prefetcher) start(size int64, open func() (*os.File, error), stop <-cha
 		}
 		defer fh.Close()
 		buf := bytes.NewBuffer(make([]byte, 0, size))
-		_, f.read = io.Copy(buf, fh)
+		// One byte more than the walk saw: enough to tell that it grew (the
+		// bundle then marks it changed), not what a replaced file holds.
+		_, f.read = io.Copy(buf, io.LimitReader(fh, size+1))
 		f.data = buf.Bytes()
 		f.fi, _ = fh.Stat() // after reading, so a change while reading shows
 	}()

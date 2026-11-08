@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"syscall"
 	"testing"
 
 	"fkbr/internal/api"
@@ -158,5 +159,44 @@ func TestMagicReadErrorKept(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "not an fkbr chunk") {
 			t.Errorf("%q: %v", in, err)
 		}
+	}
+}
+
+// blipReader serves data, then one error, then end of file.
+type blipReader struct {
+	data []byte
+	err  error
+	done bool
+}
+
+func (r *blipReader) Read(p []byte) (int, error) {
+	if len(r.data) > 0 {
+		n := copy(p, r.data)
+		r.data = r.data[n:]
+		return n, nil
+	}
+	if !r.done {
+		r.done = true
+		return 0, r.err
+	}
+	return 0, io.EOF
+}
+
+// A share I/O error on the byte after the end of a whole chunk is that
+// error (the engine retries it), not the verdict "data after the end"; a
+// real extra byte still is.
+func TestErrorAfterTheEndKept(t *testing.T) {
+	want := syscall.EIO
+	chunk := nativeChunk([]byte{kindEnd})
+	err := Read(&blipReader{data: chunk, err: want}, false, func(*Header, io.Reader) error { return nil })
+	if !errors.Is(err, want) {
+		t.Errorf("got %v, want it to wrap %v", err, want)
+	}
+	err = Read(bytes.NewReader(append(chunk, 'x')), false, func(*Header, io.Reader) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "data after the end") {
+		t.Errorf("an extra byte: %v", err)
+	}
+	if err := Read(bytes.NewReader(chunk), false, func(*Header, io.Reader) error { return nil }); err != nil {
+		t.Errorf("a whole chunk: %v", err)
 	}
 }

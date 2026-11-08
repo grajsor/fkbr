@@ -374,19 +374,27 @@ func removeKeeping(root *os.Root, p string, keep func(string, bool) bool) (kept 
 	return false, removeAll(root, p)
 }
 
+// openDirs gives the owner full access to the directories at and below p
+// that lack it, so that they can be emptied. Their setuid, setgid and
+// sticky bits stay (FileMode.Perm alone would drop them, and a directory
+// that is still there afterwards would have lost them).
+func openDirs(root *os.Root, p string) {
+	fs.WalkDir(root.FS(), p, func(q string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
+				root.Chmod(q, localfs.ModeBits(fi.Mode())|0o700)
+			}
+		}
+		return nil
+	})
+}
+
 func removeAll(root *os.Root, p string) error {
 	err := root.RemoveAll(p)
 	if !errors.Is(err, fs.ErrPermission) {
 		return err
 	}
-	fs.WalkDir(root.FS(), p, func(q string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() {
-			if fi, err := d.Info(); err == nil && fi.Mode().Perm()&0o700 != 0o700 {
-				root.Chmod(q, fi.Mode().Perm()|0o700)
-			}
-		}
-		return nil
-	})
+	openDirs(root, p)
 	if fi, err := root.Lstat(path.Dir(p)); err == nil && fi.Mode().Perm()&0o200 == 0 && root.Chmod(path.Dir(p), localfs.ModeBits(fi.Mode())|0o200) == nil {
 		defer root.Chmod(path.Dir(p), localfs.ModeBits(fi.Mode()))
 	}

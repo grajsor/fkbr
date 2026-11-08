@@ -685,6 +685,56 @@ shared folder, so `cp "$X" node:/d` copied everything and
 `sync` now refuse an empty argument, and `rm` says a whole shared folder
 is not removed (`TestEmptyArgumentRefused`).
 
+## 28. Another model's review (2026-11-08)
+
+Ten findings on `c6b003a`; each was read in the source, five were fixed
+with a test that fails without the fix, five were not.
+
+Fixed:
+
+- An `EIO`, `ETIMEDOUT` or `ESTALE` on the byte after a chunk's end
+  marker was reported as "data after the end of the chunk", which the
+  target does not retry: one blip failed the job. It is now the read
+  error (`TestErrorAfterTheEndKept`, like the magic bytes, section 25).
+- Ctrl+W in the editor sliced the line at an offset counted in the
+  lower-cased line. Two U+023A (lower case is one byte longer each) made
+  it run past the line: a panic. The offset is now in the line itself (`TestMatcherOffsetsAreInTheLine`,
+  `TestEditorFindWithWideLowerCase`).
+- The read-ahead of a small file was not bounded by the size the walk
+  saw: a file replaced by a big one before it was opened was held whole,
+  eight at a time. It reads that size plus one byte (the bundle marks the
+  file changed as before; `TestPrefetchReadsNoMoreThanItsSize`).
+- A remove that had to make folders writable gave them
+  `Perm()|0o700` and so dropped setgid and sticky on the ones left
+  behind (only folders lacking the owner's rwx are touched, not `1777`
+  as the review said; `TestOpenDirsKeepsSpecialBits`).
+- A copy naming 120,000 paths (a shell glob) was one request over the
+  socket's 2 MiB cap, "request body too large". The cap is 32 MiB; the
+  kernel keeps an argument list under about 6 MiB
+  (`TestSubmitTakesALongPathList`).
+
+Not changed:
+
+- `local/x` with an unreadable folder `local` in the shared dir takes
+  the shorthand (root `local`): the check lists the folder and treats any
+  error as absent. It needs that folder to exist and be unreadable; a
+  fix needs a not-found code on the wire, and for a group or a list of
+  nodes the check's list call names no single node and fails anyway.
+- The target scan's probe leaves the destination folder's mtime changed
+  when the user can write it but does not own it (once per filesystem and
+  run). A dry run is not entirely free then; the `sync -n` help says so
+  now. `sync -u` is not affected (it never keeps a folder).
+- A failed listing in `listed`/`hasName` goes on to the rename: a folder
+  that can be entered but not read is normal (mode `-wx`), and the case
+  clash needs a folding filesystem with a failing disk as well.
+- A same-size, same-mtime change during a read is sent as good: it takes
+  two writes within one timestamp tick around the walk; hashing every
+  file twice costs a read for a case the editor's save (where it
+  matters) already covers.
+- `Write` without a sum and a mtime checks the size only: older nodes
+  send no mtime (api.go says so), the TUI sends everything, the socket is
+  the user's own.
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

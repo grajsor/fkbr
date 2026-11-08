@@ -354,11 +354,42 @@ func newFindInput(last string) *textinput.Model {
 
 // matcher finds q in a line: without capitals in q, case does not count
 // (as in less and vim's smartcase).
+//
+// The offset it returns is a byte offset into the line it was given. Lower
+// case can take more bytes than upper case (U+023A, 2 bytes, becomes 3) or
+// fewer (U+0130 becomes i), so an index into the lower-cased line is not
+// one into the line: callers slice the line there.
 func matcher(q string) func(line string) int {
-	if strings.ToLower(q) == q {
-		return func(line string) int { return strings.Index(strings.ToLower(line), q) }
+	if strings.ToLower(q) != q {
+		return func(line string) int { return strings.Index(line, q) }
 	}
-	return func(line string) int { return strings.Index(line, q) }
+	return func(line string) int {
+		if isASCII(line) { // the common case: both have the same offsets
+			return strings.Index(strings.ToLower(line), q)
+		}
+		var low []byte
+		var from []int // from[k]: where in line the rune of low[k] starts
+		for i, r := range line {
+			n := len(low)
+			low = utf8.AppendRune(low, unicode.ToLower(r))
+			for ; n < len(low); n++ {
+				from = append(from, i)
+			}
+		}
+		if k := bytes.Index(low, []byte(q)); k >= 0 {
+			return from[k]
+		}
+		return -1
+	}
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
 }
 
 // find puts the cursor on the next match of q after it: on to the end,

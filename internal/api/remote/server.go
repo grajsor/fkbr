@@ -202,7 +202,10 @@ func Handler(svc api.Service) http.Handler {
 }
 
 func decode(w http.ResponseWriter, r *http.Request, v any) bool {
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20)) // a Write: 1 MiB as base64
+	// A Write is 1 MiB as base64; a copy names the paths on a command line
+	// (a shell glob), which the kernel keeps under about 6 MiB, and JSON
+	// adds a few bytes to each. The socket is the user's own.
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 32<<20))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(v); err != nil {
 		w.Header().Set("Content-Type", "application/json")

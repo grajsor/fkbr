@@ -33,8 +33,10 @@ several targets are sent once for all of them.
   -exclude PAT  leave out matching entries on both sides: neither copied
                 nor deleted (repeatable; *.tmp, .git, build/out, cache/);
                 -exclude-from FILE reads them one per line
-  -n            dry run: show the plan and its ID, change nothing; it lists
-                the first 20 entries to delete and to copy (-v: all)
+  -n            dry run: show the plan and its ID, change nothing (a
+                scan of a destination may make a small temporary file
+                there for a moment); it lists the first 20 entries to
+                delete and to copy (-v: all)
   -plan ID      apply a plan made earlier with -n
   -max-deletes  per-target deletion limit (0: node default, -1: none)
   -force        apply even if a target exceeds the deletion limit`
