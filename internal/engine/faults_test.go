@@ -194,7 +194,14 @@ func (r *flipReader) Read(p []byte) (int, error) {
 }
 
 func (f *faultStore) OpenChunk(ctx context.Context, src, id string, seq int) (io.ReadCloser, error) {
-	time.Sleep(f.openDelay)
+	// A slow share, but a stopping worker is not held up by it.
+	if f.openDelay > 0 {
+		select {
+		case <-time.After(f.openDelay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	f.mu.Lock()
 	if seq == f.eioReadSeq && (f.eioReads < 0 || f.eioReadHits < f.eioReads) {
 		f.eioReadHits++

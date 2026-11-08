@@ -657,6 +657,14 @@ A reread of the same pass found two more (both fixed, run on the Rocky 10 VM):
 | `TestShareCheckStaysInTheShare` looked for `99` in every message; messages carry the temp dir, whose random suffix can hold it (54 failures in 400 runs) | It looks for `protocol 99`, what the old code printed | the same test (400 runs, 0 failures) |
 | The setup checks of a job (not a target, write policy, root, missing path, wrong source) ended it with one try to record `failed`; a lost status parked the request in `failed/` and the job read as running for good | They go through `statusWriter.fail` (`finishThen`, nothing to clean): the request stays claimed | `TestSetupFailureWithLostEndKeepsTheRequest` (fails on the old code) |
 
+A review of the test suite itself (2026-11-07, run as an ordinary user)
+found nothing failing; three test-only changes: `FuzzReadNative` also
+fuzzes compressed chunks (zstd seeds), the fake slow chunk open stops
+on a cancelled context, and `TestConfigPathOrder` skips when it cannot
+write beside the test binary. Kept as they are: fixed sleeps that are
+minimum waits, cleanup waits without a timeout (a `go test` timeout
+prints every stack), no `t.Parallel` (tests set package variables).
+
 Left as it is: the world-connectable moment between `net.Listen` and
 `Chmod` of the daemon socket (the state dir is private, nobody else can
 reach the socket's folder); `shareModes` still lists the share with

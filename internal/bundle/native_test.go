@@ -115,10 +115,19 @@ func FuzzReadNative(f *testing.F) {
 	must(f, w.Add(Item{Name: "dir/l", Entry: api.Entry{Type: api.TypeSymlink, LinkTarget: "a"}}))
 	_, err := w.Close()
 	must(f, err)
-	f.Add(s.chunks[0])
-	f.Add([]byte(nativeMagic))
-	f.Fuzz(func(t *testing.T, b []byte) {
-		Read(bytes.NewReader(b), false, func(h *Header, r io.Reader) error {
+	zs := &memSink{}
+	zw := NewWriter(zs, 1<<20, true)
+	must(f, zw.Add(fileItem("dir/a", bytes.Repeat([]byte("hello"), 100))))
+	_, err = zw.Close()
+	must(f, err)
+	f.Add(s.chunks[0], false)
+	f.Add([]byte(nativeMagic), false)
+	// The compressed path too: a real frame, a cut one, and garbage.
+	f.Add(zs.chunks[0], true)
+	f.Add(zs.chunks[0][:len(zs.chunks[0])/2], true)
+	f.Add([]byte("not zstd"), true)
+	f.Fuzz(func(t *testing.T, b []byte, compressed bool) {
+		Read(bytes.NewReader(b), compressed, func(h *Header, r io.Reader) error {
 			if strings.HasPrefix(h.Name, "/") || h.Name == ".." || strings.HasPrefix(h.Name, "../") || strings.Contains(h.Name, "/../") {
 				t.Fatalf("escaping name %q", h.Name)
 			}

@@ -113,7 +113,7 @@ func TestConfigPathOrder(t *testing.T) {
 	}
 	beside := filepath.Join(filepath.Dir(exe), "fkbr.conf")
 	if err := os.WriteFile(beside, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
+		t.Skip("cannot write beside the test binary:", err)
 	}
 	defer os.Remove(beside)
 	if p, q := WritePath(""), DefaultPath(); p != beside || q != beside {
