@@ -72,6 +72,9 @@ func syncCmd(ctx context.Context, c api.Client, args []string, out io.Writer) er
 			fl.Usage()
 			return errors.New("need SRC and DST")
 		}
+		if err := noEmptyArgs(fl.Args()); err != nil {
+			return err
+		}
 		req := api.SyncRequest{Mode: api.SyncIncremental, Checksum: *checksum, Compress: *compress, MaxDeletes: *maxDel, KeepNewer: keepNewer}
 		if req.Exclude, err = excludes(); err != nil {
 			return err

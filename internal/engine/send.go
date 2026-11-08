@@ -54,11 +54,10 @@ type sender struct {
 	// fullSince is when the share filled up with no chunk staged since.
 	fullSince time.Time
 
-	log     *slog.Logger
-	totals  totals
-	start   time.Time
-	stored  int64 // bytes staged on the share by this run
-	waiting *waitLog
+	log    *slog.Logger
+	totals totals
+	start  time.Time
+	stored int64 // bytes staged on the share by this run
 }
 
 func (e *Engine) runSend(ctx context.Context, id string) error {

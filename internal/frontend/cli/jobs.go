@@ -67,6 +67,9 @@ func transferArgs(ctx context.Context, c api.Client, fl *flag.FlagSet, args []st
 		fl.Usage()
 		return api.TransferRequest{}, errors.New("need at least one source and a destination")
 	}
+	if err := noEmptyArgs(fl.Args()); err != nil {
+		return api.TransferRequest{}, err
+	}
 	ex, err := excludes()
 	if err != nil {
 		return api.TransferRequest{}, err
@@ -109,6 +112,18 @@ func transferArgs(ctx context.Context, c api.Client, fl *flag.FlagSet, args []st
 	req.DstNodes = strings.Split(dnodes, ",")
 	req.DstRoot, req.DstDir = droot, ddir
 	return req, nil
+}
+
+// noEmptyArgs refuses an empty path: it would read as the whole shared
+// folder, and an unset shell variable is the usual way to write one
+// ("cp \"$SRC\" host:/x"). "/" says the same on purpose.
+func noEmptyArgs(args []string) error {
+	for i, a := range args {
+		if a == "" {
+			return fmt.Errorf("argument %d is empty (an unset variable?); write / for a whole shared folder", i+1)
+		}
+	}
+	return nil
 }
 
 // follow shows progress until the job ends, then a summary. The live

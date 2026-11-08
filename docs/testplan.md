@@ -670,6 +670,21 @@ Left as it is: the world-connectable moment between `net.Listen` and
 reach the socket's folder); `shareModes` still lists the share with
 `os.ReadDir` (it reads names only and never follows a link).
 
+## 27. A review of our own code (2026-11-08)
+
+Static analysis (`go vet`, staticcheck) was clean but for one unused
+struct field in `send.go`, removed. Black-box runs on the lab with two
+live nodes (special files, a file truncated, files removed, and a folder
+replaced by a file during a copy; names with a leading dash, spaces and
+a newline; trailing slashes; a copy onto the same node) found the
+planner, sync apply and copy paths correct: a copy whose files vanish
+ends `done` with errors and the next mirror sync converges. One CLI
+footgun: an empty argument (an unset shell variable) meant the whole
+shared folder, so `cp "$X" node:/d` copied everything and
+`sync -mirror "$X" node:/d` could delete on the target. `cp`, `mv` and
+`sync` now refuse an empty argument, and `rm` says a whole shared folder
+is not removed (`TestEmptyArgumentRefused`).
+
 ## How to run the lab tests
 
 - **Torture** (`torture/`): an NFS swarm and an ssh swarm under stacked

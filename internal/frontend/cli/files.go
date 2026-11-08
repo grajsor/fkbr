@@ -54,6 +54,9 @@ func rm(ctx context.Context, c api.Client, args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
+		if p == "." {
+			return fmt.Errorf("%s is a whole shared folder: refusing to remove it", a)
+		}
 		e, err := lookup(ctx, c, node, root, p)
 		if err != nil {
 			return fmt.Errorf("%s: %w", a, err)

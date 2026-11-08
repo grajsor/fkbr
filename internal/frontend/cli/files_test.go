@@ -79,6 +79,30 @@ func TestMkdirRm(t *testing.T) {
 	}
 }
 
+// An empty argument (an unset shell variable) is no path: cp "" b:/x
+// copied the whole shared folder. "/" still means it, on purpose; rm of
+// a whole shared folder says so instead of "no such file".
+func TestEmptyArgumentRefused(t *testing.T) {
+	for _, args := range [][]string{
+		{"cp", "", "b:/x"}, {"cp", "/f.txt", ""}, {"mv", "", "b:/x"}, {"sync", "", "b:/x"}, {"sync", "/dir", ""},
+	} {
+		c := &filesClient{job: api.Job{ID: "job1", State: api.JobDone}}
+		if _, err := run(t, c, args...); err == nil || !strings.Contains(err.Error(), "empty") || len(c.submits) != 0 {
+			t.Errorf("%q: %v, submits %d", args, err, len(c.submits))
+		}
+	}
+	c := &filesClient{job: api.Job{ID: "job1", State: api.JobDone}}
+	if _, err := run(t, c, "cp", "/", "b:/x"); err != nil || len(c.submits) != 1 {
+		t.Errorf("cp / b:/x: %v, submits %d", err, len(c.submits))
+	}
+	for _, a := range []string{"/", "b:/", ""} {
+		c := &filesClient{}
+		if _, err := run(t, c, "rm", "-r", a); err == nil || !strings.Contains(err.Error(), "whole shared folder") || len(c.removes) != 0 {
+			t.Errorf("rm -r %q: %v, removes %+v", a, err, c.removes)
+		}
+	}
+}
+
 func TestMv(t *testing.T) {
 	c := &filesClient{job: api.Job{ID: "job1", State: api.JobDone, Participants: []api.JobStatus{{Node: "b", Role: api.RoleTarget, State: api.JobDone}}}}
 	if _, err := run(t, c, "mv", "/f.txt", "b:/in"); err != nil {
